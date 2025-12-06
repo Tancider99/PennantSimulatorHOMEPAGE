@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Starfield Standings Page
+Baseball Team Architect 2027 - Starfield Standings Page
 Industrial Sci-Fi League Standings
 """
 from PySide6.QtWidgets import (

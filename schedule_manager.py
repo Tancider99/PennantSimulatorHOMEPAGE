@@ -15,7 +15,7 @@ import datetime
 class ScheduleManager:
     """NPB準拠シーズンスケジュール管理クラス"""
     
-    def __init__(self, year: int = 2024):
+    def __init__(self, year: int = 2027):
         self.year = year
         self.schedule = Schedule()
         

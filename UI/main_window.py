@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Main Window
+Pennant Simulator 2027 - Main Window
 OOTP-Style Professional Main Interface with Premium Features
 """
 from PySide6.QtWidgets import (
@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self):
         """Configure main window properties"""
-        self.setWindowTitle("NPB Pennant Simulator 2.0 - OOTP Edition")
+        self.setWindowTitle("Pennant Simulator 2027")
 
         # Allow window to be resized
         self.setMinimumSize(1024, 600)
@@ -524,16 +524,16 @@ class MainWindow(QMainWindow):
         """Show about dialog"""
         QMessageBox.about(
             self,
-            "NPB Pennant Simulator 2.0",
+            "Pennant Simulator 2027",
             """
-            <h2>NPB Pennant Simulator 2.0</h2>
+            <h2>Pennant Simulator 2027</h2>
             <p><b>OOTP-Style Professional Edition</b></p>
             <p>日本プロ野球ペナントレースシミュレーター</p>
             <hr>
-            <p>Version: 2.0.0</p>
+            <p>Version: 2027.0.0</p>
             <p>Engine: PySide6 + Python</p>
             <hr>
-            <p>© 2024 NPB Simulator Project</p>
+            <p>© 2027 Baseball Architect Project</p>
             """
         )
 
@@ -581,7 +581,7 @@ def create_splash_screen() -> QSplashScreen:
         letter-spacing: 4px;
     """)
     splash.showMessage(
-        "NPB PENNANT SIMULATOR\n\nLOADING...",
+        "PENNANT SIMULATOR 2027\n\nLOADING...",
         Qt.AlignCenter | Qt.AlignBottom,
         QColor(get_theme().text_primary)
     )
@@ -623,7 +623,7 @@ def run_app():
     teams = create_all_npb_teams()
     game_state = GameState(
         teams=teams,
-        current_year=2024,
+        current_year=2027,
         player_team_index=0  # Giants as default
     )
     window.set_game_state(game_state)

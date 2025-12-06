@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Page Modules
+Baseball Team Architect 2027 - Page Modules
 OOTP-Style Application Pages
 """
 from .home_page import HomePage

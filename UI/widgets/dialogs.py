@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Dialog Widgets
+Baseball Team Architect 2027 - Dialog Widgets
 OOTP-Style Modal Dialogs and Popups
 """
 from PySide6.QtWidgets import (

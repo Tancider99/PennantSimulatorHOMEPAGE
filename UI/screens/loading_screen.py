@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Premium Loading Screen
+Pennant Simulator 2027 - Premium Loading Screen
 Ultra-stylish animated loading screen
 """
 from PySide6.QtWidgets import (
@@ -111,7 +111,7 @@ class LoadingScreen(QWidget):
         logo_layout.setSpacing(16)
 
         # Main title
-        self.title_label = QLabel("NPB PENNANT")
+        self.title_label = QLabel("Pennant Simulator")
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("""
             font-size: 52px;
@@ -122,14 +122,14 @@ class LoadingScreen(QWidget):
         logo_layout.addWidget(self.title_label)
 
         # Subtitle
-        self.subtitle_label = QLabel("SIMULATOR")
+        self.subtitle_label = QLabel("2027")
         self.subtitle_label.setAlignment(Qt.AlignCenter)
         self.subtitle_label.setStyleSheet("""
             font-size: 24px;
             font-weight: 200;
             letter-spacing: 12px;
             color: #8b949e;
-            margin-top: -10px;
+            margin-top: 0px;
         """)
         logo_layout.addWidget(self.subtitle_label)
 
@@ -197,7 +197,7 @@ class LoadingScreen(QWidget):
         layout.addStretch(3)
 
         # Version info
-        version_label = QLabel("VERSION 2.0")
+        version_label = QLabel("VERSION 1.0")
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setStyleSheet("""
             font-size: 10px;

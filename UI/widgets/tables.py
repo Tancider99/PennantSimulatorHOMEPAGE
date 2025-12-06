@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Table Widgets
+Baseball Team Architect 2027 - Table Widgets
 OOTP-Style Data Tables and Lists
 """
 from PySide6.QtWidgets import (

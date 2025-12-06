@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Trade Page
+Baseball Team Architect 2027 - Trade Page
 OOTP-Style Premium Professional Trade System
 """
 from PySide6.QtWidgets import (

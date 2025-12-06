@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - OOTP Style Professional UI
+Baseball Team Architect 2027 - OOTP Style Professional UI
 PySide6 Based Modern Interface
 """
 from .main_window import MainWindow

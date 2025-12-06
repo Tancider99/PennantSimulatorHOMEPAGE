@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Starfield Panels
+Baseball Team Architect 2027 - Starfield Panels
 Industrial Sci-Fi Layout Containers
 """
 from PySide6.QtWidgets import (

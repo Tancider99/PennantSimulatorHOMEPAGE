@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Premium Title Screen
+Baseball Team Architect 2027 - Premium Title Screen
 Ultra-stylish animated title screen with OOTP-inspired design
 """
 from PySide6.QtWidgets import (
@@ -201,7 +201,7 @@ class TitleScreen(QWidget):
         logo_layout.addWidget(baseball_container)
 
         # Main title
-        self.title_label = QLabel("NPB PENNANT")
+        self.title_label = QLabel("Pennant Simulator")
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("""
             font-size: 64px;
@@ -212,14 +212,14 @@ class TitleScreen(QWidget):
         logo_layout.addWidget(self.title_label)
 
         # Subtitle
-        self.subtitle_label = QLabel("SIMULATOR")
+        self.subtitle_label = QLabel("2027")
         self.subtitle_label.setAlignment(Qt.AlignCenter)
         self.subtitle_label.setStyleSheet("""
             font-size: 28px;
             font-weight: 200;
             letter-spacing: 16px;
             color: #8b949e;
-            margin-top: -5px;
+            margin-top: 0px;
         """)
         logo_layout.addWidget(self.subtitle_label)
 
@@ -278,7 +278,7 @@ class TitleScreen(QWidget):
         footer_layout.setSpacing(8)
 
         # Version
-        version_label = QLabel("VERSION 2.0")
+        version_label = QLabel("VERSION 1.0")
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setStyleSheet("""
             font-size: 11px;
@@ -289,7 +289,7 @@ class TitleScreen(QWidget):
         footer_layout.addWidget(version_label)
 
         # Copyright
-        copyright_label = QLabel("OOTP-Style Baseball Simulation")
+        copyright_label = QLabel("Baseball Simulation")
         copyright_label.setAlignment(Qt.AlignCenter)
         copyright_label.setStyleSheet("""
             font-size: 10px;

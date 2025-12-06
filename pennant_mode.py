@@ -298,7 +298,7 @@ class TeamFinances:
 class PennantManager:
     """ペナントモード管理クラス（強化版）"""
     
-    def __init__(self, teams: List[Team] = None, start_year: int = 2024, max_years: int = 30):
+    def __init__(self, teams: List[Team] = None, start_year: int = 2027, max_years: int = 30):
         self.teams = teams or []
         self.current_year = start_year
         self.max_years = max_years

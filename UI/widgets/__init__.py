@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Custom Widgets
+Baseball Team Architect 2027 - Custom Widgets
 OOTP-Style Professional Components
 """
 from .cards import *

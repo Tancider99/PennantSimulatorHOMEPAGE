@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Settings Page
+Baseball Team Architect 2027 - Settings Page
 OOTP-Style Professional Settings Interface with Premium Design
 """
 from PySide6.QtWidgets import (

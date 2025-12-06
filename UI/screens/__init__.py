@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Screen Components
+Baseball Team Architect 2027 - Screen Components
 Premium UI Screens for Game Flow
 """
 

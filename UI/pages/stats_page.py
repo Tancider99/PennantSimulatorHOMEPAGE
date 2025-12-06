@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Stats Page
+Baseball Team Architect 2027 - Stats Page
 OOTP-Style Premium Statistics Dashboard
 """
 from PySide6.QtWidgets import (

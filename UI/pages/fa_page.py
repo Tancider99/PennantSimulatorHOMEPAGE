@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Free Agent Page
+Baseball Team Architect 2027 - Free Agent Page
 OOTP-Style Premium Professional Free Agent System
 """
 from PySide6.QtWidgets import (

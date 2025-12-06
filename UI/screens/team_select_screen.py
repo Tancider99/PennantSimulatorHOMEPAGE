@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Team Selection Screen
+Baseball Team Architect 2027 - Team Selection Screen
 Starfield Style Mission Briefing Interface
 """
 from PySide6.QtWidgets import (

@@ -7,17 +7,108 @@ from PySide6.QtWidgets import (
     QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QButtonGroup, QAbstractButton, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QSize
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QSize, QRect
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QBrush, QPen, QFont, QIcon
 
 import sys
-sys.path.insert(0, '..')
-from UI.theme import get_theme
+# Theme import fallback
+try:
+    from ..theme import get_theme
+except ImportError:
+    sys.path.insert(0, '..')
+    from UI.theme import get_theme
+
+
+class PremiumButton(QPushButton):
+    """Premium styled button with hover effects (Gray to White transition)"""
+
+    def __init__(self, text: str, style: str = "primary", parent=None):
+        super().__init__(text, parent)
+        self._style = style
+        self._hover_progress = 0.0
+
+        # Compact Premium Size
+        self.setMinimumHeight(42)
+        self.setMinimumWidth(200)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFont(QFont("Yu Gothic UI", 11, QFont.Medium))
+
+        self._setup_animation()
+
+    def _setup_animation(self):
+        self._animation = QPropertyAnimation(self, b"hover_progress")
+        self._animation.setDuration(200)
+        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+
+    def get_hover_progress(self):
+        return self._hover_progress
+
+    def set_hover_progress(self, value):
+        self._hover_progress = value
+        self.update()
+
+    hover_progress = Property(float, get_hover_progress, set_hover_progress)
+
+    def enterEvent(self, event):
+        self._animation.stop()
+        self._animation.setStartValue(self._hover_progress)
+        self._animation.setEndValue(1.0)
+        self._animation.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animation.stop()
+        self._animation.setStartValue(self._hover_progress)
+        self._animation.setEndValue(0.0)
+        self._animation.start()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        rect = self.rect()
+
+        # Stylish Gray to White transition
+        # Gray color (Normal): R=140, G=145, B=150
+        # White color (Hover): R=255, G=255, B=255
+        
+        start_r, start_g, start_b = 140, 145, 150
+        end_r, end_g, end_b = 255, 255, 255
+        
+        current_r = start_r + (end_r - start_r) * self._hover_progress
+        current_g = start_g + (end_g - start_g) * self._hover_progress
+        current_b = start_b + (end_b - start_b) * self._hover_progress
+        
+        current_color = QColor(int(current_r), int(current_g), int(current_b))
+        
+        # Background fill - Transparent to subtle white
+        bg_alpha = int(0 + 20 * self._hover_progress)
+        painter.setBrush(QColor(255, 255, 255, bg_alpha))
+        
+        # Border/Pen
+        painter.setPen(QPen(current_color, 1))
+        
+        # Draw rounded rect
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+
+        # Glow effect on hover
+        if self._hover_progress > 0:
+            glow_alpha = int(40 * self._hover_progress)
+            glow_color = QColor(255, 255, 255, glow_alpha)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(glow_color, 2))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+
+        # Draw text
+        painter.setPen(current_color)
+        painter.setFont(self.font())
+        painter.drawText(rect, Qt.AlignCenter, self.text())
 
 
 class ActionButton(QPushButton):
-    """Large action button with icon and description"""
-
+    """Large action button with icon and description (OOTP Style)"""
+    # ... (Keep existing implementation below) ...
     def __init__(self, text: str, description: str = "", icon: str = "",
                  style: str = "primary", parent=None):
         super().__init__(parent)
@@ -127,7 +218,6 @@ class ActionButton(QPushButton):
             font.setBold(False)
             painter.setFont(font)
             painter.drawText(x_offset, rect.height() // 2 + 15, self._description)
-
 
 class IconButton(QPushButton):
     """Circular icon button"""
@@ -371,7 +461,7 @@ class SimButton(QPushButton):
         icons = {
             "play": "▶",
             "pause": "⏸",
-            "fast": "⏩",
+            "fast": "⏩︎",
             "step": "⏭",
         }
         self._icon = icons.get(self._mode, "▶")

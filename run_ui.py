@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator 2.0 - Premium UI Launcher
+Pennant Simulator 2027 - Premium UI Launcher
 Unified window flow: Loading -> Title -> Team Select -> Game
 """
 import sys
@@ -51,7 +51,7 @@ def main():
         app.setFont(font)
 
         print("=" * 60)
-        print("  NPB PENNANT SIMULATOR 2.0")
+        print("  PENNANT SIMULATOR 2027")
         print("  Premium Edition")
         print("=" * 60)
 
@@ -102,7 +102,7 @@ class GameController(QMainWindow):
 
     def _setup_window(self):
         """Configure the main window"""
-        self.setWindowTitle("NPB PENNANT SIMULATOR 2.0")
+        self.setWindowTitle("Pennant Simulator 2027")
         self.setMinimumSize(1280, 720)
 
         # Set window style
@@ -218,7 +218,7 @@ class GameController(QMainWindow):
         self.game_state.central_teams = self.central_teams
         self.game_state.pacific_teams = self.pacific_teams
         self.game_state.all_teams = self.central_teams + self.pacific_teams
-        self.game_state.current_year = 2024
+        self.game_state.current_year = 2027
 
         total_players = sum(len(team.players) for team in self.game_state.all_teams)
         print(f"  Total players: {total_players}")

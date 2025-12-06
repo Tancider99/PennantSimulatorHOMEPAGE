@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Chart Widgets
+Baseball Team Architect 2027 - Chart Widgets
 OOTP-Style Visualization Components
 """
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy

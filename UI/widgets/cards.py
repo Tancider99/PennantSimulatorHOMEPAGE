@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Starfield Style Card Widgets
+Baseball Team Architect 2027 - Starfield Style Card Widgets
 Industrial Sci-Fi Information Cards
 """
 from PySide6.QtWidgets import (

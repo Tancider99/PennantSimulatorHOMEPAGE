@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Starfield Inspired Theme System
+Baseball Team Architect 2027 - Starfield Inspired Theme System
 NASAPunk / Industrial Sci-Fi Aesthetic
 """
 from PySide6.QtWidgets import QApplication, QGraphicsDropShadowEffect, QWidget

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Roster Page
+Baseball Team Architect 2027 - Roster Page
 OOTP-Style Team Roster Management
 """
 from PySide6.QtWidgets import (

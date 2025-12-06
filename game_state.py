@@ -83,7 +83,7 @@ class GameStateManager:
         self.pacific_teams: List[Team] = []
         self.all_teams: List[Team] = []
 
-        self.current_year = 2024
+        self.current_year = 2027
         self.current_game_number = 0
         self.current_opponent: Optional[Team] = None
 

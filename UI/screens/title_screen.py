@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Premium Title Screen
+Baseball Team Architect 2027 - Premium Title Screen
 Ultra-stylish title screen with elegant design
 """
 from PySide6.QtWidgets import (
@@ -23,10 +23,12 @@ class PremiumButton(QPushButton):
         self._style = style
         self._hover_progress = 0.0
 
-        self.setMinimumHeight(56)
-        self.setMinimumWidth(280)
+        # Smaller size as requested
+        self.setMinimumHeight(42)
+        self.setMinimumWidth(200)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFont(QFont("Yu Gothic UI", 13, QFont.Medium))
+        # Slightly smaller font
+        self.setFont(QFont("Yu Gothic UI", 11, QFont.Medium))
 
         self._setup_animation()
 
@@ -64,48 +66,39 @@ class PremiumButton(QPushButton):
 
         rect = self.rect()
 
-        if self._style == "primary":
-            # Primary button - filled
-            base_color = QColor(0, 102, 204)
-            hover_color = QColor(0, 128, 255)
-            text_color = QColor(255, 255, 255)
+        # Stylish Gray to White transition
+        # Gray color (Normal): R=140, G=145, B=150
+        # White color (Hover): R=255, G=255, B=255
+        
+        start_r, start_g, start_b = 140, 145, 150
+        end_r, end_g, end_b = 255, 255, 255
+        
+        current_r = start_r + (end_r - start_r) * self._hover_progress
+        current_g = start_g + (end_g - start_g) * self._hover_progress
+        current_b = start_b + (end_b - start_b) * self._hover_progress
+        
+        current_color = QColor(int(current_r), int(current_g), int(current_b))
+        
+        # Background fill - Transparent to subtle white
+        bg_alpha = int(0 + 20 * self._hover_progress)
+        painter.setBrush(QColor(255, 255, 255, bg_alpha))
+        
+        # Border/Pen
+        painter.setPen(QPen(current_color, 1))
+        
+        # Draw rounded rect (Smaller radius for sharper look)
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
 
-            r = base_color.red() + (hover_color.red() - base_color.red()) * self._hover_progress
-            g = base_color.green() + (hover_color.green() - base_color.green()) * self._hover_progress
-            b = base_color.blue() + (hover_color.blue() - base_color.blue()) * self._hover_progress
-
-            gradient = QLinearGradient(0, 0, 0, rect.height())
-            gradient.setColorAt(0, QColor(int(r), int(g), int(b)).lighter(115))
-            gradient.setColorAt(1, QColor(int(r), int(g), int(b)))
-
-            painter.setBrush(QBrush(gradient))
-            painter.setPen(Qt.NoPen)
-
-        else:
-            # Secondary button - outlined
-            border_alpha = int(80 + 60 * self._hover_progress)
-            fill_alpha = int(0 + 20 * self._hover_progress)
-
-            painter.setBrush(QColor(255, 255, 255, fill_alpha))
-            painter.setPen(QPen(QColor(140, 150, 165, border_alpha), 1))
-            text_color = QColor(200, 210, 225)
-
-        # Draw rounded rect
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 8, 8)
-
-        # Glow effect on hover for primary
-        if self._style == "primary" and self._hover_progress > 0:
-            glow_color = QColor(0, 128, 255, int(40 * self._hover_progress))
+        # Glow effect on hover
+        if self._hover_progress > 0:
+            glow_alpha = int(40 * self._hover_progress)
+            glow_color = QColor(255, 255, 255, glow_alpha)
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(glow_color, 3))
-            painter.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), 10, 10)
+            painter.setPen(QPen(glow_color, 2))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
 
         # Draw text
-        if self._style == "primary":
-            painter.setPen(QColor(255, 255, 255))
-        else:
-            painter.setPen(QColor(200, 210, 225))
-
+        painter.setPen(current_color)
         painter.setFont(self.font())
         painter.drawText(rect, Qt.AlignCenter, self.text())
 
@@ -149,18 +142,18 @@ class TitleScreen(QWidget):
         logo_layout.addSpacing(20)
 
         # Main title
-        title_label = QLabel("NPB PENNANT")
+        title_label = QLabel("Pennant Simulator")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("""
             font-size: 64px;
             font-weight: 200;
-            letter-spacing: 25px;
+            letter-spacing: 15px;
             color: #ffffff;
         """)
         logo_layout.addWidget(title_label)
 
         # Subtitle
-        subtitle_label = QLabel("SIMULATOR 2.0")
+        subtitle_label = QLabel("2027")
         subtitle_label.setAlignment(Qt.AlignCenter)
         subtitle_label.setStyleSheet("""
             font-size: 18px;
@@ -222,7 +215,7 @@ class TitleScreen(QWidget):
         layout.addStretch(2)
 
         # Copyright
-        copyright_label = QLabel("2024 NPB PENNANT SIMULATOR PROJECT")
+        copyright_label = QLabel("2025 Pennant Simulator PROJECT")
         copyright_label.setAlignment(Qt.AlignCenter)
         copyright_label.setStyleSheet("""
             font-size: 10px;

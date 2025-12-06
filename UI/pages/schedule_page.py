@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Schedule Page
+Baseball Team Architect 2027 - Schedule Page
 OOTP-Style Premium Game Schedule and Results
 """
 from PySide6.QtWidgets import (
