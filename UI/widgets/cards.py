@@ -1,143 +1,112 @@
 # -*- coding: utf-8 -*-
 """
-NPB Pennant Simulator - Premium Card Widgets
-OOTP-Style Ultra Premium Information Cards
+NPB Pennant Simulator - Starfield Style Card Widgets
+Industrial Sci-Fi Information Cards
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGraphicsDropShadowEffect, QSizePolicy
+    QGraphicsDropShadowEffect, QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property
-from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen, QBrush
+from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 
 import sys
 sys.path.insert(0, '..')
 from UI.theme import get_theme, Theme
 
-
 class Card(QFrame):
-    """Ultra Premium Card Widget with hover effects and gradients"""
+    """Base Industrial Card Widget"""
 
     clicked = Signal()
 
     def __init__(self, title: str = "", parent=None):
+        # FIX: QFrame constructor only accepts parent (QWidget), NOT title (str)
         super().__init__(parent)
         self.theme = get_theme()
         self._hover_progress = 0.0
         self._is_clickable = False
+        self._title = title
 
         self.setObjectName("Card")
         self._setup_style()
-        self._setup_layout(title)
+        self._setup_layout()
         self._setup_animation()
-        self._add_shadow()
 
     def _setup_style(self):
         self.setStyleSheet(f"""
             #Card {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
+                background-color: {self.theme.bg_card};
                 border: 1px solid {self.theme.border};
-                border-radius: 12px;
+                border-left: 4px solid {self.theme.border};
             }}
             #Card:hover {{
-                border-color: {self.theme.primary};
+                border-color: {self.theme.text_secondary};
+                border-left-color: {self.theme.primary};
             }}
         """)
 
-    def _add_shadow(self):
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        shadow.setOffset(0, 6)
-        self.setGraphicsEffect(shadow)
-
-    def _setup_layout(self, title: str):
+    def _setup_layout(self):
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(20, 20, 20, 20)
-        self.main_layout.setSpacing(16)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
-        if title:
-            # Premium header with gradient accent
+        # Header Section (Industrial Strip)
+        if self._title:
             header = QFrame()
             header.setStyleSheet(f"""
-                QFrame {{
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {self.theme.primary}, stop:1 {self.theme.primary_light});
-                    border-radius: 8px;
-                    border: none;
-                }}
+                background-color: {self.theme.bg_card_elevated};
+                border-bottom: 1px solid {self.theme.border};
             """)
             header_layout = QHBoxLayout(header)
-            header_layout.setContentsMargins(14, 10, 14, 10)
+            header_layout.setContentsMargins(16, 8, 16, 8)
 
-            self.title_label = QLabel(title)
-            self.title_label.setStyleSheet(f"""
-                font-size: 15px;
+            # Decorative square
+            deco = QFrame()
+            deco.setFixedSize(8, 8)
+            deco.setStyleSheet(f"background-color: {self.theme.accent_orange};")
+            header_layout.addWidget(deco)
+
+            title_label = QLabel(self._title)
+            title_label.setStyleSheet(f"""
+                font-size: 13px;
                 font-weight: 700;
-                color: white;
-                background: transparent;
-                border: none;
+                color: {self.theme.text_primary};
+                text-transform: uppercase;
+                letter-spacing: 2px;
             """)
-            header_layout.addWidget(self.title_label)
+            header_layout.addWidget(title_label)
             header_layout.addStretch()
+            
+            # Tech ID
+            tech_id = QLabel("DAT-01")
+            tech_id.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 10px;")
+            header_layout.addWidget(tech_id)
 
             self.main_layout.addWidget(header)
 
+        # Content Area
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(16, 16, 16, 16)
+        self.content_layout.setSpacing(12)
+        self.main_layout.addWidget(self.content_widget)
+
     def _setup_animation(self):
         self._animation = QPropertyAnimation(self, b"hover_progress")
-        self._animation.setDuration(200)
-        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._animation.setDuration(150)
+        self._animation.setEasingCurve(QEasingCurve.OutQuad)
 
     def get_hover_progress(self):
         return self._hover_progress
 
     def set_hover_progress(self, value):
         self._hover_progress = value
-        self._update_hover_style()
 
     hover_progress = Property(float, get_hover_progress, set_hover_progress)
 
-    def _update_hover_style(self):
-        progress = self._hover_progress
-        if progress > 0:
-            self.setStyleSheet(f"""
-                #Card {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {self.theme.bg_card_hover},
-                        stop:0.5 {self.theme.bg_card_elevated},
-                        stop:1 {self.theme.bg_card_hover});
-                    border: 1px solid {self.theme.primary};
-                    border-radius: 12px;
-                }}
-            """)
-        else:
-            self._setup_style()
-
     def set_clickable(self, clickable: bool):
         self._is_clickable = clickable
-        if clickable:
-            self.setCursor(Qt.PointingHandCursor)
-        else:
-            self.setCursor(Qt.ArrowCursor)
-
-    def enterEvent(self, event):
-        if self._is_clickable:
-            self._animation.stop()
-            self._animation.setStartValue(self._hover_progress)
-            self._animation.setEndValue(1.0)
-            self._animation.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        if self._is_clickable:
-            self._animation.stop()
-            self._animation.setStartValue(self._hover_progress)
-            self._animation.setEndValue(0.0)
-            self._animation.start()
-        super().leaveEvent(event)
+        self.setCursor(Qt.PointingHandCursor if clickable else Qt.ArrowCursor)
 
     def mousePressEvent(self, event):
         if self._is_clickable and event.button() == Qt.LeftButton:
@@ -145,701 +114,379 @@ class Card(QFrame):
         super().mousePressEvent(event)
 
     def add_widget(self, widget: QWidget):
-        """Add a widget to the card's content area"""
-        self.main_layout.addWidget(widget)
+        self.content_layout.addWidget(widget)
 
     def add_layout(self, layout):
-        """Add a layout to the card's content area"""
-        self.main_layout.addLayout(layout)
-
+        self.content_layout.addLayout(layout)
 
 class PremiumStatCard(Card):
-    """Ultra Premium Card for displaying a single statistic"""
+    """HUD Style Stat Display"""
 
     def __init__(self, title: str, value: str, subtitle: str = "",
                  icon: str = None, color: str = None, parent=None):
-        super().__init__(parent=parent)
+        # FIX: Pass title="" so Card doesn't create a default header, and pass parent
+        super().__init__(title="", parent=parent)
         self.theme = get_theme()
         self._stat_color = color or self.theme.primary
+        
+        self.setStyleSheet(f"""
+            #Card {{
+                background-color: {self.theme.bg_card};
+                border: 1px solid {self.theme.border};
+            }}
+            #Card:hover {{
+                border-color: {self._stat_color};
+            }}
+        """)
 
-        # Remove default layout
-        while self.main_layout.count():
-            self.main_layout.takeAt(0)
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
 
-        # Create premium content
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(20)
-
-        # Icon with glow effect (optional)
-        if icon:
-            icon_frame = QFrame()
-            icon_frame.setFixedSize(60, 60)
-            icon_frame.setStyleSheet(f"""
-                QFrame {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 {self._stat_color}, stop:1 {self._stat_color}cc);
-                    border-radius: 16px;
-                }}
-            """)
-            icon_layout = QVBoxLayout(icon_frame)
-            icon_layout.setContentsMargins(0, 0, 0, 0)
-            icon_label = QLabel(icon)
-            icon_label.setAlignment(Qt.AlignCenter)
-            icon_label.setStyleSheet(f"""
-                font-size: 28px;
-                color: white;
-                background: transparent;
-            """)
-            icon_layout.addWidget(icon_label)
-            content_layout.addWidget(icon_frame)
-
-        # Text content
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(6)
-
+        # Header row
+        header_row = QHBoxLayout()
         title_label = QLabel(title)
         title_label.setStyleSheet(f"""
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             color: {self.theme.text_secondary};
             text-transform: uppercase;
-            letter-spacing: 1.5px;
+            letter-spacing: 2px;
         """)
+        header_row.addWidget(title_label)
+        header_row.addStretch()
+        
+        if icon:
+            icon_label = QLabel(icon)
+            icon_label.setStyleSheet(f"font-size: 16px; color: {self._stat_color};")
+            header_row.addWidget(icon_label)
+        layout.addLayout(header_row)
 
-        value_label = QLabel(value)
-        value_label.setStyleSheet(f"""
-            font-size: 36px;
-            font-weight: 800;
-            color: {self._stat_color};
+        # Value
+        self._value_label = QLabel(value)
+        self._value_label.setStyleSheet(f"""
+            font-family: "Consolas", monospace;
+            font-size: 28px;
+            font-weight: 700;
+            color: {self.theme.text_primary};
         """)
+        layout.addWidget(self._value_label)
 
-        text_layout.addWidget(title_label)
-        text_layout.addWidget(value_label)
+        # Bar decoration
+        bar = QFrame()
+        bar.setFixedHeight(2)
+        bar.setStyleSheet(f"background-color: {self._stat_color};")
+        layout.addWidget(bar)
 
         if subtitle:
-            subtitle_label = QLabel(subtitle)
-            subtitle_label.setStyleSheet(f"""
-                font-size: 13px;
+            self._subtitle_label = QLabel(subtitle)
+            self._subtitle_label.setStyleSheet(f"""
+                font-size: 11px;
                 color: {self.theme.text_muted};
+                margin-top: 4px;
             """)
-            text_layout.addWidget(subtitle_label)
+            layout.addWidget(self._subtitle_label)
 
-        content_layout.addLayout(text_layout)
-        content_layout.addStretch()
-
-        self.main_layout.addLayout(content_layout)
-
-        # Store for updates
-        self._value_label = value_label
-        self._subtitle_label = subtitle_label if subtitle else None
+        self.add_layout(layout)
 
     def set_value(self, value: str):
         self._value_label.setText(value)
 
     def set_subtitle(self, subtitle: str):
-        if self._subtitle_label:
+        if hasattr(self, '_subtitle_label'):
             self._subtitle_label.setText(subtitle)
 
-
-# Alias for backwards compatibility
+# Aliases
 StatCard = PremiumStatCard
-
-
-class PremiumCard(QFrame):
-    """Premium styled card with gradient header and shadow - Unified component"""
-
-    def __init__(self, title: str, icon: str = "", parent=None):
-        super().__init__(parent)
-        self.theme = get_theme()
-        self.title_text = title
-        self.icon = icon
-
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
-            }}
-        """)
-
-        # Shadow effect
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 80))
-        self.setGraphicsEffect(shadow)
-
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 16)
-        self.main_layout.setSpacing(0)
-
-        # Header with gradient accent
-        self.header = QFrame()
-        self.header.setFixedHeight(48)
-        self.header.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {self.theme.primary},
-                    stop:1 {self.theme.accent});
-                border: none;
-                border-radius: 16px 16px 0 0;
-            }}
-        """)
-
-        header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(20, 0, 20, 0)
-
-        self.title_label = QLabel(f"{self.icon}  {self.title_text}" if self.icon else self.title_text)
-        self.title_label.setStyleSheet(f"""
-            font-size: 15px;
-            font-weight: 700;
-            color: white;
-            background: transparent;
-            border: none;
-        """)
-        header_layout.addWidget(self.title_label)
-        header_layout.addStretch()
-
-        # Header actions area
-        self.header_actions_layout = QHBoxLayout()
-        self.header_actions_layout.setSpacing(8)
-        header_layout.addLayout(self.header_actions_layout)
-
-        self.main_layout.addWidget(self.header)
-
-        # Content area
-        self.content_widget = QWidget()
-        self.content_widget.setStyleSheet("background: transparent; border: none;")
-        self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(16, 16, 16, 0)
-        self.content_layout.setSpacing(12)
-
-        self.main_layout.addWidget(self.content_widget)
-
-    def set_title(self, title: str):
-        self.title_text = title
-        self.title_label.setText(f"{self.icon}  {title}" if self.icon else title)
-
-    def add_header_widget(self, widget):
-        """Add a widget to the header actions area"""
-        self.header_actions_layout.addWidget(widget)
-
-    def add_widget(self, widget):
-        """Add a widget to the content area"""
-        self.content_layout.addWidget(widget)
-
-    def add_layout(self, layout):
-        """Add a layout to the content area"""
-        self.content_layout.addLayout(layout)
-
-    def add_stretch(self):
-        """Add stretch to content area"""
-        self.content_layout.addStretch()
-
+PremiumCard = Card 
 
 class PlayerCard(Card):
-    """Premium Card for displaying player information (OOTP Style)"""
+    """ID Badge Style Player Card"""
 
     def __init__(self, player=None, show_stats: bool = True, parent=None):
-        super().__init__(parent=parent)
+        super().__init__(title="", parent=parent)
         self.theme = get_theme()
         self.player = player
         self.set_clickable(True)
 
-        # Clear default layout
-        while self.main_layout.count():
-            self.main_layout.takeAt(0)
-
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(0)
+        
         self._create_layout(show_stats)
-
         if player:
             self.set_player(player)
 
     def _create_layout(self, show_stats: bool):
-        # Header: Name and Position with premium styling
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(16)
+        wrapper = QHBoxLayout()
+        wrapper.setContentsMargins(0, 0, 0, 0)
+        wrapper.setSpacing(0)
 
-        # Player number badge with gradient
-        self.number_label = QLabel("00")
-        self.number_label.setFixedSize(50, 50)
-        self.number_label.setAlignment(Qt.AlignCenter)
+        # Left: Color Strip & Position Code
+        self.pos_strip = QFrame()
+        self.pos_strip.setFixedWidth(40)
+        self.pos_strip.setStyleSheet(f"""
+            background-color: {self.theme.bg_card_elevated};
+            border-right: 1px solid {self.theme.border};
+        """)
+        pos_layout = QVBoxLayout(self.pos_strip)
+        pos_layout.setContentsMargins(0, 10, 0, 10)
+        
+        self.pos_label = QLabel("POS")
+        self.pos_label.setAlignment(Qt.AlignCenter)
+        self.pos_label.setStyleSheet(f"""
+            color: {self.theme.text_secondary};
+            font-weight: 700;
+            font-size: 12px;
+        """)
+        pos_layout.addWidget(self.pos_label)
+        pos_layout.addStretch()
+        wrapper.addWidget(self.pos_strip)
+
+        # Right: Info
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setContentsMargins(12, 10, 12, 10)
+        info_layout.setSpacing(4)
+
+        # Top row: Name & Number
+        top_row = QHBoxLayout()
+        self.name_label = QLabel("PLAYER NAME")
+        self.name_label.setStyleSheet(f"""
+            font-size: 16px;
+            font-weight: 700;
+            color: {self.theme.text_primary};
+            text-transform: uppercase;
+        """)
+        top_row.addWidget(self.name_label)
+        top_row.addStretch()
+        
+        self.number_label = QLabel("#00")
         self.number_label.setStyleSheet(f"""
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {self.theme.primary_light}, stop:1 {self.theme.primary});
-            color: white;
+            font-family: "Consolas", monospace;
+            color: {self.theme.accent_orange};
+            font-weight: 700;
+        """)
+        top_row.addWidget(self.number_label)
+        info_layout.addLayout(top_row)
+
+        # Rating Row
+        rating_row = QHBoxLayout()
+        rating_label = QLabel("OVR RATING")
+        rating_label.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 10px; letter-spacing: 1px;")
+        rating_row.addWidget(rating_label)
+        rating_row.addStretch()
+        
+        self.overall_label = QLabel("00")
+        self.overall_label.setStyleSheet(f"""
+            font-family: "Consolas", monospace;
             font-size: 18px;
             font-weight: 700;
-            border-radius: 12px;
-        """)
-        header_layout.addWidget(self.number_label)
-
-        # Name and position
-        name_layout = QVBoxLayout()
-        name_layout.setSpacing(4)
-
-        self.name_label = QLabel("選手名")
-        self.name_label.setStyleSheet(f"""
-            font-size: 20px;
-            font-weight: 700;
             color: {self.theme.text_primary};
         """)
-
-        self.position_label = QLabel("ポジション")
-        self.position_label.setStyleSheet(f"""
-            font-size: 12px;
-            color: {self.theme.text_secondary};
-            font-weight: 500;
-        """)
-
-        name_layout.addWidget(self.name_label)
-        name_layout.addWidget(self.position_label)
-        header_layout.addLayout(name_layout)
-        header_layout.addStretch()
-
-        # Overall rating with gradient background
-        self.overall_label = QLabel("--")
-        self.overall_label.setAlignment(Qt.AlignCenter)
-        self.overall_label.setFixedSize(60, 60)
-        self.overall_label.setStyleSheet(f"""
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {self.theme.bg_card_elevated}, stop:1 {self.theme.bg_input});
-            color: {self.theme.text_primary};
-            font-size: 24px;
-            font-weight: 800;
-            border-radius: 16px;
-            border: 2px solid {self.theme.border};
-        """)
-        header_layout.addWidget(self.overall_label)
-
-        self.main_layout.addLayout(header_layout)
+        rating_row.addWidget(self.overall_label)
+        info_layout.addLayout(rating_row)
 
         if show_stats:
-            # Gradient separator
-            separator = QFrame()
-            separator.setFixedHeight(2)
-            separator.setStyleSheet(f"""
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 transparent, stop:0.2 {self.theme.primary},
-                    stop:0.8 {self.theme.primary}, stop:1 transparent);
-            """)
-            self.main_layout.addWidget(separator)
-
-            # Stats grid with premium styling
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background-color: {self.theme.border};")
+            info_layout.addWidget(line)
             self.stats_layout = QHBoxLayout()
-            self.stats_layout.setSpacing(20)
-            self.stat_labels = {}
+            info_layout.addLayout(self.stats_layout)
 
-            self.main_layout.addLayout(self.stats_layout)
+        wrapper.addWidget(info_widget)
+        self.add_layout(wrapper)
 
     def set_player(self, player):
-        """Update card with player data"""
         self.player = player
-        if not player:
-            return
+        if not player: return
 
-        # Basic info
-        self.number_label.setText(str(player.uniform_number))
         self.name_label.setText(player.name)
+        self.number_label.setText(f"#{player.uniform_number}")
+        
+        pos = player.position.value
+        if pos == "投手":
+            self.pos_label.setText("P")
+            self.pos_strip.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-right: 3px solid {self.theme.accent_orange};")
+        else:
+            self.pos_label.setText(pos[:2]) 
+            self.pos_strip.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-right: 3px solid {self.theme.accent_blue};")
 
-        # Position
-        pos_text = player.position.value
-        if hasattr(player, 'pitch_type') and player.pitch_type:
-            pos_text += f" ({player.pitch_type.value})"
-        self.position_label.setText(pos_text)
-
-        # Overall rating with color based on value
-        overall = player.overall_rating if hasattr(player, 'overall_rating') else 0
-        self.overall_label.setText(str(overall))
-
-        # Color based on rating
-        rating_color = self._get_rating_color(overall)
+        ovr = getattr(player, 'overall_rating', 0)
+        self.overall_label.setText(str(ovr))
+        color = self.theme.get_rating_color(ovr)
         self.overall_label.setStyleSheet(f"""
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {rating_color}, stop:1 {rating_color}cc);
-            color: white;
-            font-size: 24px;
-            font-weight: 800;
-            border-radius: 16px;
-            border: none;
-        """)
-
-        # Update stats
-        self._update_stats(player)
-
-    def _update_stats(self, player):
-        # Clear existing stats
-        while self.stats_layout.count():
-            item = self.stats_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        stats = player.stats
-        if player.position.value == "投手":
-            stat_names = [
-                ("球速", stats.speed),
-                ("制球", stats.control),
-                ("スタ", stats.stamina),
-                ("変化", stats.breaking),
-            ]
-        else:
-            stat_names = [
-                ("ミート", stats.contact),
-                ("パワー", stats.power),
-                ("走力", stats.run),
-                ("守備", stats.fielding),
-            ]
-
-        for name, value in stat_names:
-            stat_widget = self._create_stat_widget(name, value)
-            self.stats_layout.addWidget(stat_widget)
-
-    def _create_stat_widget(self, name: str, value: int) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        # Stat name
-        name_label = QLabel(name)
-        name_label.setAlignment(Qt.AlignCenter)
-        name_label.setStyleSheet(f"""
-            font-size: 11px;
-            font-weight: 600;
-            color: {self.theme.text_muted};
-            text-transform: uppercase;
-        """)
-
-        # Stat value with rank and gradient
-        rank = Theme.get_rating_rank(value)
-        color = Theme.get_rating_color(value)
-
-        value_frame = QFrame()
-        value_frame.setFixedSize(40, 28)
-        value_frame.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {color}, stop:1 {color}cc);
-                border-radius: 6px;
-            }}
-        """)
-        value_layout = QVBoxLayout(value_frame)
-        value_layout.setContentsMargins(0, 0, 0, 0)
-        value_label = QLabel(rank)
-        value_label.setAlignment(Qt.AlignCenter)
-        value_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 700;
-            color: white;
-            background: transparent;
-        """)
-        value_layout.addWidget(value_label)
-
-        layout.addWidget(name_label)
-        layout.addWidget(value_frame, alignment=Qt.AlignCenter)
-
-        return widget
-
-    def _get_rating_color(self, value: int) -> str:
-        if value >= 400:
-            return self.theme.rating_s
-        elif value >= 350:
-            return self.theme.rating_a
-        elif value >= 300:
-            return self.theme.rating_b
-        elif value >= 250:
-            return self.theme.rating_c
-        elif value >= 200:
-            return self.theme.rating_d
-        else:
-            return self.theme.rating_e
-
-
-class TeamCard(Card):
-    """Premium Card for displaying team information"""
-
-    def __init__(self, team=None, parent=None):
-        super().__init__(parent=parent)
-        self.theme = get_theme()
-        self.team = team
-        self.set_clickable(True)
-
-        # Clear and rebuild layout
-        while self.main_layout.count():
-            self.main_layout.takeAt(0)
-
-        self._create_layout()
-
-        if team:
-            self.set_team(team)
-
-    def _create_layout(self):
-        # Team header
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(16)
-
-        # Team logo placeholder with gradient
-        self.logo_label = QLabel("🏟️")
-        self.logo_label.setFixedSize(70, 70)
-        self.logo_label.setAlignment(Qt.AlignCenter)
-        self.logo_label.setStyleSheet(f"""
-            font-size: 36px;
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {self.theme.bg_card_elevated}, stop:1 {self.theme.bg_input});
-            border-radius: 16px;
-            border: 2px solid {self.theme.border};
-        """)
-        header_layout.addWidget(self.logo_label)
-
-        # Team info
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(6)
-
-        self.team_name_label = QLabel("チーム名")
-        self.team_name_label.setStyleSheet(f"""
-            font-size: 22px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-        """)
-
-        self.league_label = QLabel("リーグ")
-        self.league_label.setStyleSheet(f"""
-            font-size: 13px;
-            color: {self.theme.text_secondary};
-            font-weight: 500;
-        """)
-
-        info_layout.addWidget(self.team_name_label)
-        info_layout.addWidget(self.league_label)
-        header_layout.addLayout(info_layout)
-        header_layout.addStretch()
-
-        self.main_layout.addLayout(header_layout)
-
-        # Gradient separator
-        separator = QFrame()
-        separator.setFixedHeight(2)
-        separator.setStyleSheet(f"""
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 transparent, stop:0.2 {self.theme.primary},
-                stop:0.8 {self.theme.primary}, stop:1 transparent);
-        """)
-        self.main_layout.addWidget(separator)
-
-        # Record with premium styling
-        record_layout = QHBoxLayout()
-        record_layout.setSpacing(32)
-
-        self.wins_label = self._create_record_widget("勝", "0", self.theme.success)
-        self.losses_label = self._create_record_widget("敗", "0", self.theme.danger)
-        self.draws_label = self._create_record_widget("分", "0", self.theme.text_secondary)
-        self.pct_label = self._create_record_widget("勝率", ".000", self.theme.accent_gold)
-
-        record_layout.addWidget(self.wins_label)
-        record_layout.addWidget(self.losses_label)
-        record_layout.addWidget(self.draws_label)
-        record_layout.addWidget(self.pct_label)
-        record_layout.addStretch()
-
-        self.main_layout.addLayout(record_layout)
-
-    def _create_record_widget(self, label: str, value: str, color: str) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        label_widget = QLabel(label)
-        label_widget.setStyleSheet(f"""
-            font-size: 11px;
-            font-weight: 600;
-            color: {self.theme.text_muted};
-            text-transform: uppercase;
-        """)
-
-        value_widget = QLabel(value)
-        value_widget.setObjectName("value")
-        value_widget.setStyleSheet(f"""
-            font-size: 22px;
+            font-family: "Consolas", monospace;
+            font-size: 18px;
             font-weight: 700;
             color: {color};
         """)
 
-        layout.addWidget(label_widget, alignment=Qt.AlignCenter)
-        layout.addWidget(value_widget, alignment=Qt.AlignCenter)
+        if hasattr(self, 'stats_layout'):
+            self._update_stats(player)
 
-        return widget
+    def _update_stats(self, player):
+        while self.stats_layout.count():
+            item = self.stats_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+
+        stats = player.stats
+        if player.position.value == "投手":
+            items = [("SPD", stats.speed), ("CON", stats.control), ("STM", stats.stamina)]
+        else:
+            items = [("CON", stats.contact), ("PWR", stats.power), ("RUN", stats.run)]
+
+        for label, val in items:
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            l = QLabel(label)
+            l.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted};")
+            v = QLabel(Theme.get_rating_rank(val))
+            v.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {Theme.get_rating_color(val)};")
+            col.addWidget(l, alignment=Qt.AlignCenter)
+            col.addWidget(v, alignment=Qt.AlignCenter)
+            self.stats_layout.addLayout(col)
+
+class TeamCard(Card):
+    """Team Info Card"""
+
+    def __init__(self, team=None, parent=None):
+        super().__init__(title="TEAM OVERVIEW", parent=parent)
+        self.theme = get_theme()
+        self.team = team
+        self.set_clickable(True)
+        self._create_layout()
+        if team:
+            self.set_team(team)
+
+    def _create_layout(self):
+        # Header Info
+        header = QHBoxLayout()
+        self.name_label = QLabel("TEAM NAME")
+        self.name_label.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: 700;
+            color: {self.theme.text_primary};
+            letter-spacing: 1px;
+        """)
+        header.addWidget(self.name_label)
+        header.addStretch()
+        self.add_layout(header)
+
+        # League Info
+        self.league_label = QLabel("LEAGUE")
+        self.league_label.setStyleSheet(f"color: {self.theme.text_accent}; font-size: 12px; font-weight: 600; margin-bottom: 12px;")
+        self.add_widget(self.league_label)
+
+        # Record Grid
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        
+        self.wins = self._create_stat_box("WINS")
+        self.losses = self._create_stat_box("LOSS")
+        self.draws = self._create_stat_box("DRAW")
+        self.pct = self._create_stat_box("PCT")
+
+        grid.addWidget(self.wins, 0, 0)
+        grid.addWidget(self.losses, 0, 1)
+        grid.addWidget(self.draws, 1, 0)
+        grid.addWidget(self.pct, 1, 1)
+        self.add_layout(grid)
+
+    def _create_stat_box(self, label):
+        frame = QFrame()
+        frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border: 1px solid {self.theme.border}; border-radius: 0;")
+        l = QVBoxLayout(frame)
+        l.setContentsMargins(8, 6, 8, 6)
+        l.setSpacing(2)
+        
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted};")
+        l.addWidget(lbl)
+        
+        val = QLabel("--")
+        val.setObjectName("value")
+        val.setStyleSheet(f"font-family: 'Consolas'; font-size: 16px; font-weight: 700; color: {self.theme.text_primary};")
+        l.addWidget(val)
+        return frame
 
     def set_team(self, team):
-        """Update card with team data"""
         self.team = team
-        if not team:
-            return
-
-        self.team_name_label.setText(team.name)
+        if not team: return
+        self.name_label.setText(team.name)
         self.league_label.setText(team.league.value)
-
-        # Update record
-        self.wins_label.findChild(QLabel, "value").setText(str(team.wins))
-        self.losses_label.findChild(QLabel, "value").setText(str(team.losses))
-        self.draws_label.findChild(QLabel, "value").setText(str(team.draws))
-
-        pct = team.winning_percentage
-        self.pct_label.findChild(QLabel, "value").setText(f".{int(pct * 1000):03d}")
-
+        
+        self.wins.findChild(QLabel, "value").setText(str(team.wins))
+        self.losses.findChild(QLabel, "value").setText(str(team.losses))
+        self.draws.findChild(QLabel, "value").setText(str(team.draws))
+        self.pct.findChild(QLabel, "value").setText(f".{int(team.winning_percentage * 1000):03d}")
 
 class StandingsCard(Card):
-    """Premium Card for displaying league standings"""
+    """Data Grid Style Standings"""
 
-    def __init__(self, title: str = "順位表", parent=None):
+    def __init__(self, title: str = "LEAGUE STANDINGS", parent=None):
+        # FIX: Ensure we call Card.__init__ correctly which calls QFrame.__init__ with parent
         super().__init__(title=title, parent=parent)
         self.theme = get_theme()
-        self._create_standings_layout()
+        self._create_layout()
 
-    def _create_standings_layout(self):
-        # Header row with premium styling
-        header_frame = QFrame()
-        header_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {self.theme.bg_card_elevated};
-                border-radius: 8px;
-                margin-bottom: 8px;
-            }}
-        """)
-        header_layout = QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(12, 10, 12, 10)
-        headers = ["順", "チーム", "勝", "敗", "分", "勝率", "差"]
-        widths = [35, 130, 45, 45, 45, 65, 55]
-
-        for header, width in zip(headers, widths):
-            label = QLabel(header)
-            label.setFixedWidth(width)
-            label.setStyleSheet(f"""
-                font-size: 11px;
-                font-weight: 700;
-                color: {self.theme.text_secondary};
-                text-transform: uppercase;
-                letter-spacing: 1px;
-            """)
-            header_layout.addWidget(label)
-
-        self.main_layout.addWidget(header_frame)
-
-        # Team rows container
+    def _create_layout(self):
+        header = QHBoxLayout()
+        header.setContentsMargins(8, 0, 8, 8)
+        headers = ["RANK", "TEAM", "W", "L", "D", "PCT", "GB"]
+        widths = [40, 120, 40, 40, 40, 60, 40]
+        
+        for h, w in zip(headers, widths):
+            lbl = QLabel(h)
+            lbl.setFixedWidth(w)
+            lbl.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 10px; font-weight: 700;")
+            header.addWidget(lbl)
+        
+        self.add_layout(header)
+        
         self.rows_layout = QVBoxLayout()
-        self.rows_layout.setSpacing(4)
-        self.main_layout.addLayout(self.rows_layout)
+        self.rows_layout.setSpacing(2)
+        self.add_layout(self.rows_layout)
 
     def set_standings(self, teams: list):
-        """Update standings with team list (already sorted)"""
-        # Clear existing rows
         while self.rows_layout.count():
             item = self.rows_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item.widget(): item.widget().deleteLater()
 
         top_pct = teams[0].winning_percentage if teams else 0
-
+        
         for i, team in enumerate(teams):
-            row = self._create_team_row(i + 1, team, top_pct)
+            row = QWidget()
+            row.setStyleSheet(f"background-color: {self.theme.bg_card_elevated if i % 2 == 0 else 'transparent'}; border-radius: 0;")
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(8, 4, 8, 4)
+            
+            widths = [40, 120, 40, 40, 40, 60, 40]
+            
+            rank = QLabel(f"{i+1}")
+            rank.setFixedWidth(widths[0])
+            rank.setStyleSheet(f"font-family: 'Consolas'; font-weight: 700; color: {self.theme.accent_orange if i < 3 else self.theme.text_secondary};")
+            layout.addWidget(rank)
+            
+            name = QLabel(team.name)
+            name.setFixedWidth(widths[1])
+            name.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: 600;")
+            layout.addWidget(name)
+            
+            for val in [team.wins, team.losses, team.draws]:
+                l = QLabel(str(val))
+                l.setFixedWidth(40)
+                l.setStyleSheet(f"font-family: 'Consolas'; color: {self.theme.text_secondary};")
+                layout.addWidget(l)
+            
+            pct = QLabel(f".{int(team.winning_percentage * 1000):03d}")
+            pct.setFixedWidth(widths[5])
+            pct.setStyleSheet(f"font-family: 'Consolas'; color: {self.theme.text_primary}; font-weight: 700;")
+            layout.addWidget(pct)
+            
+            gb_val = "-" if i == 0 else f"{(top_pct - team.winning_percentage) * 143:.1f}"
+            gb = QLabel(gb_val)
+            gb.setFixedWidth(widths[6])
+            gb.setStyleSheet(f"font-family: 'Consolas'; color: {self.theme.text_muted};")
+            layout.addWidget(gb)
+            
             self.rows_layout.addWidget(row)
-
-    def _create_team_row(self, rank: int, team, top_pct: float) -> QWidget:
-        row = QFrame()
-        row.setStyleSheet(f"""
-            QFrame {{
-                background: transparent;
-                border-radius: 8px;
-            }}
-            QFrame:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {self.theme.bg_card_hover}, stop:1 transparent);
-            }}
-        """)
-
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(0)
-
-        widths = [35, 130, 45, 45, 45, 65, 55]
-
-        # Rank with medal colors
-        rank_label = QLabel(str(rank))
-        rank_label.setFixedWidth(widths[0])
-        if rank == 1:
-            rank_color = self.theme.gold
-        elif rank == 2:
-            rank_color = self.theme.silver
-        elif rank == 3:
-            rank_color = self.theme.bronze
-        else:
-            rank_color = self.theme.text_secondary
-        rank_label.setStyleSheet(f"""
-            font-size: 16px;
-            font-weight: 800;
-            color: {rank_color};
-        """)
-        layout.addWidget(rank_label)
-
-        # Team name
-        name_label = QLabel(team.name)
-        name_label.setFixedWidth(widths[1])
-        name_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 600;
-            color: {self.theme.text_primary};
-        """)
-        layout.addWidget(name_label)
-
-        # Wins
-        wins_label = QLabel(str(team.wins))
-        wins_label.setFixedWidth(widths[2])
-        wins_label.setStyleSheet(f"""
-            color: {self.theme.success_light};
-            font-weight: 600;
-        """)
-        layout.addWidget(wins_label)
-
-        # Losses
-        losses_label = QLabel(str(team.losses))
-        losses_label.setFixedWidth(widths[3])
-        losses_label.setStyleSheet(f"""
-            color: {self.theme.danger_light};
-            font-weight: 600;
-        """)
-        layout.addWidget(losses_label)
-
-        # Draws
-        draws_label = QLabel(str(team.draws))
-        draws_label.setFixedWidth(widths[4])
-        draws_label.setStyleSheet(f"color: {self.theme.text_secondary};")
-        layout.addWidget(draws_label)
-
-        # Win %
-        pct = team.winning_percentage
-        pct_label = QLabel(f".{int(pct * 1000):03d}")
-        pct_label.setFixedWidth(widths[5])
-        pct_label.setStyleSheet(f"""
-            color: {self.theme.accent_gold};
-            font-weight: 700;
-        """)
-        layout.addWidget(pct_label)
-
-        # Games back
-        if rank == 1:
-            gb = "-"
-        else:
-            gb_value = (top_pct - pct) * (team.wins + team.losses) / 2
-            gb = f"{gb_value:.1f}"
-        gb_label = QLabel(gb)
-        gb_label.setFixedWidth(widths[6])
-        gb_label.setStyleSheet(f"color: {self.theme.text_muted};")
-        layout.addWidget(gb_label)
-
-        return row
