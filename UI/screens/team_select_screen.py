@@ -22,7 +22,7 @@ class TeamListItem(QPushButton):
         self._league = league
         self._selected = False
         
-        self.setFixedHeight(48)
+        self.setFixedHeight(32)
         self.setCursor(Qt.PointingHandCursor)
         
         layout = QHBoxLayout(self)
@@ -31,7 +31,7 @@ class TeamListItem(QPushButton):
         
         # League Indicator Bar
         self.bar = QFrame()
-        self.bar.setFixedSize(4, 48)
+        self.bar.setFixedSize(4, 32)
         c = self.theme.central_league if league == "central" else self.theme.pacific_league
         self.bar.setStyleSheet(f"background-color: {c};")
         layout.addWidget(self.bar)
@@ -40,8 +40,8 @@ class TeamListItem(QPushButton):
         self.name_label = QLabel(team_name.upper())
         self.name_label.setStyleSheet(f"""
             font-size: 14px;
-            font-weight: 600;
-            color: {self.theme.text_secondary};
+            font-weight: 700;
+            color: {self.theme.text_primary};
             letter-spacing: 1px;
         """)
         layout.addWidget(self.name_label)
@@ -64,7 +64,7 @@ class TeamListItem(QPushButton):
             self.setStyleSheet(f"background-color: {self.theme.bg_card_hover}; border: none;")
         else:
             self.marker.hide()
-            self.name_label.setStyleSheet(f"color: {self.theme.text_secondary}; font-weight: 600;")
+            self.name_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: 700;")
             self._update_style()
 
     def _update_style(self):
