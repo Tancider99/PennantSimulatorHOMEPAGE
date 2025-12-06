@@ -116,7 +116,7 @@ class LoadingScreen(QWidget):
         self.title_label.setStyleSheet("""
             font-size: 52px;
             font-weight: 300;
-            letter-spacing: 20px;
+            letter-spacing: 15px;
             color: #ffffff;
         """)
         logo_layout.addWidget(self.title_label)
@@ -170,12 +170,12 @@ class LoadingScreen(QWidget):
             QProgressBar {
                 background-color: #1c2128;
                 border: none;
-                border-radius: 1px;
+                border-radius: 0px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #0066cc, stop:0.5 #00b4ff, stop:1 #0066cc);
-                border-radius: 1px;
+                border-radius: 0px;
             }
         """)
         progress_layout.addWidget(self.progress_bar)

@@ -83,11 +83,9 @@ class PremiumButton(QPushButton):
         bg_alpha = int(0 + 20 * self._hover_progress)
         painter.setBrush(QColor(255, 255, 255, bg_alpha))
         
-        # Border/Pen
-        painter.setPen(QPen(current_color, 1))
-        
-        # Draw rounded rect (Smaller radius for sharper look)
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+        # 枠線なし、角丸なし
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
         # Glow effect on hover
         if self._hover_progress > 0:
@@ -95,7 +93,7 @@ class PremiumButton(QPushButton):
             glow_color = QColor(255, 255, 255, glow_alpha)
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(glow_color, 2))
-            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+            painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
         # Draw text
         painter.setPen(current_color)

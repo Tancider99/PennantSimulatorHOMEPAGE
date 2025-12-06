@@ -61,7 +61,7 @@ class TeamListItem(QPushButton):
         if selected:
             self.marker.show()
             self.name_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: 700;")
-            self.setStyleSheet(f"background-color: {self.theme.bg_card_hover}; border: none;")
+            self.setStyleSheet(f"background-color: {self.theme.bg_card_hover}; border: none; border-radius: 0px;")
         else:
             self.marker.hide()
             self.name_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: 700;")
@@ -73,6 +73,7 @@ class TeamListItem(QPushButton):
                 QPushButton {{
                     background-color: transparent;
                     border: none;
+                    border-radius: 0px;
                     text-align: left;
                 }}
                 QPushButton:hover {{
@@ -87,7 +88,8 @@ class StatBox(QFrame):
         self.theme = get_theme()
         self.setStyleSheet(f"""
             background-color: {self.theme.bg_card};
-            border: 1px solid {self.theme.border};
+            border: none;
+            border-radius: 0px;
         """)
         l = QVBoxLayout(self)
         l.setContentsMargins(12, 8, 12, 8)
