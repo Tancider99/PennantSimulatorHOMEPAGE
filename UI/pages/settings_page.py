@@ -34,7 +34,7 @@ class SettingRow(QFrame):
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 {self.theme.bg_card_elevated}, stop:1 {self.theme.bg_card});
                 border: 1px solid {self.theme.border_muted};
-                border-radius: 10px;
+                border-radius: 0px;
                 margin: 2px 0px;
             }}
             QFrame:hover {{
@@ -171,8 +171,7 @@ class SettingsPage(ContentPanel):
                 border-bottom: none;
                 padding: 14px 28px;
                 margin-right: 4px;
-                border-top-left-radius: 12px;
-                border-top-right-radius: 12px;
+                border-radius: 0px;
                 font-size: 14px;
                 font-weight: 600;
             }}

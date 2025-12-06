@@ -1,3 +1,60 @@
+from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout
+from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt
+
+# シンプルなチームアイコンWidget
+class TeamIconWidget(QWidget):
+    def __init__(self, team, size=48, parent=None):
+        super().__init__(parent)
+        self.team = team
+        self.size = size
+        self.setFixedSize(size, size)
+        self.theme = get_theme()
+        # チームカラー取得
+        color = getattr(team, 'color', None)
+        if not color:
+            if hasattr(team, 'league'):
+                if hasattr(team.league, 'value') and team.league.value == "セントラル":
+                    color = self.theme.central_league
+                elif hasattr(team.league, 'value') and team.league.value == "パシフィック":
+                    color = self.theme.pacific_league
+                else:
+                    color = self.theme.primary
+            else:
+                color = self.theme.primary
+        # 略称（team.abbr優先、なければ自動生成）
+        abbr = getattr(team, 'abbr', None)
+        if not abbr:
+            # 'No Team'は空表示
+            if hasattr(team, 'name') and team.name == 'No Team':
+                abbr = '--'
+            else:
+                abbr = self._get_abbr(team.name)
+        # 背景
+        self.setStyleSheet(f"background-color: {color}; border-radius: 0px;")
+        # ラベル
+        label = QLabel(abbr, self)
+        label.setAlignment(Qt.AlignCenter)
+        # ロゴっぽいフォント（フォールバックあり）
+        font_names = ["Impact", "Arial Black", "Oswald", "Montserrat", "Bebas Neue", "Meiryo", "Yu Gothic"]
+        for fname in font_names:
+            font = QFont(fname, int(size*0.6), QFont.Bold)
+            if font.exactMatch() or fname == font_names[-1]:
+                break
+        label.setFont(font)
+        label.setStyleSheet("color: white; letter-spacing: 2px; background: transparent;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+    def _get_abbr(self, name):
+        # 例: "Giants"→"G", "SoftBank Hawks"→"SH", "Marines"→"M" など
+        words = name.split()
+        if len(words) == 1:
+            return words[0][0].upper()
+        else:
+            return (words[0][0] + words[-1][0]).upper()
 # -*- coding: utf-8 -*-
 """
 Baseball Team Architect 2027 - Home Page
@@ -18,6 +75,7 @@ from UI.theme import get_theme
 from UI.widgets.cards import Card, StatCard, TeamCard, StandingsCard, PlayerCard
 from UI.widgets.panels import ContentPanel, InfoPanel
 from UI.widgets.buttons import ActionButton
+from models import TEAM_COLORS
 
 
 class PremiumWelcomeCard(QFrame):
@@ -32,13 +90,9 @@ class PremiumWelcomeCard(QFrame):
     def _setup_ui(self):
         self.setStyleSheet(f"""
             QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0.5,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.3 {self.theme.primary}30,
-                    stop:0.7 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
+                background: rgba(38,42,48,0.5); /* bg_card_elevated, alpha控えめ */
+                border: none;
+                border-radius: 0px;
             }}
         """)
 
@@ -69,15 +123,12 @@ class PremiumStatCard(QFrame):
     def _setup_ui(self, title: str, value: str, subtitle: str, icon: str):
         self.setStyleSheet(f"""
             QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 12px;
+                background: rgba(38,42,48,0.5); /* bg_card_elevated, alpha控えめ */
+                border: none;
+                border-radius: 0px;
             }}
             QFrame:hover {{
-                border-color: {self._color};
+                background: rgba(38,42,48,0.7);
             }}
         """)
 
@@ -234,6 +285,33 @@ class QuickActionButton(QFrame):
         super().mousePressEvent(event)
 
 
+class TeamColorBar(QWidget):
+    def __init__(self, team, height=100, width=24, parent=None):
+        super().__init__(parent)
+        self.team = team
+        self.setFixedSize(width, height)
+        self.theme = get_theme()
+        color = getattr(team, 'color', None)
+        if not color:
+            # TEAM_COLORSから取得
+            from models import TEAM_COLORS
+            color = TEAM_COLORS.get(getattr(team, 'name', ''), None)
+        if not color:
+            if hasattr(team, 'league'):
+                if hasattr(team.league, 'value') and team.league.value == "セントラル":
+                    color = self.theme.central_league
+                elif hasattr(team.league, 'value') and team.league.value == "パシフィック":
+                    color = self.theme.pacific_league
+                else:
+                    color = self.theme.primary
+            else:
+                color = self.theme.primary
+        # Debug: If team is 'No Team', use a bright color
+        if getattr(team, 'name', '') == 'No Team':
+            color = '#FF00FF'  # Magenta for debug visibility
+        # 枠線とマージンを追加してバーが見やすいように
+        self.setStyleSheet(f"background-color: {color}; border-radius: 4px; border: 3px solid {self.theme.accent_orange}; margin-right: 16px;")
+
 class HomePage(ContentPanel):
     """Home page with ultra premium team dashboard"""
 
@@ -288,23 +366,22 @@ class HomePage(ContentPanel):
         """Create premium welcome header"""
         welcome_card = PremiumWelcomeCard()
 
-        # Team logo placeholder with premium styling
-        logo = QLabel("NPB")
-        logo.setFixedSize(80, 80)
-        logo.setAlignment(Qt.AlignCenter)
-        logo.setStyleSheet(f"""
-            font-size: 48px;
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {self.theme.bg_card_elevated}, stop:1 {self.theme.bg_input});
-            border-radius: 16px;
-            border: 2px solid {self.theme.border};
-        """)
-        welcome_card.main_layout.addWidget(logo)
+        # チームカラーバー（縦長矩形）
+        team = None
+        if hasattr(self, 'game_state') and self.game_state and hasattr(self.game_state, 'player_team') and self.game_state.player_team:
+            team = self.game_state.player_team
+        else:
+            from types import SimpleNamespace
+            team = SimpleNamespace(name="No Team", league=None, color=self.theme.primary)
+        color_bar = TeamColorBar(team, height=80, width=16)
 
-        # Welcome text
+        # テキストとカラーバーを横並びに
+        bar_and_text = QHBoxLayout()
+        bar_and_text.setSpacing(16)
+        bar_and_text.addWidget(color_bar)
+
         text_layout = QVBoxLayout()
         text_layout.setSpacing(6)
-
         self.team_name_label = QLabel("チームを選択してください")
         self.team_name_label.setStyleSheet(f"""
             font-size: 32px;
@@ -312,18 +389,16 @@ class HomePage(ContentPanel):
             color: {self.theme.text_primary};
             background: transparent;
         """)
-
         self.season_label = QLabel("2024年シーズン")
         self.season_label.setStyleSheet(f"""
             font-size: 14px;
             color: {self.theme.text_secondary};
             background: transparent;
         """)
-
         text_layout.addWidget(self.team_name_label)
         text_layout.addWidget(self.season_label)
-        welcome_card.main_layout.addLayout(text_layout)
-
+        bar_and_text.addLayout(text_layout)
+        welcome_card.main_layout.addLayout(bar_and_text)
         welcome_card.main_layout.addStretch()
 
         # Quick action buttons

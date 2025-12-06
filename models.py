@@ -1,3 +1,33 @@
+# NPBチームカラー・略称定義
+TEAM_COLORS = {
+    "Yomiuri Giants": "#FF6600",
+    "Hanshin Tigers": "#FFD700",
+    "Chunichi Dragons": "#005BAC",
+    "Hiroshima Toyo Carp": "#C20000",
+    "Yokohama DeNA BayStars": "#0055B3",
+    "Tokyo Yakult Swallows": "#009944",
+    "Fukuoka SoftBank Hawks": "#FFF200",
+    "Saitama Seibu Lions": "#003366",
+    "Tohoku Rakuten Golden Eagles": "#800000",
+    "Chiba Lotte Marines": "#222222",
+    "Hokkaido Nippon-Ham Fighters": "#0066B3",
+    "Orix Buffaloes": "#1B1B1B",
+}
+
+TEAM_ABBRS = {
+    "Yomiuri Giants": "G",
+    "Hanshin Tigers": "T",
+    "Chunichi Dragons": "D",
+    "Hiroshima Toyo Carp": "C",
+    "Yokohama DeNA BayStars": "DB",
+    "Tokyo Yakult Swallows": "YS",
+    "Fukuoka SoftBank Hawks": "SH",
+    "Saitama Seibu Lions": "SL",
+    "Tohoku Rakuten Golden Eagles": "RE",
+    "Chiba Lotte Marines": "M",
+    "Hokkaido Nippon-Ham Fighters": "F",
+    "Orix Buffaloes": "B",
+}
 # -*- coding: utf-8 -*-
 """
 データモデル定義
@@ -452,6 +482,16 @@ class Team:
     current_lineup: List[int] = field(default_factory=list)
     starting_pitcher_idx: int = -1
     budget: int = 5000000000  # 予算（円）
+    color: str = None
+    abbr: str = None
+
+    def __post_init__(self):
+        # ...existing code...
+        # チームカラー・略称自動セット
+        if not self.color:
+            self.color = TEAM_COLORS.get(self.name, "#888888")
+        if not self.abbr:
+            self.abbr = TEAM_ABBRS.get(self.name, self.name[:2].upper())
     
     # 投手ローテーション・継投設定
     rotation: List[int] = field(default_factory=list)  # 先発ローテーション（6人）のインデックス

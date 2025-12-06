@@ -18,6 +18,16 @@ try:
 except ImportError:
     PHYSICS_ENABLED = False
 
+# 新しい打席エンジンをインポート
+try:
+    from at_bat_engine import (
+        get_at_bat_simulator as get_new_at_bat_simulator,
+        AtBatResult, DefenseData, AtBatContext
+    )
+    NEW_ENGINE_ENABLED = True
+except ImportError:
+    NEW_ENGINE_ENABLED = False
+
 
 # ========================================
 # 打球物理計算モジュール
@@ -517,8 +527,17 @@ class TacticManager:
 
 class GameSimulator:
     """試合シミュレーター"""
-    
-    def __init__(self, home_team: Team, away_team: Team, use_physics: bool = False, fast_mode: bool = True):
+
+    def __init__(self, home_team: Team, away_team: Team, use_physics: bool = False,
+                 fast_mode: bool = True, use_new_engine: bool = True):
+        """
+        Args:
+            home_team: ホームチーム
+            away_team: アウェイチーム
+            use_physics: 物理演算を使用するか
+            fast_mode: 高速モード（軽量計算）
+            use_new_engine: 新しい打席エンジン(at_bat_engine)を使用するか
+        """
         self.home_team = home_team
         self.away_team = away_team
         self.home_score = 0
@@ -527,42 +546,47 @@ class GameSimulator:
         self.max_innings = 9
         self.log = []
         self.detailed_log = []  # 詳細ログ（物理データ含む）
-        
+
         # 作戦・継投管理
         self.tactic_manager = TacticManager()
         self.home_pitcher_stats = {'pitch_count': 0, 'hits': 0, 'walks': 0, 'runs': 0, 'innings': 0}
         self.away_pitcher_stats = {'pitch_count': 0, 'hits': 0, 'walks': 0, 'runs': 0, 'innings': 0}
         self.current_home_pitcher_idx = home_team.starting_pitcher_idx
         self.current_away_pitcher_idx = away_team.starting_pitcher_idx
-        
+
         # プレイヤーからの戦略指示
         self.next_tactic = None  # "bunt", "squeeze", "steal", "hit_and_run", "intentional_walk", "pitch_out"
         self.defensive_shift = None  # "infield_in", "no_doubles", etc.
-        
+
         # 試合進行状態（UI表示用）
         self.is_top_inning = True
         self.current_outs = 0
         self.current_runners = [False, False, False]
         self.current_batter_idx = 0
         self.current_pitcher_idx = 0
-        
+
         # 高速モード（デフォルトでON）- 物理演算をスキップして軽量計算
         self.fast_mode = fast_mode
-        
+
         # イニングスコア（NPB公式風表示用）
         self.inning_scores_home = []  # ホームチームの各回得点
         self.inning_scores_away = []  # アウェイチームの各回得点
-        
+
         # 選手別成績（試合中）
         self.batting_results = {}  # {player_idx: {'ab': 0, 'hits': 0, 'rbi': 0, 'hr': 0, 'bb': 0, 'so': 0}}
         self.pitching_results = {}  # {player_idx: {'ip': 0.0, 'h': 0, 'r': 0, 'er': 0, 'bb': 0, 'so': 0, 'np': 0}}
-        
+
         # 投手リレー記録
         self.home_pitchers_used = []  # [(player_idx, innings_pitched, runs_allowed)]
         self.away_pitchers_used = []
-        
+
+        # 新しい打席エンジンを使用するかどうか
+        self.use_new_engine = use_new_engine and NEW_ENGINE_ENABLED and not fast_mode
+        if self.use_new_engine:
+            self.new_at_bat_sim = get_new_at_bat_simulator()
+
         # 物理演算を使用するかどうか（高速モードでは無効）
-        self.use_physics = use_physics and PHYSICS_ENABLED and not fast_mode
+        self.use_physics = use_physics and PHYSICS_ENABLED and not fast_mode and not use_new_engine
         if self.use_physics:
             self.at_bat_sim = get_at_bat_simulator()
             self.physics = get_physics_engine()
@@ -827,13 +851,17 @@ class GameSimulator:
     
     def simulate_at_bat(self, batter: Player, pitcher: Player) -> Tuple[str, int]:
         """打席をシミュレート（打球物理計算版）
-        
+
         打球速度、角度、方向を計算し、各打球の結果を判定
         投手と野手の能力値に基づいて試合結果を計算
         """
+        # 新しい打席エンジンを使用する場合
+        if self.use_new_engine:
+            return self._simulate_at_bat_new_engine(batter, pitcher)
+
         b_stats = batter.stats
         p_stats = pitcher.stats
-        
+
         # 打者の能力値（内部値1-20を100スケールに変換）
         raw_contact = getattr(b_stats, 'contact', 50)
         raw_power = getattr(b_stats, 'power', 50)
@@ -946,7 +974,107 @@ class GameSimulator:
         # 予期しない結果
         batter.record.at_bats += 1
         return "out", 0
-    
+
+    def _simulate_at_bat_new_engine(self, batter: Player, pitcher: Player) -> Tuple[str, int]:
+        """新しい打席エンジン(at_bat_engine)を使用した打席シミュレーション
+
+        NPBの実績データに基づいた精密なシミュレーション:
+        - 打率: .254
+        - 三振率: 21.5%
+        - 四球率: 7.8%
+        - ゴロ率: 45%, ライナー率: 10%, フライ率: 45%
+        """
+        b_stats = batter.stats
+        p_stats = pitcher.stats
+        speed = getattr(b_stats, 'run', 50)
+
+        # 守備データを作成
+        defense = DefenseData()
+
+        # 投手の持ち球
+        pitch_list = ["ストレート"]
+        if hasattr(p_stats, 'breaking_balls') and p_stats.breaking_balls:
+            pitch_list.extend(p_stats.breaking_balls)
+
+        # 打席状況
+        context = AtBatContext(
+            balls=0,
+            strikes=0,
+            outs=self.current_outs,
+            runners=self.current_runners.copy(),
+            inning=self.inning,
+            is_top=self.is_top_inning,
+            score_diff=self.away_score - self.home_score if self.is_top_inning else self.home_score - self.away_score
+        )
+
+        # 打席シミュレーション
+        result, data = self.new_at_bat_sim.simulate_at_bat(
+            b_stats, p_stats, defense, context, pitch_list
+        )
+
+        # 結果を文字列に変換して成績を記録
+        if result == AtBatResult.HOME_RUN:
+            batter.record.home_runs += 1
+            batter.record.hits += 1
+            batter.record.at_bats += 1
+            batter.record.runs += 1
+            batter.record.rbis += 1
+            pitcher.record.hits_allowed += 1
+            pitcher.record.home_runs_allowed += 1
+            return "home_run", 1
+
+        elif result == AtBatResult.TRIPLE:
+            batter.record.hits += 1
+            batter.record.at_bats += 1
+            batter.record.triples += 1
+            pitcher.record.hits_allowed += 1
+            return "triple", 0
+
+        elif result == AtBatResult.DOUBLE:
+            batter.record.hits += 1
+            batter.record.at_bats += 1
+            batter.record.doubles += 1
+            pitcher.record.hits_allowed += 1
+            return "double", 0
+
+        elif result in [AtBatResult.SINGLE, AtBatResult.INFIELD_HIT]:
+            batter.record.hits += 1
+            batter.record.at_bats += 1
+            pitcher.record.hits_allowed += 1
+            return "single", 0
+
+        elif result == AtBatResult.WALK:
+            batter.record.walks += 1
+            pitcher.record.walks_allowed += 1
+            return "walk", 0
+
+        elif result == AtBatResult.STRIKEOUT:
+            batter.record.strikeouts += 1
+            batter.record.at_bats += 1
+            pitcher.record.strikeouts_pitched += 1
+            return "strikeout", 0
+
+        elif result == AtBatResult.GROUNDOUT:
+            batter.record.at_bats += 1
+            # 内野安打の可能性（新エンジンでは既に判定済みなのでここでは基本アウト）
+            return "out", 0
+
+        elif result in [AtBatResult.FLYOUT, AtBatResult.LINEOUT, AtBatResult.POP_OUT]:
+            batter.record.at_bats += 1
+            return "out", 0
+
+        elif result == AtBatResult.DOUBLE_PLAY:
+            batter.record.at_bats += 1
+            return "double_play", 0
+
+        elif result == AtBatResult.SACRIFICE_FLY:
+            # 犠飛は打数にカウントしない
+            return "sacrifice_fly", 1
+
+        else:
+            batter.record.at_bats += 1
+            return "out", 0
+
     def simulate_inning(self, batting_team: Team, pitching_team: Team, batter_idx: int) -> Tuple[int, int]:
         """イニングをシミュレート
         

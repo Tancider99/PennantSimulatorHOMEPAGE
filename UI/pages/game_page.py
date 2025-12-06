@@ -36,12 +36,9 @@ class PremiumCard(QFrame):
     def _setup_ui(self):
         self.setStyleSheet(f"""
             QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
+                background: rgba(30,33,38,0.7); /* bg_card, alpha控えめ */
+                border: none;
+                border-radius: 0px;
             }}
         """)
 
@@ -49,14 +46,13 @@ class PremiumCard(QFrame):
         self.main_layout.setContentsMargins(20, 20, 20, 20)
         self.main_layout.setSpacing(16)
 
-        # Header with gradient accent
+        # Header with ultra-subtle gradient accent (ほぼ単色)
         if self._title:
             header = QFrame()
             header.setStyleSheet(f"""
                 QFrame {{
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {self.theme.primary}, stop:1 {self.theme.primary_light});
-                    border-radius: 10px;
+                    background: rgba(255,255,255,0.08); /* 白系の超控えめ */
+                    border-radius: 0px;
                     border: none;
                 }}
             """)
@@ -68,7 +64,7 @@ class PremiumCard(QFrame):
             title_label.setStyleSheet(f"""
                 font-size: 15px;
                 font-weight: 700;
-                color: white;
+                color: {self.theme.text_primary};
                 background: transparent;
                 border: none;
             """)
@@ -114,6 +110,8 @@ class GamePage(QWidget):
 
     def _setup_ui(self):
         """Create the premium game page layout"""
+        # 控えめな背景（淡いグラデーション or 単色）
+        self.setStyleSheet(f"background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {self.theme.bg_card}, stop:1 {self.theme.bg_card_elevated});")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(20)

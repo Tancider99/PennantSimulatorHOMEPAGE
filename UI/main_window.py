@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("NPBSimulator", "PennantSimulator")
 
         self._setup_window()
-        self._setup_menu_bar()
+        # self._setup_menu_bar()  # メニューバー削除
         self._setup_ui()
         self._setup_connections()
         self._setup_shortcuts()
@@ -85,99 +85,6 @@ class MainWindow(QMainWindow):
             y = (screen_geometry.height() - self.height()) // 2
             self.move(x, y)
 
-    def _setup_menu_bar(self):
-        """Create the menu bar with premium styling"""
-        menubar = self.menuBar()
-
-        # File Menu
-        file_menu = menubar.addMenu("ファイル")
-
-        new_action = QAction("新規ゲーム", self)
-        new_action.setShortcut(QKeySequence.New)
-        file_menu.addAction(new_action)
-
-        load_action = QAction("ロード", self)
-        load_action.setShortcut(QKeySequence.Open)
-        file_menu.addAction(load_action)
-
-        save_action = QAction("セーブ", self)
-        save_action.setShortcut(QKeySequence.Save)
-        file_menu.addAction(save_action)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("終了", self)
-        exit_action.setShortcut(QKeySequence.Quit)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # View Menu
-        view_menu = menubar.addMenu("表示")
-
-        # Window Size Submenu
-        size_menu = view_menu.addMenu("ウィンドウサイズ")
-        for name, size in self.SIZE_PRESETS.items():
-            action = QAction(name, self)
-            action.triggered.connect(lambda checked, s=size: self._set_window_size(*s))
-            size_menu.addAction(action)
-
-        view_menu.addSeparator()
-
-        # Fullscreen
-        self.fullscreen_action = QAction("フルスクリーン", self)
-        self.fullscreen_action.setShortcut(QKeySequence("F11"))
-        self.fullscreen_action.setCheckable(True)
-        self.fullscreen_action.triggered.connect(self._toggle_fullscreen)
-        view_menu.addAction(self.fullscreen_action)
-
-        # Maximize
-        maximize_action = QAction("最大化", self)
-        maximize_action.setShortcut(QKeySequence("Ctrl+M"))
-        maximize_action.triggered.connect(self._toggle_maximize)
-        view_menu.addAction(maximize_action)
-
-        view_menu.addSeparator()
-
-        # UI Scale Submenu
-        scale_menu = view_menu.addMenu("UIスケール")
-        for scale in [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5]:
-            action = QAction(f"{int(scale * 100)}%", self)
-            action.triggered.connect(lambda checked, s=scale: self._set_ui_scale(s))
-            scale_menu.addAction(action)
-
-        # Game Menu
-        game_menu = menubar.addMenu("ゲーム")
-
-        sim_day_action = QAction("1日進める", self)
-        sim_day_action.setShortcut(QKeySequence("Space"))
-        game_menu.addAction(sim_day_action)
-
-        sim_week_action = QAction("1週間進める", self)
-        sim_week_action.setShortcut(QKeySequence("Ctrl+Space"))
-        game_menu.addAction(sim_week_action)
-
-        game_menu.addSeparator()
-
-        roster_action = QAction("ロースター管理", self)
-        roster_action.setShortcut(QKeySequence("R"))
-        roster_action.triggered.connect(lambda: self._navigate_to("roster"))
-        game_menu.addAction(roster_action)
-
-        lineup_action = QAction("スタメン編成", self)
-        lineup_action.setShortcut(QKeySequence("L"))
-        game_menu.addAction(lineup_action)
-
-        # Help Menu
-        help_menu = menubar.addMenu("ヘルプ")
-
-        about_action = QAction("このゲームについて", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
-
-        shortcuts_action = QAction("ショートカット一覧", self)
-        shortcuts_action.setShortcut(QKeySequence("F1"))
-        shortcuts_action.triggered.connect(self._show_shortcuts)
-        help_menu.addAction(shortcuts_action)
 
     def _setup_ui(self):
         """Create the main UI layout"""
@@ -199,9 +106,9 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Header
-        self.header = HeaderPanel("ホーム")
-        content_layout.addWidget(self.header)
+        # Header（削除）
+        # self.header = HeaderPanel("ホーム")
+        # content_layout.addWidget(self.header)
 
         # Page container
         self.pages = PageContainer()
@@ -237,9 +144,20 @@ class MainWindow(QMainWindow):
         sidebar.add_nav_item("", "SAVE / LOAD", "save_load")
         sidebar.add_nav_item("", "SETTINGS", "settings")
 
-        sidebar.navigation_clicked.connect(self._navigate_to)
+        # タイトルに戻るボタンを一番下に追加
+        sidebar.add_stretch()
+        sidebar.add_nav_item("", "TITLE", "title")
+
+        sidebar.navigation_clicked.connect(self._on_sidebar_nav)
 
         return sidebar
+
+    def _on_sidebar_nav(self, section: str):
+        if section == "title":
+            # タイトル画面に遷移する処理（titleページに遷移）
+            self.pages.show_page("title")
+        else:
+            self._navigate_to(section)
 
     def _create_pages(self):
         """Create all application pages"""
@@ -336,23 +254,7 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, section: str):
         """Navigate to a section"""
-        # Update header title
-        titles = {
-            "home": "ホーム",
-            "roster": "ロースター管理",
-            "stats": "統計・記録",
-            "schedule": "日程・結果",
-            "standings": "順位表",
-            "game": "試合",
-            "trade": "トレード",
-            "draft": "ドラフト",
-            "free_agency": "FA（自由契約選手）",
-            "save_load": "セーブ/ロード",
-            "settings": "設定",
-        }
-        self.header.set_title(titles.get(section, section))
-
-        # Show page
+        # Show page only (header削除)
         self.pages.show_page(section)
 
     def _on_page_changed(self, index: int):

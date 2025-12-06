@@ -34,12 +34,9 @@ class PremiumCard(QFrame):
     def _setup_ui(self):
         self.setStyleSheet(f"""
             QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
+                background: rgba(38,42,48,0.5); /* bg_card_elevated, alpha控えめ */
+                border: none;
+                border-radius: 0px;
             }}
         """)
 
@@ -51,9 +48,8 @@ class PremiumCard(QFrame):
             header = QFrame()
             header.setStyleSheet(f"""
                 QFrame {{
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {self.theme.primary}, stop:1 {self.theme.primary_light});
-                    border-radius: 10px;
+                    background: rgba(255,255,255,0.08); /* 白系の超控えめ */
+                    border-radius: 0px;
                     border: none;
                 }}
             """)

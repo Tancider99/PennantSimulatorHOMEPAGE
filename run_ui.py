@@ -80,6 +80,14 @@ class GameController(QMainWindow):
     Loading -> Title -> Team Select -> Main Game
     """
 
+    def show_manage_mode(self, home_team, away_team):
+        """Show the tactical one-pitch mode (LiveManagePage) in MainWindow"""
+        if hasattr(self, 'main_window'):
+            self.main_window.show_live_manage(home_team, away_team)
+            self.stack.setCurrentWidget(self.main_window)
+        else:
+            print("MainWindow not initialized yet.")
+
     def __init__(self, app):
         super().__init__()
         self.app = app
@@ -286,7 +294,13 @@ class GameController(QMainWindow):
             # Default to first team if not found
             self.game_state.player_team = self.central_teams[0]
 
-        self._start_main_game()
+        # 新しいロード画面を表示（コールバックで完了時にゲーム開始）
+        from UI.screens.game_loading_screen import GameLoadingScreen
+        def on_complete():
+            self._start_main_game()
+        self.game_loading_screen = GameLoadingScreen(on_complete=on_complete, parent=self.stack)
+        self.stack.addWidget(self.game_loading_screen)
+        self.stack.setCurrentWidget(self.game_loading_screen)
 
     def _start_main_game(self):
         """Start the main game interface"""

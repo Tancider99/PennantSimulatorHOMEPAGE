@@ -148,8 +148,12 @@ class InfoPanel(QFrame):
     def add_widget(self, widget):
         self.content_layout.addWidget(widget)
 
+
 class SidebarPanel(QWidget):
     """Starfield Navigation Sidebar"""
+
+    def add_stretch(self):
+        self.nav_layout.addStretch()
 
     navigation_clicked = Signal(str)
 
@@ -180,7 +184,7 @@ class SidebarPanel(QWidget):
         logo_layout = QVBoxLayout(logo_area)
         logo_layout.setAlignment(Qt.AlignCenter)
         
-        lbl = QLabel("NPB SIM 2.0")
+        lbl = QLabel("Baseball SIM")
         lbl.setStyleSheet(f"""
             font-size: 20px;
             font-weight: 700;

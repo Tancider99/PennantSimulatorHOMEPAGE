@@ -267,15 +267,15 @@ class IconButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Background
+        # Square, simple color
         if self._style == "primary":
-            base_color = QColor(self.theme.primary)
+            base_color = QColor("#e0e0e0")  # Light gray
         elif self._style == "danger":
-            base_color = QColor(self.theme.danger)
+            base_color = QColor("#ff6666")  # Soft red
         else:
-            base_color = QColor(self.theme.bg_card)
+            base_color = QColor("#cccccc")  # Neutral gray
 
-        hover_color = base_color.lighter(120)
+        hover_color = base_color.lighter(110)
 
         r = base_color.red() + (hover_color.red() - base_color.red()) * self._hover_progress
         g = base_color.green() + (hover_color.green() - base_color.green()) * self._hover_progress
@@ -284,10 +284,10 @@ class IconButton(QPushButton):
 
         painter.setBrush(QBrush(current_color))
         painter.setPen(Qt.NoPen)
-        painter.drawEllipse(self.rect())
+        painter.drawRect(self.rect())
 
         # Icon
-        painter.setPen(QColor("white"))
+        painter.setPen(QColor("#222"))
         font = QFont()
         font.setPointSize(self._size // 2 - 4)
         painter.setFont(font)

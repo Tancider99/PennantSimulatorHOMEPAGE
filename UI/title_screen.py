@@ -206,7 +206,7 @@ class TitleScreen(QWidget):
         self.title_label.setStyleSheet("""
             font-size: 64px;
             font-weight: 300;
-            letter-spacing: 24px;
+            letter-spacing: 15px;
             color: #ffffff;
         """)
         logo_layout.addWidget(self.title_label)
@@ -217,7 +217,7 @@ class TitleScreen(QWidget):
         self.subtitle_label.setStyleSheet("""
             font-size: 28px;
             font-weight: 200;
-            letter-spacing: 16px;
+            letter-spacing: 15px;
             color: #8b949e;
             margin-top: 0px;
         """)

@@ -55,16 +55,15 @@ class Card(QFrame):
         self._setup_animation()
 
     def _setup_style(self):
+        # 角丸なし、枠線なし、背景色超控えめ
         self.setStyleSheet(f"""
             #Card {{
-                background-color: {self.theme.bg_card};
-                border: 1px solid {self.theme.border};
-                border-left: 3px solid {self.theme.border};
+                background-color: rgba(30,33,38,0.7); /* bg_card, alpha控えめ */
+                border: none;
                 border-radius: 0px;
             }}
             #Card:hover {{
-                border-color: {self.theme.text_secondary};
-                border-left-color: {self.theme.primary};
+                background-color: rgba(38,42,48,0.8); /* bg_card_elevated, alpha控えめ */
             }}
         """)
 
@@ -77,8 +76,9 @@ class Card(QFrame):
         if self._title:
             header = QFrame()
             header.setStyleSheet(f"""
-                background-color: {self.theme.bg_card_elevated};
-                border-bottom: 1px solid {self.theme.border};
+                background-color: rgba(38,42,48,0.5); /* bg_card_elevated, alpha控えめ */
+                border-bottom: none;
+                border-radius: 0px;
             """)
             header_layout = QHBoxLayout(header)
             header_layout.setContentsMargins(16, 8, 16, 8)
@@ -86,7 +86,7 @@ class Card(QFrame):
             # Decorative square
             deco = QFrame()
             deco.setFixedSize(8, 8)
-            deco.setStyleSheet(f"background-color: {self.theme.accent_orange};")
+            deco.setStyleSheet(f"background-color: {self.theme.accent_orange}; border-radius: 0px;")
             header_layout.addWidget(deco)
 
             # Title
@@ -97,6 +97,8 @@ class Card(QFrame):
                 color: {self.theme.text_primary};
                 text-transform: uppercase;
                 letter-spacing: 2px;
+                background: transparent;
+                border: none;
             """)
             header_layout.addWidget(title_label)
             
@@ -470,7 +472,36 @@ class TeamCard(Card):
         if not team: return
         self.name_label.setText(team.name)
         self.league_label.setText(team.league.value)
-        
+
+        # チームカラー取得（例: セ・パで色分け、または team.color 属性があれば利用）
+        team_color = None
+        if hasattr(team, 'color') and team.color:
+            team_color = team.color
+        elif hasattr(team, 'league'):
+            if team.league.value == "セントラル":
+                team_color = self.theme.central_league
+            elif team.league.value == "パシフィック":
+                team_color = self.theme.pacific_league
+        # 背景色にチームカラー要素を反映（控えめな透明度）
+        if team_color:
+            self.setStyleSheet(f"""
+                #Card {{
+                    background-color: {team_color}33; /* チームカラー+控えめ透明度 */
+                    border: none;
+                    border-radius: 0px;
+                }}
+            """)
+            self.name_label.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {self.theme.text_highlight if team_color.lower() in ['#0b0c10','#141619'] else team_color}; letter-spacing: 1px;")
+        else:
+            self.setStyleSheet(f"""
+                #Card {{
+                    background-color: rgba(30,33,38,0.7);
+                    border: none;
+                    border-radius: 0px;
+                }}
+            """)
+            self.name_label.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {self.theme.text_primary}; letter-spacing: 1px;")
+
         self.wins.findChild(QLabel, "value").setText(str(team.wins))
         self.losses.findChild(QLabel, "value").setText(str(team.losses))
         self.draws.findChild(QLabel, "value").setText(str(team.draws))
