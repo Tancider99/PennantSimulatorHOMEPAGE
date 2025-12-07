@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from UI.theme import ThemeManager, get_theme
 from UI.widgets.panels import SidebarPanel, HeaderPanel, StatusPanel, PageContainer
 from UI.widgets.buttons import ActionButton
+from farm_game_simulator import simulate_farm_games_for_day
 
 
 class MainWindow(QMainWindow):
@@ -426,8 +427,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        size = event.size()
-        self.status.set_right_text(f"{size.width()}x{size.height()}")
+        # ...existing code...
 
 
 def run_app():

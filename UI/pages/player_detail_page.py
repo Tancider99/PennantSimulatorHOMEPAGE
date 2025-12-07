@@ -122,6 +122,7 @@ class PlayerDetailPage(QWidget):
     """Detailed player information page"""
 
     back_requested = Signal()
+    detail_stats_requested = Signal(object)  # player object
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -204,7 +205,32 @@ class PlayerDetailPage(QWidget):
 
         toolbar.add_stretch()
 
+        # 詳細統計ボタン
+        self.detail_stats_btn = QPushButton("詳細統計")
+        self.detail_stats_btn.setCursor(Qt.PointingHandCursor)
+        self.detail_stats_btn.setFixedHeight(32)
+        self.detail_stats_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme.primary};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme.primary_dark};
+            }}
+        """)
+        self.detail_stats_btn.clicked.connect(self._on_detail_stats)
+        toolbar.add_widget(self.detail_stats_btn)
+
         return toolbar
+
+    def _on_detail_stats(self):
+        """詳細統計ボタンクリック"""
+        if self.current_player:
+            self.detail_stats_requested.emit(self.current_player)
 
     def set_player(self, player):
         """Set the player to display"""
