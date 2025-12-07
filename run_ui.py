@@ -92,8 +92,8 @@ class GameController(QMainWindow):
         super().__init__()
         self.app = app
         self.game_state = None
-        self.central_teams = []
-        self.pacific_teams = []
+        self.north_teams = []
+        self.south_teams = []
 
         # Import screens here to avoid circular imports
         from UI.screens.loading_screen import LoadingScreen
@@ -193,29 +193,30 @@ class GameController(QMainWindow):
         """Load or create teams"""
         from team_generator import load_or_create_teams
 
-        central_team_names = [
-            "Yomiuri Giants",
-            "Hanshin Tigers",
-            "Chunichi Dragons",
-            "Hiroshima Toyo Carp",
-            "Yokohama DeNA BayStars",
-            "Tokyo Yakult Swallows"
+        # Fictional team names for copyright compliance
+        north_team_names = [
+            "Tokyo Bravers",
+            "Osaka Thunders",
+            "Nagoya Sparks",
+            "Hiroshima Phoenix",
+            "Yokohama Mariners",
+            "Shinjuku Spirits"
         ]
-        pacific_team_names = [
-            "Fukuoka SoftBank Hawks",
-            "Saitama Seibu Lions",
-            "Tohoku Rakuten Golden Eagles",
-            "Chiba Lotte Marines",
-            "Hokkaido Nippon-Ham Fighters",
-            "Orix Buffaloes"
+        south_team_names = [
+            "Fukuoka Phoenix",
+            "Saitama Bears",
+            "Sendai Flames",
+            "Chiba Mariners",
+            "Sapporo Fighters",
+            "Kobe Buffaloes"
         ]
 
         print("  Loading team data...")
-        self.central_teams, self.pacific_teams = load_or_create_teams(
-            central_team_names, pacific_team_names
+        self.north_teams, self.south_teams = load_or_create_teams(
+            north_team_names, south_team_names
         )
-        print(f"  Central League: {len(self.central_teams)} teams")
-        print(f"  Pacific League: {len(self.pacific_teams)} teams")
+        print(f"  North League: {len(self.north_teams)} teams")
+        print(f"  South League: {len(self.south_teams)} teams")
 
     def _create_game_state(self):
         """Create the game state manager"""
@@ -223,13 +224,16 @@ class GameController(QMainWindow):
 
         print("  Initializing game state...")
         self.game_state = GameStateManager()
-        self.game_state.central_teams = self.central_teams
-        self.game_state.pacific_teams = self.pacific_teams
-        self.game_state.all_teams = self.central_teams + self.pacific_teams
+        self.game_state.north_teams = self.north_teams
+        self.game_state.south_teams = self.south_teams
+        self.game_state.all_teams = self.north_teams + self.south_teams
         self.game_state.current_year = 2027
 
         total_players = sum(len(team.players) for team in self.game_state.all_teams)
         print(f"  Total players: {total_players}")
+        # Set new league names
+        self.game_state.north_league_name = "North League"
+        self.game_state.south_league_name = "South League"
 
     def _on_loading_complete(self):
         """Handle loading completion"""
@@ -246,7 +250,7 @@ class GameController(QMainWindow):
         """Handle new game button click"""
         print("  Starting new game...")
         # Pass team data to team select screen for overview display
-        self.team_select_screen.set_teams(self.central_teams, self.pacific_teams)
+        self.team_select_screen.set_teams(self.north_teams, self.south_teams)
         self.stack.setCurrentIndex(2)
 
     def _on_continue(self):
@@ -292,7 +296,7 @@ class GameController(QMainWindow):
             self.game_state.player_team = selected_team
         else:
             # Default to first team if not found
-            self.game_state.player_team = self.central_teams[0]
+            self.game_state.player_team = self.north_teams[0]
 
         # 新しいロード画面を表示（コールバックで完了時にゲーム開始）
         from UI.screens.game_loading_screen import GameLoadingScreen

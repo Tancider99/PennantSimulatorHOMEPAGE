@@ -3009,8 +3009,8 @@ class ScreenRenderer:
         
         # リーグパネル（左側）
         leagues = [
-            ("CENTRAL LEAGUE", central_teams, 25, Colors.PRIMARY),
-            ("PACIFIC LEAGUE", pacific_teams, 25 + list_width // 2 + 10, (180, 90, 60)),
+            ("NORTH LEAGUE", north_teams, 25, Colors.PRIMARY),
+            ("SOUTH LEAGUE", south_teams, 25 + list_width // 2 + 10, (180, 90, 60)),
         ]
         
         for league_name, teams, panel_x, accent_color in leagues:

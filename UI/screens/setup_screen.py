@@ -132,7 +132,7 @@ class SetupScreen(QWidget):
         
         # 4. DH Rule
         self.dh_combo = QComboBox()
-        self.dh_combo.addItems(["Pacific League Only", "Universal DH", "No DH"])
+        self.dh_combo.addItems(["South League Only", "Universal DH", "No DH"])
         self.dh_combo.setStyleSheet(self._get_combo_style())
         settings_layout.addWidget(SettingRow(
             "Designated Hitter", "Rules for the Designated Hitter position.", self.dh_combo

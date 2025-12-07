@@ -36,13 +36,14 @@ class StandingsPage(ContentPanel):
         self.tables_layout = QHBoxLayout()
         self.tables_layout.setSpacing(24)
 
-        # Central League Card
-        self.central_card = StandingsCard("CENTRAL LEAGUE")
-        self.tables_layout.addWidget(self.central_card)
 
-        # Pacific League Card
-        self.pacific_card = StandingsCard("PACIFIC LEAGUE")
-        self.tables_layout.addWidget(self.pacific_card)
+        # North League Card
+        self.north_card = StandingsCard("NORTH LEAGUE")
+        self.tables_layout.addWidget(self.north_card)
+
+        # South League Card
+        self.south_card = StandingsCard("SOUTH LEAGUE")
+        self.tables_layout.addWidget(self.south_card)
 
         self.add_layout(self.tables_layout)
         self.add_stretch()
@@ -52,11 +53,11 @@ class StandingsPage(ContentPanel):
         if not game_state or not hasattr(game_state, 'all_teams'):
             return
 
-        central_teams = [t for t in game_state.all_teams if t.league.value == "central" or t.league.name == "CENTRAL"]
-        pacific_teams = [t for t in game_state.all_teams if t.league.value == "pacific" or t.league.name == "PACIFIC"]
+        north_teams = [t for t in game_state.all_teams if getattr(t.league, 'value', '').lower() == "north" or getattr(t.league, 'name', '').upper() == "NORTH"]
+        south_teams = [t for t in game_state.all_teams if getattr(t.league, 'value', '').lower() == "south" or getattr(t.league, 'name', '').upper() == "SOUTH"]
 
-        central_teams.sort(key=lambda x: x.winning_percentage, reverse=True)
-        pacific_teams.sort(key=lambda x: x.winning_percentage, reverse=True)
+        north_teams.sort(key=lambda x: x.winning_percentage, reverse=True)
+        south_teams.sort(key=lambda x: x.winning_percentage, reverse=True)
 
-        self.central_card.set_standings(central_teams)
-        self.pacific_card.set_standings(pacific_teams)
+        self.north_card.set_standings(north_teams)
+        self.south_card.set_standings(south_teams)

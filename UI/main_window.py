@@ -13,6 +13,7 @@ from PySide6.QtGui import QIcon, QPixmap, QFont, QAction, QKeySequence, QScreen
 
 import sys
 import os
+import random
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,7 +47,6 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("NPBSimulator", "PennantSimulator")
 
         self._setup_window()
-        # self._setup_menu_bar()  # メニューバー削除
         self._setup_ui()
         self._setup_connections()
         self._setup_shortcuts()
@@ -58,22 +58,14 @@ class MainWindow(QMainWindow):
     def _setup_window(self):
         """Configure main window properties"""
         self.setWindowTitle("Pennant Simulator 2027")
-
-        # Allow window to be resized
         self.setMinimumSize(1024, 600)
-
-        # Default size
         self.resize(1600, 1000)
-
-        # Enable window flags for proper resizing
         self.setWindowFlags(
             Qt.Window |
             Qt.WindowMinimizeButtonHint |
             Qt.WindowMaximizeButtonHint |
             Qt.WindowCloseButtonHint
         )
-
-        # Center on screen
         self._center_on_screen()
 
     def _center_on_screen(self):
@@ -85,11 +77,11 @@ class MainWindow(QMainWindow):
             y = (screen_geometry.height() - self.height()) // 2
             self.move(x, y)
 
-
     def _setup_ui(self):
         """Create the main UI layout"""
         # Central widget
         central = QWidget()
+        central.setStyleSheet(f"background-color: {self.theme.bg_dark};") # 背景色設定
         self.setCentralWidget(central)
 
         main_layout = QHBoxLayout(central)
@@ -106,10 +98,6 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Header（削除）
-        # self.header = HeaderPanel("ホーム")
-        # content_layout.addWidget(self.header)
-
         # Page container
         self.pages = PageContainer()
         self._create_pages()
@@ -125,7 +113,6 @@ class MainWindow(QMainWindow):
         """Create the navigation sidebar"""
         sidebar = SidebarPanel()
 
-        # Main navigation - no emojis, clean text
         sidebar.add_nav_item("", "HOME", "home")
         sidebar.add_nav_item("", "ROSTER", "roster")
         sidebar.add_nav_item("", "STATS", "stats")
@@ -144,7 +131,6 @@ class MainWindow(QMainWindow):
         sidebar.add_nav_item("", "SAVE / LOAD", "save_load")
         sidebar.add_nav_item("", "SETTINGS", "settings")
 
-        # タイトルに戻るボタンを一番下に追加
         sidebar.add_stretch()
         sidebar.add_nav_item("", "TITLE", "title")
 
@@ -154,7 +140,6 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_nav(self, section: str):
         if section == "title":
-            # タイトル画面に遷移する処理（titleページに遷移）
             self.pages.show_page("title")
         else:
             self._navigate_to(section)
@@ -163,7 +148,7 @@ class MainWindow(QMainWindow):
         """Create all application pages"""
         from UI.pages.home_page import HomePage
         from UI.pages.roster_page import RosterPage
-        from UI.pages.game_page import GamePage
+        from UI.pages.live_game_page import LiveGamePage 
         from UI.pages.standings_page import StandingsPage
         from UI.pages.schedule_page import SchedulePage
         from UI.pages.stats_page import StatsPage
@@ -175,7 +160,7 @@ class MainWindow(QMainWindow):
         # Create page instances
         self.home_page = HomePage(self)
         self.roster_page = RosterPage(self)
-        self.game_page = GamePage(self)
+        self.game_page = LiveGamePage(self)
         self.standings_page = StandingsPage(self)
         self.schedule_page = SchedulePage(self)
         self.stats_page = StatsPage(self)
@@ -221,12 +206,53 @@ class MainWindow(QMainWindow):
 
     def _setup_connections(self):
         """Set up signal connections"""
-        # Page change updates header
         self.pages.page_changed.connect(self._on_page_changed)
+        
+        self.home_page.game_requested.connect(self._on_game_requested)
+        self.home_page.view_roster_requested.connect(lambda: self._navigate_to("roster"))
+        
+        # 試合終了時のシグナル接続
+        self.game_page.game_finished.connect(self._on_game_finished)
+
+    def _on_game_requested(self):
+        """Handle game request from home page"""
+        if not self.game_state:
+            return
+
+        # 対戦相手決定ロジック（簡易版）
+        player_team = self.game_state.player_team
+        opponents = [t for t in self.game_state.teams if t.name != player_team.name]
+        
+        if not opponents:
+            return
+
+        opponent = random.choice(opponents)
+        is_home_game = random.choice([True, False])
+        
+        home_team = player_team if is_home_game else opponent
+        away_team = opponent if is_home_game else player_team
+        
+        self.show_game(home_team, away_team)
+
+    def _on_game_finished(self, result):
+        """Handle game finish"""
+        # サイドバーとステータスバーを再表示
+        self.set_sidebar_visible(True)
+        
+        # 試合結果を表示してホームに戻る
+        msg = f"試合終了\n\n{result['away_team'].name} {result['away_score']} - {result['home_score']} {result['home_team'].name}\n\n勝者: {result['winner']}"
+        QMessageBox.information(self, "試合結果", msg)
+        
+        self._navigate_to("home")
+        self.home_page.set_game_state(self.game_state)
+
+    def set_sidebar_visible(self, visible: bool):
+        """サイドバーとステータスバーの表示切り替え"""
+        self.sidebar.setVisible(visible)
+        self.status.setVisible(visible)
 
     def _setup_shortcuts(self):
         """Set up keyboard shortcuts"""
-        # Navigation shortcuts
         shortcuts = {
             "1": "home",
             "2": "roster",
@@ -246,7 +272,6 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked, p=page: self._navigate_to(p))
             self.addAction(action)
 
-        # Escape to exit fullscreen
         escape_action = QAction(self)
         escape_action.setShortcut(QKeySequence("Escape"))
         escape_action.triggered.connect(self._exit_fullscreen)
@@ -254,32 +279,29 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, section: str):
         """Navigate to a section"""
-        # Show page only (header削除)
+        # 試合画面以外に移動する場合はサイドバーを表示
+        if section != "game":
+            self.set_sidebar_visible(True)
+        
         self.pages.show_page(section)
 
     def _on_page_changed(self, index: int):
         """Handle page change"""
-        # Update status bar
         if self.game_state:
             self.status.set_left_text(f"{self.game_state.current_year}年")
             self.status.set_right_text(f"チーム: {self.game_state.player_team.name if self.game_state.player_team else '未選択'}")
 
     def _on_settings_changed(self, settings: dict):
         """Handle settings changes"""
-        # Apply fullscreen first
         if settings.get("fullscreen", False):
             if not self.isFullScreen():
                 self.showFullScreen()
-                self.fullscreen_action.setChecked(True)
         else:
             if self.isFullScreen():
                 self.showNormal()
-                self.fullscreen_action.setChecked(False)
 
-            # Apply window size if not fullscreen
             if "window_size" in settings:
                 size_str = settings["window_size"]
-                # Parse size string like "1280 x 720 (HD)"
                 if " x " in size_str:
                     parts = size_str.split(" x ")
                     try:
@@ -289,15 +311,12 @@ class MainWindow(QMainWindow):
                     except (ValueError, IndexError):
                         pass
 
-            # Apply start maximized
             if settings.get("start_maximized", False) and not self.isMaximized():
                 self.showMaximized()
 
-        # Apply UI scale
         if "ui_scale" in settings:
             self._set_ui_scale(settings["ui_scale"])
 
-        # Save settings to QSettings
         for key, value in settings.items():
             self.settings.setValue(key, value)
 
@@ -305,7 +324,6 @@ class MainWindow(QMainWindow):
         """Set the current game state"""
         self.game_state = game_state
 
-        # Update all pages with game state
         pages_to_update = [
             self.home_page, self.roster_page, self.game_page,
             self.standings_page, self.schedule_page, self.stats_page,
@@ -316,78 +334,44 @@ class MainWindow(QMainWindow):
             if hasattr(page, 'set_game_state'):
                 page.set_game_state(game_state)
 
-        # Update status bar
         self._on_page_changed(0)
 
     def show_game(self, home_team, away_team):
         """Switch to game page and start a game"""
         self._navigate_to("game")
+        # 試合開始時はサイドバーを非表示
+        self.set_sidebar_visible(False)
         self.game_page.start_game(home_team, away_team)
 
-    # === Window Size and Display Methods ===
-
     def _set_window_size(self, width: int, height: int):
-        """Set window to a specific size"""
-        # Exit fullscreen if active
         if self.isFullScreen():
             self.showNormal()
-            self.fullscreen_action.setChecked(False)
-
         self.resize(width, height)
         self._center_on_screen()
         self.window_size_changed.emit(width, height)
 
-    def _toggle_fullscreen(self):
-        """Toggle fullscreen mode"""
-        if self.isFullScreen():
-            self.showNormal()
-            self.fullscreen_action.setChecked(False)
-            self.fullscreen_changed.emit(False)
-        else:
-            self.showFullScreen()
-            self.fullscreen_action.setChecked(True)
-            self.fullscreen_changed.emit(True)
-
     def _exit_fullscreen(self):
-        """Exit fullscreen mode if active"""
         if self.isFullScreen():
             self.showNormal()
-            self.fullscreen_action.setChecked(False)
             self.fullscreen_changed.emit(False)
-
-    def _toggle_maximize(self):
-        """Toggle maximize/restore"""
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
 
     def _set_ui_scale(self, scale: float):
-        """Set the UI scale factor"""
         ThemeManager.set_scale(scale)
-
-        # Get current font and scale it
         app = QApplication.instance()
         if app:
             base_size = 10
             font = app.font()
             font.setPointSize(int(base_size * scale))
             app.setFont(font)
-
-        # Save setting
         self.settings.setValue("ui_scale", scale)
 
-    # === Window State Persistence ===
-
     def _save_window_state(self):
-        """Save window geometry and state"""
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
         self.settings.setValue("isMaximized", self.isMaximized())
         self.settings.setValue("isFullScreen", self.isFullScreen())
 
     def _restore_window_state(self):
-        """Restore window geometry and state"""
         geometry = self.settings.value("geometry")
         if geometry:
             self.restoreGeometry(geometry)
@@ -396,142 +380,50 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
 
-        # Restore scale
         scale = self.settings.value("ui_scale", 1.0, type=float)
         if scale != 1.0:
             self._set_ui_scale(scale)
 
-        # Restore fullscreen/maximized state
         if self.settings.value("isFullScreen", False, type=bool):
             self.showFullScreen()
-            self.fullscreen_action.setChecked(True)
         elif self.settings.value("isMaximized", False, type=bool):
             self.showMaximized()
 
     def closeEvent(self, event):
-        """Handle window close event"""
         self._save_window_state()
         event.accept()
 
     def resizeEvent(self, event):
-        """Handle window resize"""
         super().resizeEvent(event)
-        # Update status bar with current size
         size = event.size()
         self.status.set_right_text(f"{size.width()}x{size.height()}")
-
-    # === Help Dialogs ===
-
-    def _show_about(self):
-        """Show about dialog"""
-        QMessageBox.about(
-            self,
-            "Pennant Simulator 2027",
-            """
-            <h2>Pennant Simulator 2027</h2>
-            <p><b>OOTP-Style Professional Edition</b></p>
-            <p>日本プロ野球ペナントレースシミュレーター</p>
-            <hr>
-            <p>Version: 2027.0.0</p>
-            <p>Engine: PySide6 + Python</p>
-            <hr>
-            <p>© 2027 Baseball Architect Project</p>
-            """
-        )
-
-    def _show_shortcuts(self):
-        """Show keyboard shortcuts dialog"""
-        shortcuts_text = """
-        <h3>キーボードショートカット</h3>
-        <table>
-        <tr><td><b>F11</b></td><td>フルスクリーン切替</td></tr>
-        <tr><td><b>Ctrl+M</b></td><td>最大化切替</td></tr>
-        <tr><td><b>Escape</b></td><td>フルスクリーン解除</td></tr>
-        <tr><td><b>Space</b></td><td>1日進める</td></tr>
-        <tr><td><b>Ctrl+Space</b></td><td>1週間進める</td></tr>
-        <tr><td colspan="2"><hr></td></tr>
-        <tr><td><b>Ctrl+1</b></td><td>ホーム</td></tr>
-        <tr><td><b>Ctrl+2</b></td><td>ロースター</td></tr>
-        <tr><td><b>Ctrl+3</b></td><td>統計</td></tr>
-        <tr><td><b>Ctrl+4</b></td><td>日程・結果</td></tr>
-        <tr><td><b>Ctrl+5</b></td><td>順位表</td></tr>
-        <tr><td><b>Ctrl+6</b></td><td>試合</td></tr>
-        <tr><td><b>Ctrl+7</b></td><td>トレード</td></tr>
-        <tr><td><b>Ctrl+8</b></td><td>ドラフト</td></tr>
-        <tr><td><b>Ctrl+9</b></td><td>FA</td></tr>
-        <tr><td><b>Ctrl+0</b></td><td>設定</td></tr>
-        <tr><td colspan="2"><hr></td></tr>
-        <tr><td><b>Ctrl+N</b></td><td>新規ゲーム</td></tr>
-        <tr><td><b>Ctrl+O</b></td><td>ロード</td></tr>
-        <tr><td><b>Ctrl+S</b></td><td>セーブ</td></tr>
-        </table>
-        """
-        QMessageBox.information(self, "ショートカット一覧", shortcuts_text)
-
-
-def create_splash_screen() -> QSplashScreen:
-    """Create a premium splash screen"""
-    # Create a gradient splash pixmap
-    pixmap = QPixmap(700, 450)
-    pixmap.fill(QColor(get_theme().bg_dark))
-
-    splash = QSplashScreen(pixmap)
-    splash.setStyleSheet(f"""
-        color: {get_theme().text_primary};
-        font-size: 28px;
-        font-weight: 300;
-        letter-spacing: 4px;
-    """)
-    splash.showMessage(
-        "PENNANT SIMULATOR 2027\n\nLOADING...",
-        Qt.AlignCenter | Qt.AlignBottom,
-        QColor(get_theme().text_primary)
-    )
-
-    return splash
 
 
 def run_app():
     """Run the application"""
     app = QApplication(sys.argv)
-
-    # High DPI support
     app.setAttribute(Qt.AA_EnableHighDpiScaling)
     app.setAttribute(Qt.AA_UseHighDpiPixmaps)
-
-    # Apply theme
     ThemeManager.apply_theme(app)
 
-    # Set application font
     font = QFont("Yu Gothic UI", 10)
     if not font.exactMatch():
         font = QFont("Meiryo", 10)
     app.setFont(font)
 
-    # Show splash screen
-    # splash = create_splash_screen()
-    # splash.show()
-    # app.processEvents()
-
-    # Create main window
     window = MainWindow()
 
-    # Load game state (if exists) or show new game dialog
-    # For now, create a demo game state
-    from game_state import GameStateManager, GameState
+    from game_state import GameState
     from team_generator import create_all_npb_teams
 
-    # Create teams and game state
+    # Demo setup
     teams = create_all_npb_teams()
     game_state = GameState(
         teams=teams,
         current_year=2027,
-        player_team_index=0  # Giants as default
+        player_team_index=0
     )
     window.set_game_state(game_state)
-
-    # Close splash and show main window
-    # splash.finish(window)
     window.show()
 
     sys.exit(app.exec())

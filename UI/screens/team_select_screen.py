@@ -32,7 +32,7 @@ class TeamListItem(QPushButton):
         # League Indicator Bar
         self.bar = QFrame()
         self.bar.setFixedSize(4, 32)
-        c = self.theme.central_league if league == "central" else self.theme.pacific_league
+        c = self.theme.north_league if league == "north" else self.theme.south_league
         self.bar.setStyleSheet(f"background-color: {c};")
         layout.addWidget(self.bar)
         
@@ -254,18 +254,18 @@ class TeamSelectScreen(QWidget):
         self.items = []
         
         # Headers
-        scroll_layout.addWidget(self._create_header("CENTRAL ORBIT"))
-        self._add_teams(scroll_layout, "central", [
-            "Yomiuri Giants", "Hanshin Tigers", "Chunichi Dragons",
-            "Hiroshima Toyo Carp", "Yokohama DeNA BayStars", "Tokyo Yakult Swallows"
+        scroll_layout.addWidget(self._create_header("NORTH ORBIT"))
+        self._add_teams(scroll_layout, "north", [
+            "Tokyo Bravers", "Osaka Thunders", "Nagoya Sparks",
+            "Hiroshima Phoenix", "Yokohama Mariners", "Shinjuku Spirits"
         ])
         
         scroll_layout.addSpacing(20)
         
-        scroll_layout.addWidget(self._create_header("PACIFIC ORBIT"))
-        self._add_teams(scroll_layout, "pacific", [
-            "Fukuoka SoftBank Hawks", "Saitama Seibu Lions", "Tohoku Rakuten Golden Eagles",
-            "Chiba Lotte Marines", "Hokkaido Nippon-Ham Fighters", "Orix Buffaloes"
+        scroll_layout.addWidget(self._create_header("SOUTH ORBIT"))
+        self._add_teams(scroll_layout, "south", [
+            "Fukuoka Phoenix", "Saitama Bears", "Sendai Flames",
+            "Chiba Mariners", "Sapporo Fighters", "Kobe Buffaloes"
         ])
         
         scroll_layout.addStretch()
