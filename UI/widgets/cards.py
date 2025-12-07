@@ -369,14 +369,15 @@ class PlayerCard(Card):
             self.pos_label.setText(pos[:2]) 
             self.pos_strip.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-right: 3px solid {self.theme.accent_blue};")
 
+        # 総合力を ★ 数値 で表示
         ovr = getattr(player, 'overall_rating', 0)
-        self.overall_label.setText(str(ovr))
+        self.overall_label.setText(f"★ {ovr}")
         color = self.theme.get_rating_color(ovr)
         self.overall_label.setStyleSheet(f"""
             font-family: "Consolas", monospace;
             font-size: 18px;
             font-weight: 700;
-            color: {color};
+            color: {self.theme.gold}; /* テーマのゴールド色を使用 */
         """)
 
         if hasattr(self, 'stats_layout'):
@@ -398,6 +399,7 @@ class PlayerCard(Card):
             col.setSpacing(0)
             l = QLabel(label)
             l.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted};")
+            # 1-99スケールをランク表示
             v = QLabel(Theme.get_rating_rank(val))
             v.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {Theme.get_rating_color(val)};")
             col.addWidget(l, alignment=Qt.AlignCenter)

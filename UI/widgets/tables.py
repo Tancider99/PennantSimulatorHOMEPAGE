@@ -90,6 +90,39 @@ class RatingDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
 
 
+class SortableTableWidgetItem(QTableWidgetItem):
+    """
+    数値でのソートを正しく行うためのカスタムアイテムクラス
+    UserRoleに数値がある場合はそれを優先し、なければテキストを数値変換して比較する
+    """
+    def __lt__(self, other):
+        # 1. UserRole (能力値などの隠しデータ) での比較
+        v1 = self.data(Qt.UserRole)
+        v2 = other.data(Qt.UserRole)
+        
+        # 両方が数値型(int/float)なら数値比較
+        if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+            return v1 < v2
+            
+        # 2. テキストを数値変換して比較 (背番号、成績など)
+        try:
+            # カンマ除去、---などのプレースホルダー対応
+            t1 = self.text().replace(',', '').replace('★ ', '')
+            if t1 == "---" or t1 == "-.--": t1 = "-1"
+            
+            t2 = other.text().replace(',', '').replace('★ ', '')
+            if t2 == "---" or t2 == "-.--": t2 = "-1"
+            
+            d1 = float(t1)
+            d2 = float(t2)
+            return d1 < d2
+        except ValueError:
+            pass
+            
+        # 3. フォールバック: 通常の文字列比較
+        return super().__lt__(other)
+
+
 class PlayerTable(QWidget):
     """OOTP-Style Player Table with sorting, filtering, and stats"""
 
@@ -277,9 +310,13 @@ class PlayerTable(QWidget):
 
         self.table.setRowCount(len(filtered))
 
+        # ソート状態を維持するために一時的にソートを無効化
+        self.table.setSortingEnabled(False)
+
         for row, player in enumerate(filtered):
             self._set_player_row(row, player, mode)
 
+        self.table.setSortingEnabled(True)
         self._update_status()
 
     def _set_player_row(self, row: int, player, mode: str):
@@ -302,7 +339,7 @@ class PlayerTable(QWidget):
                 f".{int(record.batting_average * 1000):03d}" if record.at_bats > 0 else "---",
                 str(record.home_runs),
                 str(record.rbis),
-                str(player.overall_rating)
+                f"★ {player.overall_rating}"
             ]
             rating_cols = [4, 5, 6, 7, 8, 9]
         else:
@@ -322,12 +359,13 @@ class PlayerTable(QWidget):
                 str(record.saves),
                 f"{era:.2f}" if era > 0 else "-.--",
                 str(record.strikeouts_pitched),
-                str(player.overall_rating)
+                f"★ {player.overall_rating}"
             ]
             rating_cols = [4, 5, 6, 7]
 
         for col, value in enumerate(data):
-            item = QTableWidgetItem()
+            # SortableTableWidgetItem を使用してソート対応
+            item = SortableTableWidgetItem()
 
             if col in rating_cols:
                 # Rating column - store actual value for delegate
@@ -337,8 +375,17 @@ class PlayerTable(QWidget):
             else:
                 item.setText(str(value))
                 item.setTextAlignment(Qt.AlignCenter if col != 1 else Qt.AlignLeft | Qt.AlignVCenter)
+                
+                # 総合力の場合は数値でソートできるように設定
+                if "★" in str(value):
+                    try:
+                        val_num = int(str(value).replace("★ ", ""))
+                        item.setData(Qt.UserRole, val_num)
+                    except:
+                        pass
 
-            # Store player reference in first column
+            # Store player reference in first column (Note: col 0 has #, UserRole is used for player obj)
+            # SortableTableWidgetItem handles this in try/except block for float conversion
             if col == 0:
                 item.setData(Qt.UserRole, player)
 
@@ -360,7 +407,7 @@ class PlayerTable(QWidget):
             target_pos = positions[pos_idx - 1]
             filtered = [p for p in filtered if p.position.value == target_pos]
 
-        # Type filter (pitchers)
+        # Type filter (for pitchers)
         type_idx = self.type_filter.currentIndex()
         if type_idx > 0 and self.view_pitcher_btn.isChecked():
             types = ["先発", "中継ぎ", "抑え"]
@@ -477,7 +524,8 @@ class RosterTable(QWidget):
             self.table.setItem(row, 3, pos_item)
 
             # Overall
-            overall_item = QTableWidgetItem(str(player.overall_rating))
+            overall_item = SortableTableWidgetItem(f"★ {player.overall_rating}")
+            overall_item.setData(Qt.UserRole, player.overall_rating)
             overall_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 4, overall_item)
 

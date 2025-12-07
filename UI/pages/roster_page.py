@@ -1,4 +1,3 @@
-# filename: tancider99/pennantsimulator/PennantSimulator-dc826ddd1c528c22b1587f45283260277b108bea/UI/pages/roster_page.py
 # -*- coding: utf-8 -*-
 """
 Baseball Team Architect 2027 - Roster Page
@@ -164,10 +163,8 @@ class RosterPage(QWidget):
         toolbar.add_stretch()
 
         # Actions
-        # 【修正】ボタン名を「打順編集」から「オーダー」に変更
         edit_lineup_btn = QPushButton("オーダー")
         edit_lineup_btn.setCursor(Qt.PointingHandCursor)
-        # 【修正】文字色をwhiteからtext_highlightに変更（背景がprimary=白のため）
         edit_lineup_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {self.theme.primary};
@@ -194,7 +191,6 @@ class RosterPage(QWidget):
 
         # Tabs for different views
         self.tabs = QTabWidget()
-        # 【修正】タブのテキスト色を明示的に指定
         self.tabs.setStyleSheet(f"""
             QTabWidget::pane {{
                 border: 1px solid {self.theme.border};
@@ -216,14 +212,39 @@ class RosterPage(QWidget):
             }}
         """)
 
+        # 【修正】スタイルシートでホバーエフェクトを無効化
+        # item:hover の背景色を transparent にし、文字色を通常時と同じに設定
+        table_style = f"""
+            QTableView {{
+                selection-color: #222222;
+                background-color: {self.theme.bg_card};
+                alternate-background-color: {self.theme.bg_input};
+            }}
+            QTableView::item:selected {{
+                color: #222222;
+                background-color: {self.theme.primary};
+            }}
+            QTableView::item:hover {{
+                background-color: transparent;
+                color: {self.theme.text_primary};
+                border: none;
+            }}
+            QTableView::item:selected:hover {{
+                background-color: {self.theme.primary};
+                color: #222222;
+            }}
+        """
+
         # Batters tab
         self.batter_table = PlayerTable()
+        self.batter_table.setStyleSheet(table_style) # スタイル適用
         self.batter_table.player_selected.connect(self._on_player_selected)
         self.batter_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.batter_table, "野手")
 
         # Pitchers tab
         self.pitcher_table = PlayerTable()
+        self.pitcher_table.setStyleSheet(table_style) # スタイル適用
         self.pitcher_table.player_selected.connect(self._on_player_selected)
         self.pitcher_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.pitcher_table, "投手")
@@ -338,7 +359,7 @@ class RosterPage(QWidget):
         # Update team selector
         self.team_selector.clear()
         
-        # 【修正】自チームを判別しやすくする
+        # 自チームを判別しやすくする
         player_team_obj = game_state.player_team
         
         for team in game_state.teams:
@@ -374,16 +395,28 @@ class RosterPage(QWidget):
         team = self.current_team
 
         # Get filtered players
-        batters = [p for p in team.players if p.position.value != "投手"]
-        pitchers = [p for p in team.players if p.position.value == "投手"]
+        all_batters = [p for p in team.players if p.position.value != "投手"]
+        all_pitchers = [p for p in team.players if p.position.value == "投手"]
+
+        batters = []
+        pitchers = []
 
         # Apply current filter
         if self.show_active_btn.isChecked():
-            batters = [p for p in batters if not p.is_developmental]
-            pitchers = [p for p in pitchers if not p.is_developmental]
+            batters = [p for p in all_batters if not p.is_developmental]
+            pitchers = [p for p in all_pitchers if not p.is_developmental]
         elif self.show_dev_btn.isChecked():
-            batters = [p for p in batters if p.is_developmental]
-            pitchers = [p for p in pitchers if p.is_developmental]
+            batters = [p for p in all_batters if p.is_developmental]
+            pitchers = [p for p in all_pitchers if p.is_developmental]
+        else:
+            # Show all
+            batters = list(all_batters)
+            pitchers = list(all_pitchers)
+
+        # 【修正】並び順を安定させるためにソートを行う (例: 背番号順)
+        # 操作によってリスト順序が変わることを防ぐ
+        batters.sort(key=lambda p: p.uniform_number if hasattr(p, 'uniform_number') else 0)
+        pitchers.sort(key=lambda p: p.uniform_number if hasattr(p, 'uniform_number') else 0)
 
         # Update tables
         self.batter_table.set_players(batters, mode="batter")

@@ -3,7 +3,7 @@
 データモデル定義
 """
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from enum import Enum
 import datetime
 
@@ -116,61 +116,57 @@ class ScheduledGame:
 
 @dataclass
 class PlayerStats:
-    """選手能力値（OOTPスタイル完全版）
+    """選手能力値（1-99スケール）
 
-    基本能力値は1〜200の範囲（20刻みで表示: 20=★1, 80=★4, 200=★10）
-    OOTPでは20-80スケールだが、内部的には1-200で管理
+    基本能力値は1〜99の範囲（50が平均、90以上がSランク）
     """
     # ===== 打撃能力 (Batting Ratings) =====
-    contact: int = 100         # コンタクト - ヒット性の打球を打つ能力
-    gap: int = 100             # ギャップパワー - 中距離打者能力（二塁打・三塁打）
-    power: int = 100           # ホームランパワー - 長打力
-    eye: int = 100             # 選球眼 - 四球を選ぶ能力
-    avoid_k: int = 100         # 三振回避 - 三振しにくさ
+    contact: int = 50          # コンタクト
+    gap: int = 50              # ギャップパワー
+    power: int = 50            # パワー
+    eye: int = 50              # 選球眼
+    avoid_k: int = 50          # 三振回避
 
     # ===== 走塁能力 (Running Ratings) =====
-    speed: int = 100           # 走塁速度 - 足の速さ
-    steal: int = 100           # 盗塁技術 - スタートの上手さ
-    baserunning: int = 100     # 走塁判断 - 次の塁を狙う判断力
+    speed: int = 50            # 走力
+    steal: int = 50            # 盗塁
+    baserunning: int = 50      # 走塁
 
     # ===== バント能力 =====
-    bunt_sac: int = 100        # 送りバント - 犠牲バントの上手さ
-    bunt_hit: int = 100        # セーフティバント - セーフティバントの上手さ
+    bunt_sac: int = 50         # 送りバント
+    bunt_hit: int = 50         # セーフティバント
 
     # ===== 守備能力 (Fielding Ratings) =====
-    # 捕手 (Catcher)
-    catcher_ability: int = 100 # 配球・フレーミング - リード・ブロック能力
-    catcher_arm: int = 100     # 盗塁阻止能力 - 肩の強さ
+    catcher_ability: int = 50  # 捕手リード
+    catcher_arm: int = 50      # 捕手肩
 
-    # 内野 (Infield)
-    inf_range: int = 100       # 内野守備範囲 - 守備範囲の広さ
-    inf_error: int = 100       # 内野守備技術 - エラー回避能力
-    inf_arm: int = 100         # 内野肩の強さ - 送球の強さ
-    turn_dp: int = 100         # ダブルプレー能力 - 併殺処理の上手さ
+    inf_range: int = 50        # 内野守備範囲
+    inf_error: int = 50        # 内野捕球
+    inf_arm: int = 50          # 内野肩
+    turn_dp: int = 50          # 併殺処理
 
-    # 外野 (Outfield)
-    of_range: int = 100        # 外野守備範囲 - 守備範囲の広さ
-    of_error: int = 100        # 外野守備技術 - エラー回避能力
-    of_arm: int = 100          # 外野肩の強さ - 送球の強さ
+    of_range: int = 50         # 外野守備範囲
+    of_error: int = 50         # 外野捕球
+    of_arm: int = 50           # 外野肩
 
     # ===== 投球能力 (Pitching Ratings) =====
-    stuff: int = 100           # スタッフ - 持ち球の質（奪三振能力）
-    movement: int = 100        # ムーブメント - 変化量とゴロ率
-    control: int = 100         # コントロール - 制球力
+    stuff: int = 50            # 球威
+    movement: int = 50         # 変化球/ムーブメント
+    control: int = 50          # 制球
 
     # ===== 投手追加能力 =====
-    velocity: int = 145        # 球速 (km/h) - 130-165の実数値
-    stamina: int = 100         # スタミナ - 持久力
-    hold_runners: int = 100    # ホールドランナーズ - 走者を釘付けにする能力
-    gb_tendency: int = 50      # ゴロ傾向 (0-100) - 50が中立、高いほどゴロ投手
+    velocity: int = 145        # 球速 (km/h)
+    stamina: int = 50          # スタミナ
+    hold_runners: int = 50     # クイック
+    gb_tendency: int = 50      # ゴロ傾向
 
     # ===== その他能力 =====
-    durability: int = 100      # 耐久性 - ケガしにくさ
-    work_ethic: int = 100      # 練習態度 - 成長に影響
-    intelligence: int = 100    # 野球IQ - 判断力全般
+    durability: int = 50       # 回復力・ケガ耐性
+    work_ethic: int = 50       # 練習態度
+    intelligence: int = 50     # 野球脳
 
     # ===== 投手専用 =====
-    pitches: Dict[str, int] = field(default_factory=dict)  # 球種と能力値 {"ストレート": 150, "スライダー": 120}
+    pitches: Dict[str, int] = field(default_factory=dict)  # 球種 {"ストレート": 60, ...}
 
     # ===== 互換性・エイリアス =====
     @property
@@ -193,11 +189,9 @@ class PlayerStats:
     @property
     def injury_res(self) -> int: return self.durability
     @property
-    def injury_resistance(self) -> int: return self.durability
-    @property
     def recovery(self) -> int: return self.durability
     @property
-    def trajectory(self) -> int: return min(4, max(1, self.power // 50 + 1))
+    def trajectory(self) -> int: return min(4, max(1, self.power // 25 + 1)) # 1-99スケールに合わせて調整
     @property
     def chance(self) -> int: return self.intelligence
     @property
@@ -237,21 +231,17 @@ class PlayerStats:
 
     def to_star_rating(self, value: int) -> float:
         """能力値を★評価に変換 (0.5-5.0)"""
-        return max(0.5, min(5.0, value / 40))
-
-    def to_display_value(self, value: int) -> int:
-        """能力値を20-80スケール表示に変換"""
-        return max(20, min(80, value // 2.5 + 20))
+        return max(0.5, min(5.0, value / 20)) # 99/20 = ~5.0
 
     def overall_batting(self) -> float:
-        """野手の総合値を計算"""
+        """野手の総合値を計算 (1-99)"""
         batting = (self.contact * 2 + self.gap * 1.5 + self.power * 1.5 + self.eye + self.avoid_k) / 7
         running = (self.speed + self.steal + self.baserunning) / 3
         defense = (self.inf_range + self.of_range + self.catcher_ability) / 3
         return (batting * 0.5 + running * 0.2 + defense * 0.3)
 
     def overall_pitching(self) -> float:
-        """投手の総合値を計算"""
+        """投手の総合値を計算 (1-99)"""
         vel_rating = self.kmh_to_rating(self.velocity)
         return (self.stuff * 2 + self.movement * 1.5 + self.control * 2 + vel_rating + self.stamina * 0.5) / 7
 
@@ -261,31 +251,32 @@ class PlayerStats:
 
     @staticmethod
     def kmh_to_rating(kmh: int) -> int:
-        """km/hを1-200評価値に変換"""
-        # 130km/h -> 20, 145km/h -> 100, 160km/h -> 180
-        val = (kmh - 130) * 160 / 30 + 20
-        return int(max(20, min(200, val)))
+        """km/hを1-99評価値に変換"""
+        # 130km/h -> 30, 145km/h -> 60, 160km/h -> 90
+        # Formula: 30 + (kmh - 130) * 2
+        val = (kmh - 130) * 2 + 30
+        return int(max(1, min(99, val)))
 
     def get_rank(self, value: int) -> str:
-        """能力値をランクに変換（1-200スケール）"""
-        if value >= 180: return "S"
-        elif value >= 160: return "A"
-        elif value >= 140: return "B"
-        elif value >= 120: return "C"
-        elif value >= 100: return "D"
-        elif value >= 80: return "E"
-        elif value >= 60: return "F"
+        """能力値をランクに変換（1-99スケール）"""
+        if value >= 90: return "S"
+        elif value >= 80: return "A"
+        elif value >= 70: return "B"
+        elif value >= 60: return "C"
+        elif value >= 50: return "D"
+        elif value >= 40: return "E"
+        elif value >= 30: return "F"
         else: return "G"
 
     def get_rank_color(self, value: int) -> str:
-        """ランクに応じた色コード（1-200スケール）"""
-        if value >= 180: return "#FFD700"  # Gold (S)
-        elif value >= 160: return "#FF4500"  # Red-Orange (A)
-        elif value >= 140: return "#FFA500"  # Orange (B)
-        elif value >= 120: return "#FFFF00"  # Yellow (C)
-        elif value >= 100: return "#32CD32"  # Lime Green (D)
-        elif value >= 80: return "#1E90FF"  # Dodger Blue (E)
-        elif value >= 60: return "#4682B4"  # Steel Blue (F)
+        """ランクに応じた色コード（1-99スケール）"""
+        if value >= 90: return "#FFD700"  # Gold (S)
+        elif value >= 80: return "#FF4500"  # Red-Orange (A)
+        elif value >= 70: return "#FFA500"  # Orange (B)
+        elif value >= 60: return "#FFFF00"  # Yellow (C)
+        elif value >= 50: return "#32CD32"  # Lime Green (D)
+        elif value >= 40: return "#1E90FF"  # Dodger Blue (E)
+        elif value >= 30: return "#4682B4"  # Steel Blue (F)
         return "#808080"  # Gray (G)
 
     def get_star_display(self, value: int) -> str:
@@ -837,10 +828,17 @@ class Player:
     @property
     def overall_rating(self) -> int:
         """総合評価 (1-999)"""
+        # 能力値(1-99) を入力とし、平均250、最大999になるようにスケーリング
+        # Formula: (rating / 99)^2 * 999
+        # 50 -> 255
+        # 99 -> 999
         if self.position == Position.PITCHER:
-            return int(self.stats.overall_pitching() * 8 + 100)
+            val = self.stats.overall_pitching()
         else:
-            return int(self.stats.overall_batting() * 8 + 100)
+            val = self.stats.overall_batting()
+            
+        rating = (val / 99) ** 2 * 999
+        return max(1, min(999, int(rating)))
 
 
 @dataclass

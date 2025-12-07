@@ -55,6 +55,8 @@ class StatBlock(QFrame):
         # Value with rank
         from models import PlayerStats
         stats = PlayerStats()
+        
+        # モデルが1-99スケールになったため、そのまま使用
         rank = stats.get_rank(value)
         color = stats.get_rank_color(value)
 
@@ -96,7 +98,8 @@ class StatBlock(QFrame):
             }}
         """)
 
-        fill_width = int(100 * value / 200)  # Scale based on 200 max
+        # 1-99スケールなので、そのままパーセンテージとして使用可能
+        fill_width = int(value)  
         if fill_width > 100: fill_width = 100
         if fill_width < 0: fill_width = 0
         
@@ -204,26 +207,6 @@ class PlayerDetailPage(QWidget):
         toolbar.add_widget(self.player_name_label)
 
         toolbar.add_stretch()
-
-        # 詳細統計ボタン
-        self.detail_stats_btn = QPushButton("詳細統計")
-        self.detail_stats_btn.setCursor(Qt.PointingHandCursor)
-        self.detail_stats_btn.setFixedHeight(32)
-        self.detail_stats_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme.primary};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme.primary_dark};
-            }}
-        """)
-        self.detail_stats_btn.clicked.connect(self._on_detail_stats)
-        toolbar.add_widget(self.detail_stats_btn)
 
         return toolbar
 
@@ -349,6 +332,33 @@ class PlayerDetailPage(QWidget):
         left_layout.addWidget(info_label)
         
         layout.addLayout(left_layout)
+        
+        # Right: Overall Rating
+        right_layout = QVBoxLayout()
+        right_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        
+        rating_label = QLabel(f"★ {player.overall_rating}")
+        rating_label.setStyleSheet(f"""
+            font-size: 36px;
+            font-weight: 900;
+            color: {self.theme.gold};
+            font-family: 'Segoe UI', sans-serif;
+        """)
+        rating_label.setAlignment(Qt.AlignRight)
+        
+        rating_title = QLabel("総合力")
+        rating_title.setStyleSheet(f"""
+            font-size: 12px;
+            color: {self.theme.text_secondary};
+            font-weight: 600;
+        """)
+        rating_title.setAlignment(Qt.AlignRight)
+        
+        right_layout.addWidget(rating_title)
+        right_layout.addWidget(rating_label)
+        
+        layout.addLayout(right_layout)
+        
         return header
 
     def _create_left_column(self, player) -> QVBoxLayout:
@@ -450,31 +460,6 @@ class PlayerDetailPage(QWidget):
                 est_draft = rng.randint(3, 7)
             draft_str = f"{est_draft}位"
 
-        # Hometown (Random generation from 47 prefectures)
-        prefectures = [
-            "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
-            "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
-            "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
-            "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
-            "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
-            "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
-            "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県"
-        ]
-        # Weighted slightly towards major areas (indices for Tokyo, Osaka, etc.)
-        # Simple weighted choice
-        weights = [1] * 47
-        # Boost Tokyo(12), Kanagawa(13), Osaka(26), Aichi(22), Fukuoka(39), Hokkaido(0)
-        weights[12] = 5 # Tokyo
-        weights[13] = 3 # Kanagawa
-        weights[26] = 3 # Osaka
-        weights[22] = 3 # Aichi
-        weights[39] = 2 # Fukuoka
-        weights[0]  = 2 # Hokkaido
-        
-        hometown_str = getattr(player, 'hometown', None)
-        if not hometown_str:
-            hometown_str = rng.choices(prefectures, weights=weights, k=1)[0]
-
         # Salary
         salary_str = f"{player.salary // 10000:,}万円"
 
@@ -499,7 +484,8 @@ class PlayerDetailPage(QWidget):
         add_card_item(0, 1, "年齢", f"{player.age}歳")
         add_card_item(1, 0, "プロ年数", years_str)
         add_card_item(1, 1, "ドラフト", draft_str)
-        add_card_item(2, 0, "出身地", hometown_str)
+        
+        # 出身地削除済み
 
         info_layout.addLayout(info_grid)
         info_layout.addStretch() # Push content to top, but card expands
@@ -771,6 +757,8 @@ class PlayerDetailPage(QWidget):
         """Add a detail stat row to the grid"""
         from models import PlayerStats
         stats = PlayerStats()
+        
+        # モデルが1-99スケールになったため、そのまま使用
         rank = stats.get_rank(value)
         color = stats.get_rank_color(value)
 
@@ -800,6 +788,9 @@ class PlayerDetailPage(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
+        # 修正: ヘッダーレイアウトを作成し、タイトルと詳細統計ボタンを配置
+        header_layout = QHBoxLayout()
+        
         title = QLabel("今季成績")
         title.setStyleSheet(f"""
             font-size: 14px;
@@ -808,7 +799,31 @@ class PlayerDetailPage(QWidget):
             border: none;
             background: transparent;
         """)
-        layout.addWidget(title)
+        header_layout.addWidget(title)
+        
+        header_layout.addStretch()
+        
+        # 修正: 詳細統計ボタンを白背景・黒文字に変更
+        detail_btn = QPushButton("詳細統計")
+        detail_btn.setCursor(Qt.PointingHandCursor)
+        detail_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #FFFFFF;
+                color: #333333;
+                border: 1px solid {self.theme.border};
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: #F0F0F0;
+            }}
+        """)
+        detail_btn.clicked.connect(self._on_detail_stats)
+        header_layout.addWidget(detail_btn)
+        
+        layout.addLayout(header_layout)
 
         # Tab Widget
         tab_widget = QTabWidget()
