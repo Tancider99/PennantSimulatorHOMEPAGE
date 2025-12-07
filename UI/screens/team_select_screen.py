@@ -246,7 +246,8 @@ class TeamOverviewPanel(QFrame):
 
     def set_team(self, team, name, league):
         self.header_label.setText(name.upper())
-        self.sub_header.setText(f"LEAGUE: {league.upper()} | STATUS: ACTIVE")
+        league_display = "North League" if league.lower() == "north" else ("South League" if league.lower() == "south" else league)
+        self.sub_header.setText(f"LEAGUE: {league_display} | STATUS: ACTIVE")
         self.confirm_btn.setEnabled(True)
         
         if team:

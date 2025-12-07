@@ -139,7 +139,8 @@ class RadarChart(QWidget):
             painter.setBrush(QBrush(QColor(self.theme.primary_light)))
             painter.setPen(QPen(QColor("white"), 2))
             for point in points:
-                painter.drawEllipse(point, 5, 5)
+                # 【修正】点のサイズを 5,5 から 3,3 に変更
+                painter.drawEllipse(point, 3, 3)
 
     def _draw_labels(self, painter: QPainter, cx: int, cy: int, radius: int, angle_step: float):
         """Draw labels around the chart"""

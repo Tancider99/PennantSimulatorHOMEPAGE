@@ -224,8 +224,8 @@ class GameController(QMainWindow):
 
         print("  Initializing game state...")
         self.game_state = GameStateManager()
-        self.game_state.central_teams = self.north_teams
-        self.game_state.pacific_teams = self.south_teams
+        self.game_state.north_teams = self.north_teams
+        self.game_state.south_teams = self.south_teams
         self.game_state.all_teams = self.north_teams + self.south_teams
         self.game_state.current_year = 2027
 

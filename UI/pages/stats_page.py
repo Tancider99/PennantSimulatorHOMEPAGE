@@ -489,9 +489,9 @@ class StatsPage(QWidget):
 
         league_filter = self.league_combo.currentIndex()
         if league_filter == 1:
-            all_batters = [(p, t) for p, t in all_batters if t.league.value == "セントラル"]
+            all_batters = [(p, t) for p, t in all_batters if t.league.value == "North League"]
         elif league_filter == 2:
-            all_batters = [(p, t) for p, t in all_batters if t.league.value == "パシフィック"]
+            all_batters = [(p, t) for p, t in all_batters if t.league.value == "South League"]
 
         qualified = [(p, t) for p, t in all_batters if p.record.at_bats >= 50]
         avg_leaders = sorted(qualified, key=lambda x: x[0].record.batting_average, reverse=True)[:10]
@@ -531,9 +531,9 @@ class StatsPage(QWidget):
 
         league_filter = self.league_combo.currentIndex()
         if league_filter == 1:
-            all_pitchers = [(p, t) for p, t in all_pitchers if t.league.value == "セントラル"]
+            all_pitchers = [(p, t) for p, t in all_pitchers if t.league.value == "North League"]
         elif league_filter == 2:
-            all_pitchers = [(p, t) for p, t in all_pitchers if t.league.value == "パシフィック"]
+            all_pitchers = [(p, t) for p, t in all_pitchers if t.league.value == "South League"]
 
         qualified = [(p, t) for p, t in all_pitchers if p.record.innings_pitched >= 20]
         era_leaders = sorted(qualified, key=lambda x: x[0].record.era)[:10]

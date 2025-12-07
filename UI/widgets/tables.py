@@ -146,10 +146,47 @@ class PlayerTable(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
+        # 入力コントロール用の共通スタイルを定義
+        input_style = f"""
+            QLineEdit, QComboBox {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_primary};
+                border: 1px solid {self.theme.border};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 2px solid {self.theme.text_secondary};
+                border-bottom: 2px solid {self.theme.text_secondary};
+                width: 8px;
+                height: 8px;
+                margin-right: 8px;
+                transform: rotate(-45deg);
+                margin-top: -2px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {self.theme.bg_card};
+                color: {self.theme.text_primary};
+                selection-background-color: {self.theme.primary};
+                selection-color: {self.theme.text_highlight};
+                border: 1px solid {self.theme.border};
+                outline: none;
+            }}
+            QLineEdit:focus, QComboBox:focus {{
+                border: 1px solid {self.theme.primary};
+            }}
+        """
+
         # Search
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("選手検索...")
         self.search_input.setMinimumWidth(200)
+        self.search_input.setStyleSheet(input_style)  # スタイルを適用
         self.search_input.textChanged.connect(self._filter_players)
         layout.addWidget(self.search_input)
 
@@ -159,12 +196,14 @@ class PlayerTable(QWidget):
             "全ポジション", "投手", "捕手", "一塁手", "二塁手",
             "三塁手", "遊撃手", "外野手"
         ])
+        self.position_filter.setStyleSheet(input_style)  # スタイルを適用
         self.position_filter.currentIndexChanged.connect(self._filter_players)
         layout.addWidget(self.position_filter)
 
         # Type filter (for pitchers)
         self.type_filter = QComboBox()
         self.type_filter.addItems(["全タイプ", "先発", "中継ぎ", "抑え"])
+        self.type_filter.setStyleSheet(input_style)  # スタイルを適用
         self.type_filter.currentIndexChanged.connect(self._filter_players)
         layout.addWidget(self.type_filter)
 
