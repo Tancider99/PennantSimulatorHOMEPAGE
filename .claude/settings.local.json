@@ -5,7 +5,8 @@
       "Bash(dir:*)",
       "Bash(find:*)",
       "Bash(timeout 15 python:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(timeout 10 python:*)"
     ],
     "deny": [],
     "ask": []

@@ -224,8 +224,8 @@ class GameController(QMainWindow):
 
         print("  Initializing game state...")
         self.game_state = GameStateManager()
-        self.game_state.north_teams = self.north_teams
-        self.game_state.south_teams = self.south_teams
+        self.game_state.central_teams = self.north_teams
+        self.game_state.pacific_teams = self.south_teams
         self.game_state.all_teams = self.north_teams + self.south_teams
         self.game_state.current_year = 2027
 
@@ -234,6 +234,12 @@ class GameController(QMainWindow):
         # Set new league names
         self.game_state.north_league_name = "North League"
         self.game_state.south_league_name = "South League"
+
+        # Initialize NPB schedule engine
+        print("  Generating NPB schedule...")
+        self.game_state.initialize_schedule()
+        if self.game_state.schedule:
+            print(f"  Schedule: {len(self.game_state.schedule.games)} games generated")
 
     def _on_loading_complete(self):
         """Handle loading completion"""

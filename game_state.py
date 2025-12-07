@@ -86,6 +86,11 @@ class GameStateManager:
         self.current_year = 2027
         self.current_game_number = 0
         self.current_opponent: Optional[Team] = None
+        self.current_date: str = "2027-03-29"  # 開幕日
+
+        # NPB日程エンジン
+        self.schedule_engine = None
+        self.schedule = None
 
         # ドラフト・FA関連
         self.draft_prospects: List[DraftProspect] = []
@@ -99,6 +104,73 @@ class GameStateManager:
         # プレーオフ進行状況
         self.playoff_stage = None  # None, "CLIMAX_FIRST", "CLIMAX_FINAL", "JAPAN_SERIES"
         self.playoff_teams = []
+
+        # 試合結果履歴
+        self.game_history: List[dict] = []
+
+    def initialize_schedule(self):
+        """NPB日程を初期化"""
+        from npb_schedule_engine import NPBScheduleEngine
+        from models import League
+
+        self.schedule_engine = NPBScheduleEngine(self.current_year)
+
+        # チームをリーグ別に分類
+        central = [t for t in self.all_teams if t.league == League.CENTRAL]
+        pacific = [t for t in self.all_teams if t.league == League.PACIFIC]
+
+        self.schedule = self.schedule_engine.generate_schedule(central, pacific)
+        self.current_date = self.schedule_engine.opening_day.strftime("%Y-%m-%d")
+
+    def get_next_game(self):
+        """プレイヤーチームの次の試合を取得"""
+        if not self.schedule_engine or not self.player_team:
+            return None
+        return self.schedule_engine.get_next_game(self.player_team.name, self.current_date)
+
+    def get_today_games(self):
+        """今日の全試合を取得"""
+        if not self.schedule_engine:
+            return []
+        return self.schedule_engine.get_games_for_date(self.current_date)
+
+    def record_game_result(self, home_team, away_team, home_score, away_score):
+        """試合結果を記録"""
+        result = {
+            'date': self.current_date,
+            'home_team': home_team.name,
+            'away_team': away_team.name,
+            'home_score': home_score,
+            'away_score': away_score,
+            'winner': home_team.name if home_score > away_score else (away_team.name if away_score > home_score else 'DRAW')
+        }
+        self.game_history.append(result)
+
+        # チーム成績更新
+        if home_score > away_score:
+            home_team.wins += 1
+            away_team.losses += 1
+        elif away_score > home_score:
+            away_team.wins += 1
+            home_team.losses += 1
+        else:
+            home_team.draws += 1
+            away_team.draws += 1
+
+    def get_recent_results(self, team_name: str, count: int = 10) -> List[str]:
+        """チームの最近の勝敗を取得 ('W', 'L', 'D')"""
+        results = []
+        for game in reversed(self.game_history):
+            if game['home_team'] == team_name or game['away_team'] == team_name:
+                if game['winner'] == team_name:
+                    results.append('W')
+                elif game['winner'] == 'DRAW':
+                    results.append('D')
+                else:
+                    results.append('L')
+                if len(results) >= count:
+                    break
+        return results
 
     @property
     def teams(self) -> List[Team]:
