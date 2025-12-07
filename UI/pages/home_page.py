@@ -71,6 +71,10 @@ class CompactStatCard(QFrame):
     def set_sub(self, sub: str):
         self._sub_label.setText(sub)
 
+    def set_text_color(self, color: str):
+        """Set the text color of the value label"""
+        self._value_label.setStyleSheet(f"font-size: 22px; font-weight: 800; color: {color};")
+
 
 class MatchupCard(QFrame):
     """Next game matchup card"""
@@ -509,10 +513,12 @@ class HomePage(ContentPanel):
         self.record_card = CompactStatCard("RECORD", "0-0-0", "Win%: .000", self.theme.text_primary)
         grid.addWidget(self.record_card, row, 0)
 
-        self.rank_card = CompactStatCard("RANK", "-", "Games Back: -", self.theme.accent_blue)
+        # Changed to text_primary for muted look
+        self.rank_card = CompactStatCard("RANK", "-", "Games Back: -", self.theme.text_primary)
         grid.addWidget(self.rank_card, row, 1)
 
-        self.games_card = CompactStatCard("GAMES", "0/143", "Progress: 0%", self.theme.warning)
+        # Changed to text_primary for muted look
+        self.games_card = CompactStatCard("GAMES", "0/143", "Progress: 0%", self.theme.text_primary)
         grid.addWidget(self.games_card, row, 2)
 
         self.streak_card = CompactStatCard("STREAK", "-", "Last 10: -", self.theme.success)
@@ -594,6 +600,12 @@ class HomePage(ContentPanel):
             league_teams.sort(key=lambda t: t.winning_percentage, reverse=True)
             rank = next((i + 1 for i, t in enumerate(league_teams) if t.name == team.name), 0)
             self.rank_card.set_value(f"#{rank}" if rank else "-")
+
+            # Update rank color: Gold for 1st place, default color otherwise
+            if rank == 1:
+                self.rank_card.set_text_color("#e6b422")
+            else:
+                self.rank_card.set_text_color(self.theme.text_primary)
 
             if rank > 1 and league_teams:
                 leader = league_teams[0]
