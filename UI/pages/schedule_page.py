@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Baseball Team Architect 2027 - Schedule Page
-Calendar-based Schedule & Results with Visual Game Info
+Calendar-based Schedule & Results with Visual Game Info (Fixed: Season Range Only)
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCalendarWidget,
@@ -85,6 +85,11 @@ class GameCalendarWidget(QCalendarWidget):
         self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         self.setNavigationBarVisible(True)
         
+        # 【修正】表示範囲をシーズン中（3月〜10月）に限定する
+        # シミュレーション年が2027年固定と仮定していますが、動的に設定する場合はset_data等で更新してください
+        self.setMinimumDate(QDate(2027, 3, 1))
+        self.setMaximumDate(QDate(2027, 10, 31))
+        
         self.setStyleSheet(f"""
             QCalendarWidget {{ background-color: {self.theme.bg_card}; border: none; }}
             QCalendarWidget QWidget {{ alternate-background-color: {self.theme.bg_input}; }}
@@ -100,11 +105,26 @@ class GameCalendarWidget(QCalendarWidget):
     def set_data(self, games, player_team_name):
         self.games_map = {}
         self.player_team_name = player_team_name
+        
+        # ゲームデータから日付範囲を自動調整する場合
+        min_date = QDate(2027, 3, 1)
+        max_date = QDate(2027, 10, 31)
+        
         for game in games:
             try:
                 y, m, d = map(int, game.date.split('-'))
-                self.games_map[QDate(y, m, d)] = game
+                qdate = QDate(y, m, d)
+                self.games_map[qdate] = game
+                
+                # データ範囲に合わせて調整（必要なら）
+                if qdate < min_date: min_date = qdate
+                if qdate > max_date: max_date = qdate
             except: pass
+            
+        # 範囲を更新（シーズン外を表示させない）
+        self.setMinimumDate(QDate(min_date.year(), 3, 1))
+        self.setMaximumDate(QDate(max_date.year(), 10, 31))
+        
         self.updateCells()
 
     def paintCell(self, painter: QPainter, rect: QRect, date: QDate):

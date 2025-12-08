@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-データモデル定義 (修正版: オーダー生成ロジック追加)
+データモデル定義 (修正版: セイバーメトリクス・守備指標・勝率対応・オーダー生成関数統合)
 """
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
@@ -314,7 +314,8 @@ class PlayerStats:
 
 @dataclass
 class PlayerRecord:
-    """選手成績（基本統計）"""
+    """選手成績（基本統計 + 高度な守備指標 + 計算済み指標）"""
+    # Basic
     games: int = 0
     plate_appearances: int = 0
     at_bats: int = 0
@@ -334,6 +335,7 @@ class PlayerRecord:
     sacrifice_flies: int = 0
     grounded_into_dp: int = 0
 
+    # Pitching Basic
     games_pitched: int = 0
     games_started: int = 0
     wins: int = 0
@@ -353,6 +355,7 @@ class PlayerRecord:
     wild_pitches: int = 0
     balks: int = 0
 
+    # Advanced Tracking
     total_bases: int = 0
     ground_balls: int = 0
     fly_balls: int = 0
@@ -371,6 +374,23 @@ class PlayerRecord:
     complete_games: int = 0
     shutouts: int = 0
 
+    # --- Defensive Metrics (Source Data) ---
+    def_opportunities: int = 0 # 守備機会（刺殺＋補殺＋失策＋野選ではないが、ここでは「処理すべき打球数」）
+    def_plays_made: int = 0    # 実際にアウトにした数
+    def_difficulty_sum: float = 0.0 # 処理した打球の難易度合計 (Hit Probabilityの逆数的な)
+    def_drs_raw: float = 0.0 # 簡易DRS蓄積値 (Plus/Minusシステム)
+
+    # --- Computed Advanced Stats (Cached/Calculated by Stats Engine) ---
+    woba_val: float = 0.0
+    wrc_val: float = 0.0
+    wrc_plus_val: float = 0.0
+    war_val: float = 0.0
+    fip_val: float = 0.0
+    xfip_val: float = 0.0
+    uzr_val: float = 0.0 # UZR/150 or Raw UZR
+    drs_val: float = 0.0
+    
+    # --- Basic Properties ---
     @property
     def batting_average(self) -> float:
         return self.hits / self.at_bats if self.at_bats > 0 else 0.0
@@ -378,6 +398,11 @@ class PlayerRecord:
     @property
     def era(self) -> float:
         return (self.earned_runs * 9) / self.innings_pitched if self.innings_pitched > 0 else 0.0
+
+    @property
+    def winning_percentage(self) -> float:
+        total = self.wins + self.losses
+        return self.wins / total if total > 0 else 0.0
 
     @property
     def singles(self) -> int:
@@ -398,6 +423,122 @@ class PlayerRecord:
     @property
     def ops(self) -> float:
         return self.obp + self.slg
+
+    # --- Sabermetrics Properties (Accessors to stored values or simple calcs) ---
+    @property
+    def iso(self) -> float:
+        return self.slg - self.batting_average
+
+    @property
+    def babip(self) -> float:
+        denominator = self.at_bats - self.strikeouts - self.home_runs + self.sacrifice_flies
+        if denominator <= 0: return 0.0
+        return (self.hits - self.home_runs) / denominator
+
+    @property
+    def woba(self) -> float:
+        return self.woba_val
+
+    @property
+    def wrc(self) -> float:
+        return self.wrc_val
+
+    @property
+    def wrc_plus(self) -> float:
+        return self.wrc_plus_val
+
+    @property
+    def war(self) -> float:
+        return self.war_val
+        
+    @property
+    def fip(self) -> float:
+        # Fallback if not calculated
+        if self.fip_val == 0.0 and self.innings_pitched > 0:
+             return (13 * self.home_runs_allowed + 3 * (self.walks_allowed + self.hit_batters) - 2 * self.strikeouts_pitched) / self.innings_pitched + 3.10
+        return self.fip_val
+
+    @property
+    def xfip(self) -> float:
+        # Fallback if not calculated
+        if self.xfip_val == 0.0:
+             return self.fip # Default to FIP if no xFIP available
+        return self.xfip_val
+
+    @property
+    def whip(self) -> float:
+        if self.innings_pitched == 0: return 0.0
+        return (self.walks_allowed + self.hits_allowed) / self.innings_pitched
+
+    @property
+    def k_per_9(self) -> float:
+        if self.innings_pitched == 0: return 0.0
+        return (self.strikeouts_pitched * 9) / self.innings_pitched
+
+    @property
+    def bb_per_9(self) -> float:
+        if self.innings_pitched == 0: return 0.0
+        return (self.walks_allowed * 9) / self.innings_pitched
+    
+    @property
+    def k_bb_ratio(self) -> float:
+        if self.walks_allowed == 0: return float(self.strikeouts_pitched)
+        return self.strikeouts_pitched / self.walks_allowed
+
+    @property
+    def hr_per_9(self) -> float:
+        if self.innings_pitched == 0: return 0.0
+        return (self.home_runs_allowed * 9) / self.innings_pitched
+        
+    @property
+    def h_per_9(self) -> float:
+        if self.innings_pitched == 0: return 0.0
+        return (self.hits_allowed * 9) / self.innings_pitched
+
+    @property
+    def k_rate_pitched(self) -> float:
+        # TBF approx
+        total_batters = self.hits_allowed + self.walks_allowed + self.hit_batters + self.strikeouts_pitched + self.ground_outs + self.fly_outs 
+        if total_batters == 0: return 0.0
+        return self.strikeouts_pitched / total_batters
+
+    @property
+    def bb_rate_pitched(self) -> float:
+        total_batters = self.hits_allowed + self.walks_allowed + self.hit_batters + self.strikeouts_pitched + self.ground_outs + self.fly_outs
+        if total_batters == 0: return 0.0
+        return self.walks_allowed / total_batters
+        
+    @property
+    def bb_rate(self) -> float:
+        if self.plate_appearances == 0: return 0.0
+        return self.walks / self.plate_appearances
+
+    @property
+    def k_rate(self) -> float:
+        if self.plate_appearances == 0: return 0.0
+        return self.strikeouts / self.plate_appearances
+        
+    @property
+    def sb_rate(self) -> float:
+        attempts = self.stolen_bases + self.caught_stealing
+        if attempts == 0: return 0.0
+        return self.stolen_bases / attempts
+
+    @property
+    def lob_rate(self) -> float:
+        # LOB% = (H+BB+HBP - R) / (H+BB+HBP - (1.4*HR))
+        num = (self.hits_allowed + self.walks_allowed + self.hit_batters) - self.runs_allowed
+        denom = (self.hits_allowed + self.walks_allowed + self.hit_batters) - (1.4 * self.home_runs_allowed)
+        if denom <= 0: return 0.72
+        return num / denom
+
+    @property
+    def uzr(self) -> float:
+        return self.uzr_val
+    
+    @property
+    def drs(self) -> float:
+        return self.drs_val
 
     def reset(self):
         for field_name in self.__dataclass_fields__:
@@ -461,11 +602,6 @@ class CareerStats:
                 result.append((year, level, stats))
         return result
 
-
-# ====================================================================
-#  重要: PlayerとTeamはオブジェクトの同一性で管理するため、
-#        eq=False (ハッシュ化可能、等価性判定はIDベース) とする
-# ====================================================================
 
 @dataclass(eq=False)
 class Player:
