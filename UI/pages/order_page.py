@@ -152,8 +152,14 @@ class DraggableTableWidget(QTableWidget):
             stream.writeInt32(row)
             mime.setData(MIME_PLAYER_DATA, data)
             
-            # Name column index varies
-            name_col = 2 if self.mode == "lineup" else 1
+            # Determine Name Column based on mode
+            if self.mode == "lineup":
+                name_col = 2
+            elif self.mode == "farm_batter":
+                name_col = 0 # farm_batter has Name at col 0
+            else:
+                name_col = 1
+            
             name_item = self.item(row, name_col)
             name_text = name_item.text() if name_item else "Player"
             pixmap = self._create_drag_pixmap(name_text, is_pos=False)
@@ -453,24 +459,27 @@ class OrderPage(QWidget):
         return table
 
     def _get_table_style(self):
-        # selection-background-color is transparent to remove blue bar
-        # outline: none to remove focus ring
+        # selection-background-color: transparent -> causes blue bar confusion or focus ring visibility
+        # selection-color: {self.theme.text_primary} -> overrides custom colors (S-rank gold etc)
+        
+        # FIX: Remove selection-color to preserve rank colors. 
+        # FIX: Set a subtle selection background (instead of transparent) and ensure no border/outline.
+        
         return f"""
             QTableWidget {{
                 background-color: {self.theme.bg_card};
                 border: 1px solid {self.theme.border};
                 gridline-color: {self.theme.border_muted};
-                selection-background-color: transparent; 
-                selection-color: {self.theme.text_primary};
+                selection-background-color: {self.theme.bg_input};
                 outline: none;
             }}
             QTableWidget::item:selected {{
-                background-color: transparent;
+                background-color: {self.theme.bg_input};
                 border: none;
                 outline: none;
             }}
             QTableWidget::item:focus {{
-                background-color: transparent;
+                background-color: {self.theme.bg_input};
                 border: none;
                 outline: none;
             }}
@@ -707,7 +716,10 @@ class OrderPage(QWidget):
                     continue
                     
                 candidates.append((i, p))
-                
+        
+        # FIX: Positional sorting map
+        pos_order = {"捕": 2, "一": 3, "二": 4, "三": 5, "遊": 6, "左": 7, "中": 8, "右": 9, "DH": 10}
+
         table.setRowCount(len(candidates))
         for i, (p_idx, p) in enumerate(candidates):
             # ["選手名", "年齢", "ミ", "パ", "走", "肩", "守", "守備適正", "総合"]
@@ -724,8 +736,12 @@ class OrderPage(QWidget):
             
             # Aptitude (Delegate format)
             apt_data = self._format_aptitude_delegate(p)
-            # Use main position string for sorting logic
-            apt_item = self._create_item(apt_data, sort_val=p.position.value) 
+            
+            # FIX: Use numeric sort val for aptitude column to prevent errors/weird sorting
+            p_pos_char = self._short_pos_name(p.position.value)
+            sort_val = pos_order.get(p_pos_char, 99)
+            
+            apt_item = self._create_item(apt_data, sort_val=sort_val) 
             table.setItem(i, 7, apt_item)
             
             table.setItem(i, 8, self._create_item(f"★{p.overall_rating}", is_star=True))
