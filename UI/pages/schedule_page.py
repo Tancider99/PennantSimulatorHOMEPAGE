@@ -1,631 +1,304 @@
 # -*- coding: utf-8 -*-
 """
 Baseball Team Architect 2027 - Schedule Page
-Premium Game Schedule and Results
+Calendar-based Schedule & Results with Visual Game Info
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
-    QComboBox, QFrame, QGraphicsDropShadowEffect, QScrollArea
+    QPushButton, QFrame, QSplitter, QProgressBar, QDialog, 
+    QGraphicsDropShadowEffect, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QAbstractItemView, QMessageBox
 )
-from PySide6.QtCore import Qt, QDate, Signal
-from PySide6.QtGui import QColor, QBrush, QFont
+from PySide6.QtCore import Qt, QDate, Signal, QThread, QRect, QPoint
+from PySide6.QtGui import QColor, QFont, QPainter, QBrush, QTextOption
 
 import sys
 import os
+import traceback
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from UI.theme import get_theme
+from UI.widgets.cards import Card
+from models import GameStatus
 
+class SimulationWorker(QThread):
+    progress_updated = Signal(int, int, str)
+    finished = Signal()
+    error_occurred = Signal(str)
 
-class PremiumCard(QFrame):
-    """Premium styled card with gradient background and shadow"""
+    def __init__(self, game_state, target_date, parent=None):
+        super().__init__(parent)
+        self.game_state = game_state
+        self.target_date = target_date
+        self.is_cancelled = False
 
-    def __init__(self, title: str, icon: str = "", parent=None):
+    def run(self):
+        try:
+            if not self.game_state.current_date:
+                self.finished.emit()
+                return
+
+            current_qdate = self._str_to_date(self.game_state.current_date)
+            # 翌日からターゲット日付まで
+            days_to_sim = current_qdate.daysTo(self.target_date)
+            
+            if days_to_sim <= 0:
+                self.finished.emit()
+                return
+
+            for i in range(days_to_sim):
+                if self.is_cancelled: break
+                
+                # 翌日の日付を取得してシミュレート
+                sim_date = current_qdate.addDays(i + 1) 
+                date_str = sim_date.toString("yyyy-MM-dd")
+                
+                self.progress_updated.emit(i + 1, days_to_sim, f"Simulating: {date_str}")
+                
+                # GameStateに処理を委譲（エラーハンドリング済み）
+                self.game_state.process_date(date_str)
+                
+            self.finished.emit()
+            
+        except Exception as e:
+            traceback.print_exc()
+            self.error_occurred.emit(str(e))
+
+    def _str_to_date(self, d_str):
+        try:
+            y, m, d = map(int, d_str.split('-'))
+            return QDate(y, m, d)
+        except:
+            return QDate.currentDate()
+
+class GameCalendarWidget(QCalendarWidget):
+    """Custom Calendar Widget that paints game info in cells"""
+    
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.theme = get_theme()
-        self.title_text = title
-        self.icon = icon
-
-        self._setup_ui()
-
-    def _setup_ui(self):
+        self.games_map = {} # {QDate: Game}
+        self.player_team_name = ""
+        
+        self.setGridVisible(True)
+        self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.setNavigationBarVisible(True)
+        
         self.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:0.5 {self.theme.bg_card},
-                    stop:1 {self.theme.bg_card_elevated});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
+            QCalendarWidget {{ background-color: {self.theme.bg_card}; border: none; }}
+            QCalendarWidget QWidget {{ alternate-background-color: {self.theme.bg_input}; }}
+            QCalendarWidget QAbstractItemView:enabled {{
+                color: {self.theme.text_primary}; background-color: {self.theme.bg_card};
+                selection-background-color: transparent; selection-color: {self.theme.text_primary}; outline: none;
             }}
+            QCalendarWidget QToolButton {{ color: {self.theme.text_primary}; background-color: transparent; icon-size: 24px; font-weight: bold; }}
+            QCalendarWidget QMenu {{ background-color: {self.theme.bg_card}; color: {self.theme.text_primary}; }}
+            QCalendarWidget QSpinBox {{ color: {self.theme.text_primary}; background-color: {self.theme.bg_input}; }}
         """)
 
-        # Shadow effect
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 80))
-        self.setGraphicsEffect(shadow)
+    def set_data(self, games, player_team_name):
+        self.games_map = {}
+        self.player_team_name = player_team_name
+        for game in games:
+            try:
+                y, m, d = map(int, game.date.split('-'))
+                self.games_map[QDate(y, m, d)] = game
+            except: pass
+        self.updateCells()
 
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 16)
-        self.main_layout.setSpacing(0)
+    def paintCell(self, painter: QPainter, rect: QRect, date: QDate):
+        painter.save()
+        if date == self.selectedDate(): painter.fillRect(rect, QColor(self.theme.primary_hover))
+        else: painter.fillRect(rect, QColor(self.theme.bg_card))
+        if date.month() != self.monthShown(): painter.fillRect(rect, QColor(0, 0, 0, 160)) 
+        
+        painter.setPen(QColor(self.theme.text_primary))
+        if date.month() != self.monthShown(): painter.setPen(QColor(self.theme.text_muted))
+        font = painter.font(); font.setBold(True); font.setPointSize(10)
+        painter.setFont(font)
+        painter.drawText(rect.topLeft() + QPoint(6, 16), str(date.day()))
 
-        # Header with gradient accent
-        header = QFrame()
-        header.setFixedHeight(48)
-        header.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {self.theme.primary},
-                    stop:1 {self.theme.accent});
-                border: none;
-                border-radius: 16px 16px 0 0;
-            }}
-        """)
+        if date in self.games_map:
+            game = self.games_map[date]
+            opponent = ""
+            if game.home_team_name == self.player_team_name: opponent = f"vs {game.away_team_name[:2]}"
+            elif game.away_team_name == self.player_team_name: opponent = f"@ {game.home_team_name[:2]}"
+            else: opponent = f"{game.away_team_name[:1]}-{game.home_team_name[:1]}"
 
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 0, 20, 0)
+            bg_color = QColor(self.theme.bg_input); text_color = QColor(self.theme.text_secondary)
+            if game.is_completed:
+                is_win, is_draw = False, False
+                if self.player_team_name:
+                    if game.home_team_name == self.player_team_name:
+                        if game.home_score > game.away_score: is_win = True
+                        elif game.home_score == game.away_score: is_draw = True
+                    elif game.away_team_name == self.player_team_name:
+                        if game.away_score > game.home_score: is_win = True
+                        elif game.away_score == game.home_score: is_draw = True
+                
+                if is_win: bg_color = QColor(self.theme.success); text_color = QColor("white")
+                elif is_draw: bg_color = QColor(self.theme.text_muted); text_color = QColor("white")
+                else: bg_color = QColor(self.theme.danger); text_color = QColor("white")
+            else:
+                bg_color = QColor(self.theme.primary); text_color = QColor("white")
 
-        title_label = QLabel(f"{self.icon}  {self.title_text}" if self.icon else self.title_text)
-        title_label.setStyleSheet(f"""
-            font-size: 15px;
-            font-weight: 700;
-            color: white;
-            background: transparent;
-            border: none;
-        """)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-
-        self.main_layout.addWidget(header)
-
-        # Content area
-        self.content_widget = QWidget()
-        self.content_widget.setStyleSheet("background: transparent; border: none;")
-        self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(16, 16, 16, 0)
-        self.content_layout.setSpacing(12)
-
-        self.main_layout.addWidget(self.content_widget)
-
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
-
-    def add_layout(self, layout):
-        self.content_layout.addLayout(layout)
-
+            info_rect = QRect(rect.left() + 2, rect.top() + 22, rect.width() - 4, 18)
+            painter.fillRect(info_rect, bg_color)
+            painter.setPen(text_color); font.setPointSize(9); painter.setFont(font)
+            painter.drawText(info_rect, Qt.AlignCenter, opponent)
+            
+            if game.is_completed:
+                score_rect = QRect(rect.left() + 2, rect.top() + 42, rect.width() - 4, 16)
+                painter.setPen(QColor(self.theme.text_primary))
+                painter.drawText(score_rect, Qt.AlignCenter, f"{game.away_score}-{game.home_score}")
+        painter.restore()
 
 class SchedulePage(QWidget):
-    """Premium styled game schedule and results page"""
-
+    """Calendar-based schedule management page"""
     game_selected = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.theme = get_theme()
         self.game_state = None
-
+        self.selected_date = QDate.currentDate()
+        self.worker = None
         self._setup_ui()
 
     def _setup_ui(self):
-        """Create the schedule page layout"""
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(20)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet(f"QSplitter::handle {{ background-color: {self.theme.border}; width: 1px; }}")
+        left_panel = self._create_calendar_panel()
+        splitter.addWidget(left_panel)
+        right_panel = self._create_info_panel()
+        splitter.addWidget(right_panel)
+        splitter.setSizes([700, 300])
+        layout.addWidget(splitter)
 
-        # Premium page header
-        header_frame = QFrame()
-        header_frame.setFixedHeight(80)
-        header_frame.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {self.theme.bg_card},
-                    stop:0.5 {self.theme.bg_card_elevated},
-                    stop:1 {self.theme.bg_card});
-                border: 1px solid {self.theme.border};
-                border-radius: 16px;
-            }}
-        """)
-
-        header_shadow = QGraphicsDropShadowEffect(header_frame)
-        header_shadow.setBlurRadius(15)
-        header_shadow.setOffset(0, 3)
-        header_shadow.setColor(QColor(0, 0, 0, 60))
-        header_frame.setGraphicsEffect(header_shadow)
-
-        header_layout = QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(24, 0, 24, 0)
-
-        # Title with icon
-        title_layout = QVBoxLayout()
-        title_layout.setSpacing(4)
-
-        title = QLabel("日程・試合結果")
-        title.setStyleSheet(f"""
-            font-size: 24px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-            background: transparent;
-        """)
-        title_layout.addWidget(title)
-
-        subtitle = QLabel("Game Schedule & Results")
-        subtitle.setStyleSheet(f"""
-            font-size: 12px;
-            color: {self.theme.text_muted};
-            background: transparent;
-        """)
-        title_layout.addWidget(subtitle)
-
-        header_layout.addLayout(title_layout)
-        header_layout.addStretch()
-
-        # Month navigation
-        nav_frame = QFrame()
-        nav_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {self.theme.bg_input};
-                border-radius: 8px;
-                border: 1px solid {self.theme.border_muted};
-            }}
-        """)
-        nav_layout = QHBoxLayout(nav_frame)
-        nav_layout.setContentsMargins(8, 4, 8, 4)
-        nav_layout.setSpacing(8)
-
-        self.prev_month_btn = QPushButton("◀")
-        self.prev_month_btn.setFixedSize(32, 32)
-        self.prev_month_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {self.theme.text_primary};
-                border: none;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                background: {self.theme.bg_hover};
-                border-radius: 4px;
-            }}
-        """)
-        self.prev_month_btn.clicked.connect(self._prev_month)
-        nav_layout.addWidget(self.prev_month_btn)
-
-        self.month_label = QLabel("2024年4月")
-        self.month_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 600;
-            color: {self.theme.text_primary};
-            padding: 0 12px;
-            background: transparent;
-        """)
-        nav_layout.addWidget(self.month_label)
-
-        self.next_month_btn = QPushButton("▶")
-        self.next_month_btn.setFixedSize(32, 32)
-        self.next_month_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {self.theme.text_primary};
-                border: none;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                background: {self.theme.bg_hover};
-                border-radius: 4px;
-            }}
-        """)
-        self.next_month_btn.clicked.connect(self._next_month)
-        nav_layout.addWidget(self.next_month_btn)
-
-        header_layout.addWidget(nav_frame)
-        main_layout.addWidget(header_frame)
-
-        # Main content
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(20)
-
-        # Left - Calendar and upcoming games
-        left_panel = QVBoxLayout()
-        left_panel.setSpacing(16)
-
-        # Mini calendar
-        calendar_card = PremiumCard("カレンダー", "")
-        self.calendar = QCalendarWidget()
-        self.calendar.setStyleSheet(f"""
-            QCalendarWidget {{
-                background-color: {self.theme.bg_card};
-                border: none;
-            }}
-            QCalendarWidget QWidget {{
-                alternate-background-color: {self.theme.bg_input};
-                color: {self.theme.text_primary};
-            }}
-            QCalendarWidget QAbstractItemView:enabled {{
-                background-color: {self.theme.bg_card};
-                color: {self.theme.text_primary};
-                selection-background-color: {self.theme.primary};
-                selection-color: white;
-            }}
-            QCalendarWidget QWidget#qt_calendar_navigationbar {{
-                background-color: {self.theme.bg_card_elevated};
-            }}
-            QCalendarWidget QToolButton {{
-                color: {self.theme.text_primary};
-                background: transparent;
-                border: none;
-                padding: 4px;
-            }}
-            QCalendarWidget QToolButton:hover {{
-                background: {self.theme.bg_hover};
-                border-radius: 4px;
-            }}
-        """)
+    def _create_calendar_panel(self) -> QWidget:
+        panel = QWidget(); panel.setStyleSheet(f"background-color: {self.theme.bg_dark};")
+        layout = QVBoxLayout(panel); layout.setContentsMargins(20, 20, 10, 20)
+        lbl = QLabel("SEASON SCHEDULE"); lbl.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {self.theme.text_primary}; letter-spacing: 2px;")
+        layout.addWidget(lbl)
+        self.calendar = GameCalendarWidget()
         self.calendar.clicked.connect(self._on_date_selected)
-        calendar_card.add_widget(self.calendar)
-        left_panel.addWidget(calendar_card)
+        layout.addWidget(self.calendar)
+        return panel
 
-        # Upcoming games
-        upcoming_card = PremiumCard("今後の試合", "")
-        self.upcoming_table = self._create_schedule_table(compact=True)
-        upcoming_card.add_widget(self.upcoming_table)
-        left_panel.addWidget(upcoming_card)
+    def _create_info_panel(self) -> QWidget:
+        panel = QWidget(); panel.setStyleSheet(f"background-color: {self.theme.bg_card}; border-left: 1px solid {self.theme.border};")
+        layout = QVBoxLayout(panel); layout.setContentsMargins(20, 20, 20, 20); layout.setSpacing(20)
+        self.date_label = QLabel("---"); self.date_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {self.theme.text_primary};")
+        self.date_label.setAlignment(Qt.AlignCenter); layout.addWidget(self.date_label)
 
-        left_widget = QWidget()
-        left_widget.setLayout(left_panel)
-        content_layout.addWidget(left_widget, stretch=1)
+        self.detail_card = Card(); self.detail_card.setFixedHeight(200)
+        container = QWidget(); container.setStyleSheet("background: transparent;")
+        card_layout = QVBoxLayout(container); card_layout.setContentsMargins(0,0,0,0); card_layout.setSpacing(8)
+        self.matchup_label = QLabel("NO GAME"); self.matchup_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {self.theme.text_primary}; background: transparent;")
+        self.matchup_label.setAlignment(Qt.AlignCenter); card_layout.addWidget(self.matchup_label)
+        self.score_label = QLabel(""); self.score_label.setStyleSheet(f"font-size: 32px; font-weight: bold; color: {self.theme.accent_blue}; background: transparent;")
+        self.score_label.setAlignment(Qt.AlignCenter); card_layout.addWidget(self.score_label)
+        self.status_label = QLabel(""); self.status_label.setStyleSheet(f"font-size: 14px; color: {self.theme.text_secondary}; background: transparent;")
+        self.status_label.setAlignment(Qt.AlignCenter); card_layout.addWidget(self.status_label)
+        self.detail_card.add_widget(container); layout.addWidget(self.detail_card)
+        layout.addStretch()
 
-        # Right - Full schedule/results
-        right_panel = QVBoxLayout()
-        right_panel.setSpacing(16)
-
-        # Filter toolbar
-        filter_frame = QFrame()
-        filter_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {self.theme.bg_card};
-                border: 1px solid {self.theme.border_muted};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-        """)
-        filter_layout = QHBoxLayout(filter_frame)
-        filter_layout.setContentsMargins(12, 8, 12, 8)
-
-        filter_label = QLabel("表示:")
-        filter_label.setStyleSheet(f"color: {self.theme.text_secondary}; background: transparent;")
-        filter_layout.addWidget(filter_label)
-
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["全試合", "自チームのみ", "未消化のみ", "終了のみ"])
-        self.filter_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {self.theme.bg_input};
-                color: {self.theme.text_primary};
-                border: 1px solid {self.theme.border};
-                border-radius: 6px;
-                padding: 6px 12px;
-                min-width: 120px;
-            }}
-            QComboBox:hover {{
-                border-color: {self.theme.primary};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: {self.theme.bg_card};
-                color: {self.theme.text_primary};
-                selection-background-color: {self.theme.primary};
-            }}
-        """)
-        self.filter_combo.currentIndexChanged.connect(self._filter_games)
-        filter_layout.addWidget(self.filter_combo)
-
-        filter_layout.addStretch()
-        right_panel.addWidget(filter_frame)
-
-        # Full schedule table
-        schedule_card = PremiumCard("試合一覧", "")
-        self.schedule_table = self._create_schedule_table()
-        schedule_card.add_widget(self.schedule_table)
-        right_panel.addWidget(schedule_card)
-
-        right_widget = QWidget()
-        right_widget.setLayout(right_panel)
-        content_layout.addWidget(right_widget, stretch=2)
-
-        main_layout.addLayout(content_layout)
-
-        # Recent results section
-        self._create_results_section(main_layout)
-
-    def _create_schedule_table(self, compact: bool = False) -> QTableWidget:
-        """Create a premium styled schedule table"""
-        table = QTableWidget()
-
-        if compact:
-            headers = ["日付", "対戦", "時間"]
-            widths = [80, 180, 60]
-        else:
-            headers = ["#", "日付", "ホーム", "", "スコア", "", "アウェイ", "状態"]
-            widths = [40, 100, 120, 30, 80, 30, 120, 80]
-
-        table.setColumnCount(len(headers))
-        table.setHorizontalHeaderLabels(headers)
-
-        table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: transparent;
-                border: none;
-                gridline-color: transparent;
-            }}
-            QTableWidget::item {{
-                padding: 8px;
-                color: {self.theme.text_primary};
-                border-bottom: 1px solid {self.theme.border_muted};
-            }}
-            QTableWidget::item:selected {{
-                background-color: {self.theme.primary};
-                color: white;
-            }}
-            QTableWidget::item:hover {{
-                background-color: {self.theme.bg_hover};
-            }}
-            QHeaderView::section {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:1 {self.theme.bg_card});
-                color: {self.theme.text_secondary};
-                font-weight: 600;
-                font-size: 11px;
-                padding: 10px 8px;
-                border: none;
-                border-bottom: 2px solid {self.theme.primary};
-            }}
-        """)
-
-        header = table.horizontalHeader()
-        for i, width in enumerate(widths):
-            header.resizeSection(i, width)
-        header.setStretchLastSection(True)
-
-        table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(40)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setSelectionMode(QTableWidget.SingleSelection)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setShowGrid(False)
-        table.setAlternatingRowColors(False)
-
-        return table
-
-    def _create_results_section(self, parent_layout):
-        """Create recent results section"""
-        results_card = PremiumCard("最近の結果", "")
-
-        results_scroll = QScrollArea()
-        results_scroll.setWidgetResizable(True)
-        results_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        results_scroll.setStyleSheet(f"""
-            QScrollArea {{
-                border: none;
-                background: transparent;
-            }}
-        """)
-        results_scroll.setFixedHeight(120)
-
-        results_widget = QWidget()
-        results_widget.setStyleSheet("background: transparent;")
-        results_layout = QHBoxLayout(results_widget)
-        results_layout.setSpacing(12)
-        results_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Placeholder for recent game cards
-        self.result_frames = []
-        for i in range(5):
-            result_frame = self._create_result_card()
-            results_layout.addWidget(result_frame)
-            self.result_frames.append(result_frame)
-
-        results_layout.addStretch()
-        results_scroll.setWidget(results_widget)
-        results_card.add_widget(results_scroll)
-        parent_layout.addWidget(results_card)
-
-    def _create_result_card(self) -> QFrame:
-        """Create a mini result card"""
-        frame = QFrame()
-        frame.setFixedSize(140, 90)
-        frame.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {self.theme.bg_card_elevated},
-                    stop:1 {self.theme.bg_card});
-                border-radius: 12px;
-                border: 1px solid {self.theme.border_muted};
-            }}
-            QFrame:hover {{
-                border-color: {self.theme.primary};
-            }}
-        """)
-
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
-
-        # Date
-        date_label = QLabel("4/1")
-        date_label.setStyleSheet(f"""
-            font-size: 10px;
-            color: {self.theme.text_muted};
-            background: transparent;
-        """)
-        layout.addWidget(date_label)
-
-        # Score
-        score_label = QLabel("5 - 3")
-        score_label.setStyleSheet(f"""
-            font-size: 18px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-            background: transparent;
-        """)
-        score_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(score_label)
-
-        # Result
-        result_label = QLabel("勝利")
-        result_label.setStyleSheet(f"""
-            font-size: 11px;
-            color: {self.theme.success};
-            font-weight: 600;
-            background: transparent;
-        """)
-        result_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(result_label)
-
-        return frame
+        self.skip_btn = QPushButton("この日までスキップ"); self.skip_btn.setCursor(Qt.PointingHandCursor); self.skip_btn.setFixedHeight(50)
+        self.skip_btn.setStyleSheet(f"QPushButton {{ background-color: {self.theme.primary}; color: {self.theme.text_highlight}; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; padding: 10px; }} QPushButton:hover {{ background-color: {self.theme.primary_hover}; }} QPushButton:disabled {{ background-color: {self.theme.bg_input}; color: {self.theme.text_muted}; border: 1px solid {self.theme.border}; }}")
+        self.skip_btn.clicked.connect(self._on_skip_clicked); self.skip_btn.setEnabled(False)
+        layout.addWidget(self.skip_btn)
+        return panel
 
     def set_game_state(self, game_state):
-        """Update with game state"""
         self.game_state = game_state
-        if not game_state:
-            return
+        if not game_state: return
+        if hasattr(game_state, 'current_date'):
+            try:
+                y, m, d = map(int, game_state.current_date.split('-'))
+                self.calendar.setSelectedDate(QDate(y, m, d)); self.selected_date = QDate(y, m, d)
+            except: pass
+        self._refresh_calendar_data(); self._refresh_info_panel()
 
-        self._update_schedule()
+    def _refresh_calendar_data(self):
+        if not self.game_state or not self.game_state.schedule: return
+        my_team_name = self.game_state.player_team.name if self.game_state.player_team else ""
+        my_games = [g for g in self.game_state.schedule.games if g.home_team_name == my_team_name or g.away_team_name == my_team_name]
+        self.calendar.set_data(my_games, my_team_name)
 
-    def _update_schedule(self):
-        """Update schedule tables"""
-        if not self.game_state or not hasattr(self.game_state, 'schedule'):
-            return
+    def _on_date_selected(self, date):
+        self.selected_date = date; self._refresh_info_panel()
 
-        schedule = self.game_state.schedule
-        if not schedule or not hasattr(schedule, 'games'):
-            return
+    def _refresh_info_panel(self):
+        date_str = self.selected_date.toString("yyyy-MM-dd")
+        self.date_label.setText(self.selected_date.toString("yyyy年M月d日"))
+        target_game = None
+        if self.game_state and self.game_state.schedule:
+            my_team_name = self.game_state.player_team.name if self.game_state.player_team else ""
+            for game in self.game_state.schedule.games:
+                if game.date == date_str and (game.home_team_name == my_team_name or game.away_team_name == my_team_name):
+                    target_game = game; break
+        
+        if target_game:
+            self.matchup_label.setText(f"{target_game.away_team_name} vs {target_game.home_team_name}")
+            if target_game.is_completed:
+                self.score_label.setText(f"{target_game.away_score} - {target_game.home_score}"); self.status_label.setText("試合終了")
+            else: self.score_label.setText("-"); self.status_label.setText("試合予定")
+        else:
+            self.matchup_label.setText("一軍試合なし"); self.score_label.setText(""); self.status_label.setText("")
 
-        games = schedule.games
+        current_gdate = self._get_current_game_date()
+        if self.selected_date > current_gdate:
+            self.skip_btn.setEnabled(True)
+            diff = self.selected_date.toJulianDay() - current_gdate.toJulianDay()
+            self.skip_btn.setText(f"{diff}日分をスキップ (全軍自動消化)")
+        else: self.skip_btn.setEnabled(False); self.skip_btn.setText("過去または当日のためスキップ不可")
 
-        # Filter based on current filter
-        filter_idx = self.filter_combo.currentIndex()
-        if filter_idx == 1 and self.game_state.player_team:
-            # My team only
-            team_name = self.game_state.player_team.name
-            games = [g for g in games if g.home_team_name == team_name or g.away_team_name == team_name]
-        elif filter_idx == 2:
-            # Unplayed only
-            games = [g for g in games if not g.is_completed]
-        elif filter_idx == 3:
-            # Completed only
-            games = [g for g in games if g.is_completed]
+    def _get_current_game_date(self) -> QDate:
+        if self.game_state and hasattr(self.game_state, 'current_date'):
+            try:
+                y, m, d = map(int, self.game_state.current_date.split('-'))
+                return QDate(y, m, d)
+            except: pass
+        return QDate.currentDate()
 
-        # Fill main schedule table
-        self.schedule_table.setRowCount(min(50, len(games)))
+    def _on_skip_clicked(self):
+        if not self.game_state: return
+        player_team = self.game_state.player_team
+        if player_team:
+            valid_starters = len([x for x in player_team.current_lineup if x != -1])
+            valid_rotation = len([x for x in player_team.rotation if x != -1])
+            if valid_starters < 9: QMessageBox.warning(self, "スキップ不可", "一軍スタメンが9人未満です。オーダー画面で設定してください。"); return
+            if valid_rotation == 0: QMessageBox.warning(self, "スキップ不可", "一軍先発投手が設定されていません。オーダー画面で設定してください。"); return
 
-        for row, game in enumerate(games[:50]):
-            # Game number
-            num_item = QTableWidgetItem(str(game.game_number))
-            num_item.setTextAlignment(Qt.AlignCenter)
-            self.schedule_table.setItem(row, 0, num_item)
+        reply = QMessageBox.question(self, "シミュレーション実行", f"{self.selected_date.toString('yyyy/MM/dd')} までの全試合（一軍・二軍・三軍）をスキップしますか？\n処理には時間がかかる場合があります。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes: self._start_simulation()
 
-            # Date
-            date_item = QTableWidgetItem(game.date)
-            date_item.setTextAlignment(Qt.AlignCenter)
-            self.schedule_table.setItem(row, 1, date_item)
+    def _start_simulation(self):
+        self.progress_dialog = QDialog(self); self.progress_dialog.setWindowTitle("シミュレーション中..."); self.progress_dialog.setFixedSize(400, 150)
+        self.progress_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint); self.progress_dialog.setStyleSheet(f"background-color: {self.theme.bg_card}; color: {self.theme.text_primary};")
+        p_layout = QVBoxLayout(self.progress_dialog)
+        self.p_label = QLabel("準備中..."); self.p_label.setAlignment(Qt.AlignCenter); p_layout.addWidget(self.p_label)
+        self.p_bar = QProgressBar(); self.p_bar.setStyleSheet(f"QProgressBar {{ border: 1px solid {self.theme.border}; border-radius: 4px; text-align: center; color: {self.theme.text_primary}; }} QProgressBar::chunk {{ background-color: {self.theme.primary}; }}")
+        p_layout.addWidget(self.p_bar)
+        cancel_btn = QPushButton("キャンセル"); cancel_btn.clicked.connect(self._cancel_simulation); p_layout.addWidget(cancel_btn)
 
-            # Home team
-            home_item = QTableWidgetItem(game.home_team_name)
-            home_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            home_item.setFont(QFont("", -1, QFont.Bold))
-            self.schedule_table.setItem(row, 2, home_item)
+        self.worker = SimulationWorker(self.game_state, self.selected_date, parent=self)
+        self.worker.progress_updated.connect(self._update_progress)
+        self.worker.finished.connect(self._on_simulation_finished)
+        self.worker.error_occurred.connect(self._on_simulation_error)
+        self.worker.start(); self.progress_dialog.exec()
 
-            # VS
-            vs_item = QTableWidgetItem("vs")
-            vs_item.setTextAlignment(Qt.AlignCenter)
-            vs_item.setForeground(QBrush(QColor(self.theme.text_muted)))
-            self.schedule_table.setItem(row, 3, vs_item)
-
-            # Score
-            if game.is_completed:
-                score = f"{game.home_score} - {game.away_score}"
-            else:
-                score = "---"
-            score_item = QTableWidgetItem(score)
-            score_item.setTextAlignment(Qt.AlignCenter)
-            score_item.setFont(QFont("", -1, QFont.Bold))
-            if game.is_completed:
-                score_item.setForeground(QBrush(QColor(self.theme.gold)))
-            self.schedule_table.setItem(row, 4, score_item)
-
-            # (right side separator)
-            self.schedule_table.setItem(row, 5, QTableWidgetItem(""))
-
-            # Away team
-            away_item = QTableWidgetItem(game.away_team_name)
-            away_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            away_item.setFont(QFont("", -1, QFont.Bold))
-            self.schedule_table.setItem(row, 6, away_item)
-
-            # Status
-            status_item = QTableWidgetItem(game.status.value)
-            status_item.setTextAlignment(Qt.AlignCenter)
-            if game.is_completed:
-                status_item.setForeground(QBrush(QColor(self.theme.success)))
-            else:
-                status_item.setForeground(QBrush(QColor(self.theme.text_muted)))
-            self.schedule_table.setItem(row, 7, status_item)
-
-        # Fill upcoming games (next 5)
-        if self.game_state.player_team:
-            team_name = self.game_state.player_team.name
-            upcoming = [g for g in schedule.games
-                       if (g.home_team_name == team_name or g.away_team_name == team_name)
-                       and not g.is_completed][:5]
-
-            self.upcoming_table.setRowCount(len(upcoming))
-            for row, game in enumerate(upcoming):
-                # Date
-                date_item = QTableWidgetItem(game.date)
-                date_item.setTextAlignment(Qt.AlignCenter)
-                self.upcoming_table.setItem(row, 0, date_item)
-
-                # Opponent
-                if game.home_team_name == team_name:
-                    opponent = f"vs {game.away_team_name}"
-                else:
-                    opponent = f"@ {game.home_team_name}"
-                opp_item = QTableWidgetItem(opponent)
-                self.upcoming_table.setItem(row, 1, opp_item)
-
-                # Time
-                time_item = QTableWidgetItem("18:00")
-                time_item.setTextAlignment(Qt.AlignCenter)
-                self.upcoming_table.setItem(row, 2, time_item)
-
-    def _filter_games(self):
-        """Apply game filter"""
-        self._update_schedule()
-
-    def _on_date_selected(self, date: QDate):
-        """Handle date selection from calendar"""
-        # Filter to show games on selected date
-        pass
-
-    def _prev_month(self):
-        """Go to previous month"""
-        current = self.calendar.selectedDate()
-        self.calendar.setSelectedDate(current.addMonths(-1))
-        self._update_month_label()
-
-    def _next_month(self):
-        """Go to next month"""
-        current = self.calendar.selectedDate()
-        self.calendar.setSelectedDate(current.addMonths(1))
-        self._update_month_label()
-
-    def _update_month_label(self):
-        """Update the month label"""
-        current = self.calendar.selectedDate()
-        self.month_label.setText(f"{current.year()}年{current.month()}月")
+    def _update_progress(self, current, total, message): self.p_bar.setMaximum(total); self.p_bar.setValue(current); self.p_label.setText(message)
+    def _cancel_simulation(self):
+        if self.worker: self.worker.is_cancelled = True; self.worker.wait()
+        self.progress_dialog.close()
+    def _on_simulation_finished(self):
+        self.progress_dialog.close(); self._refresh_calendar_data(); self._refresh_info_panel()
+        QMessageBox.information(self, "完了", "指定日までの日程消化が完了しました。")
+    def _on_simulation_error(self, message): self.progress_dialog.close(); QMessageBox.critical(self, "エラー", f"シミュレーション中にエラーが発生しました:\n{message}")
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning(): self.worker.is_cancelled = True; self.worker.wait()
+        super().closeEvent(event)

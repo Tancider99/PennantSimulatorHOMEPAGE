@@ -484,25 +484,9 @@ class HomePage(ContentPanel):
         self.play_btn.clicked.connect(lambda: self.game_requested.emit())
         btn_layout.addWidget(self.play_btn)
 
-        self.sim_btn = QPushButton("SKIP 1 WEEK")
-        self.sim_btn.setCursor(Qt.PointingHandCursor)
-        self.sim_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {self.theme.text_primary};
-                border: none;
-                border-radius: 0px;
-                padding: 14px 24px;
-                font-size: 13px;
-                font-weight: 600;
-                letter-spacing: 1px;
-            }}
-            QPushButton:hover {{
-                background: {self.theme.bg_card_hover};
-                border-color: transparent;
-            }}
-        """)
-        btn_layout.addWidget(self.sim_btn)
+        # Removed Skip Button as requested
+        # self.sim_btn = QPushButton("SKIP 1 WEEK")
+        # ...
 
         layout.addLayout(btn_layout)
 
@@ -623,8 +607,14 @@ class HomePage(ContentPanel):
         self.games_card.set_value(f"{games_played}/143")
         self.games_card.set_sub(f"Progress: {progress:.0f}%")
 
-        # Next game from schedule
-        self._update_next_game(game_state, team)
+        # Next game from schedule & Button Text Update
+        has_game_today = self._update_next_game(game_state, team)
+        
+        # Update Button Text based on game availability
+        if has_game_today:
+            self.play_btn.setText("PLAY NEXT GAME")
+        else:
+            self.play_btn.setText("NEXT DAY")
 
         # Recent results
         self._update_recent_results(game_state, team)
@@ -633,12 +623,20 @@ class HomePage(ContentPanel):
         self._update_leaders(team)
 
     def _update_next_game(self, game_state, team):
-        """Update next game display from schedule"""
+        """Update next game display from schedule and return True if game exists today"""
         next_game = game_state.get_next_game() if hasattr(game_state, 'get_next_game') else None
+        
+        has_game_today = False
+        today_str = getattr(game_state, 'current_date', '')
+        
         if next_game:
             home = next_game.home_team_name
             away = next_game.away_team_name
             date = next_game.date
+            
+            if date == today_str:
+                has_game_today = True
+            
             # Find opponent's starter
             starter_name = ""
             opponent_name = away if home == team.name else home
@@ -651,6 +649,8 @@ class HomePage(ContentPanel):
             self.matchup_card.set_matchup(home, away, date, starter_name)
         else:
             self.matchup_card.set_matchup("---", "---", "No games scheduled", "")
+            
+        return has_game_today
 
     def _update_recent_results(self, game_state, team):
         """Update recent results display"""

@@ -184,7 +184,7 @@ class SidebarPanel(QWidget):
         logo_layout = QVBoxLayout(logo_area)
         logo_layout.setAlignment(Qt.AlignCenter)
         
-        lbl = QLabel("Baseball SIM")
+        lbl = QLabel("Pennant SIM")
         lbl.setStyleSheet(f"""
             font-size: 20px;
             font-weight: 700;

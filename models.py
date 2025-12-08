@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
 import datetime
-import random  # Added for condition update
+import random
 
 
 class Position(Enum):
@@ -117,21 +117,18 @@ class ScheduledGame:
 
 @dataclass
 class PlayerStats:
-    """選手能力値（1-99スケール）
-
-    基本能力値は1〜99の範囲（50が平均、90以上がSランク）
-    """
+    """選手能力値（1-99スケール）"""
     # ===== 打撃能力 (Batting Ratings) =====
     contact: int = 50          # ミート
     gap: int = 50              # ギャップ（二・三塁打）
     power: int = 50            # パワー
     eye: int = 50              # 選球眼
     avoid_k: int = 50          # 三振回避
-    trajectory: int = 2        # 弾道 (1:低 2:中 3:高 4:アーチ) - 新規追加
+    trajectory: int = 2        # 弾道 (1:低 2:中 3:高 4:アーチ)
 
     # ===== 特殊打撃能力 =====
-    vs_left_batter: int = 50   # 対左投手 - 新規追加
-    chance: int = 50           # チャンス - 新規追加
+    vs_left_batter: int = 50   # 対左投手
+    chance: int = 50           # チャンス
 
     # ===== 走塁能力 (Running Ratings) =====
     speed: int = 50            # 走力
@@ -163,32 +160,29 @@ class PlayerStats:
     hold_runners: int = 50     # クイック
     gb_tendency: int = 50      # ゴロ傾向
     
-    vs_left_pitcher: int = 50  # 対左打者 - 新規追加
-    vs_pinch: int = 50         # 対ピンチ - 新規追加
-    stability: int = 50        # 安定感 - 新規追加
+    vs_left_pitcher: int = 50  # 対左打者
+    vs_pinch: int = 50         # 対ピンチ
+    stability: int = 50        # 安定感
 
     # ===== 共通能力 =====
     durability: int = 50       # ケガしにくさ
-    recovery: int = 50         # 回復力 - 新規追加
+    recovery: int = 50         # 回復力
     work_ethic: int = 50       # 練習態度
     intelligence: int = 50     # 野球脳
-    mental: int = 50           # メンタル/打たれ強さ - 新規追加
+    mental: int = 50           # メンタル/打たれ強さ
 
     # ===== 投手専用 =====
     pitches: Dict[str, int] = field(default_factory=dict)  # 球種 {"ストレート": 60, ...}
 
     # ===== ヘルパーメソッド =====
     def get_defense_range(self, position: 'Position') -> int:
-        """指定ポジションの守備範囲を取得。適正がない場合は1を返す。"""
         return self.defense_ranges.get(position.value, 1)
 
     def set_defense_range(self, position: 'Position', value: int):
-        """指定ポジションの守備範囲を設定。"""
         self.defense_ranges[position.value] = max(1, min(99, value))
 
     @property
     def effective_catcher_lead(self) -> int:
-        """有効な捕手リード値を返す。捕手守備範囲が2未満なら1になる。"""
         if self.get_defense_range(Position.CATCHER) < 2:
             return 1
         return self.catcher_lead
@@ -199,13 +193,11 @@ class PlayerStats:
     
     @property
     def fielding(self) -> int:
-        """守備総合（最大守備範囲を使用）"""
         max_range = max(self.defense_ranges.values()) if self.defense_ranges else 1
         return max_range
 
     @property
-    def catching(self) -> int: return self.error  # 捕球
-    
+    def catching(self) -> int: return self.error
     @property
     def breaking(self) -> int: return self.stuff
     @property
@@ -221,7 +213,6 @@ class PlayerStats:
     @property
     def breaking_balls(self) -> List[str]: return list(self.pitches.keys()) if self.pitches else []
 
-    # 互換性セッター
     @run.setter
     def run(self, value): self.speed = value
     @breaking.setter
@@ -229,7 +220,6 @@ class PlayerStats:
     @bunt.setter
     def bunt(self, value): self.bunt_sac = value
     
-    # 旧フィールドへのアクセス互換性
     @property
     def inf_arm(self) -> int: return self.arm
     @inf_arm.setter
@@ -261,15 +251,12 @@ class PlayerStats:
     def catcher_ability(self, value): self.catcher_lead = value
 
     def to_star_rating(self, value: int) -> float:
-        """能力値を★評価に変換 (0.5-5.0)"""
         return max(0.5, min(5.0, value / 20))
 
     def overall_batting(self, position: Optional[Position] = None) -> float:
-        """野手の総合値を計算 (1-99)"""
         batting = (self.contact * 2 + self.gap * 1.5 + self.power * 1.5 + self.eye + self.avoid_k) / 7
         running = (self.speed + self.steal + self.baserunning) / 3
         
-        # 守備評価
         if position:
             def_range = self.get_defense_range(position)
         else:
@@ -277,29 +264,24 @@ class PlayerStats:
             
         defense = (def_range * 1.5 + self.error + self.arm) / 3.5
         
-        # 捕手の場合はリードも考慮
         if position == Position.CATCHER or (not position and self.get_defense_range(Position.CATCHER) > 40):
              defense = (defense * 3 + self.effective_catcher_lead) / 4
 
         return (batting * 0.5 + running * 0.2 + defense * 0.3)
 
     def overall_pitching(self) -> float:
-        """投手の総合値を計算 (1-99)"""
         vel_rating = self.kmh_to_rating(self.velocity)
         return (self.stuff * 2 + self.movement * 1.5 + self.control * 2 + vel_rating + self.stamina * 0.5) / 7
 
     def speed_to_kmh(self) -> int:
-        """球速をkm/hで返す"""
         return self.velocity
 
     @staticmethod
     def kmh_to_rating(kmh: int) -> int:
-        """km/hを1-99評価値に変換"""
         val = (kmh - 130) * 2 + 30
         return int(max(1, min(99, val)))
 
     def get_rank(self, value: int) -> str:
-        """能力値をランクに変換"""
         if value >= 90: return "S"
         elif value >= 80: return "A"
         elif value >= 70: return "B"
@@ -310,18 +292,16 @@ class PlayerStats:
         else: return "G"
 
     def get_rank_color(self, value: int) -> str:
-        """ランクに応じた色コード"""
-        if value >= 90: return "#FFD700"  # Gold (S)
-        elif value >= 80: return "#FF4500"  # Red-Orange (A)
-        elif value >= 70: return "#FFA500"  # Orange (B)
-        elif value >= 60: return "#FFFF00"  # Yellow (C)
-        elif value >= 50: return "#32CD32"  # Lime Green (D)
-        elif value >= 40: return "#1E90FF"  # Dodger Blue (E)
-        elif value >= 30: return "#4682B4"  # Steel Blue (F)
-        return "#808080"  # Gray (G)
+        if value >= 90: return "#FFD700"
+        elif value >= 80: return "#FF4500"
+        elif value >= 70: return "#FFA500"
+        elif value >= 60: return "#FFFF00"
+        elif value >= 50: return "#32CD32"
+        elif value >= 40: return "#1E90FF"
+        elif value >= 30: return "#4682B4"
+        return "#808080"
 
     def get_star_display(self, value: int) -> str:
-        """能力値を★表示に変換"""
         stars = self.to_star_rating(value)
         full = int(stars)
         half = 1 if stars - full >= 0.5 else 0
@@ -335,7 +315,6 @@ class PlayerStats:
 @dataclass
 class PlayerRecord:
     """選手成績（基本統計）"""
-    # (変更なし)
     games: int = 0
     plate_appearances: int = 0
     at_bats: int = 0
@@ -404,7 +383,6 @@ class PlayerRecord:
     def singles(self) -> int:
         return self.hits - self.doubles - self.triples - self.home_runs
 
-    # ===== セイバーメトリクス（打者） =====
     @property
     def obp(self) -> float:
         denominator = self.at_bats + self.walks + self.hit_by_pitch + self.sacrifice_flies
@@ -420,8 +398,6 @@ class PlayerRecord:
     @property
     def ops(self) -> float:
         return self.obp + self.slg
-
-    # ... (その他のセイバーメトリクスプロパティは省略 - 元のコードと同じ) ...
 
     def reset(self):
         for field_name in self.__dataclass_fields__:
@@ -486,7 +462,12 @@ class CareerStats:
         return result
 
 
-@dataclass
+# ====================================================================
+#  重要: PlayerとTeamはオブジェクトの同一性で管理するため、
+#        eq=False (ハッシュ化可能、等価性判定はIDベース) とする
+# ====================================================================
+
+@dataclass(eq=False)
 class Player:
     name: str
     position: Position
@@ -517,7 +498,6 @@ class Player:
 
     career_stats: CareerStats = field(default_factory=CareerStats)
     
-    # 状態管理 (1-9, 5=普通, 9=絶好調)
     condition: int = 5
 
     def __post_init__(self):
@@ -588,7 +568,6 @@ class Player:
             self.position = best_pos
             
     def update_condition(self):
-        """調子をランダムに更新 (ランダムウォーク: -1, 0, +1)"""
         change = random.choices([-1, 0, 1], weights=[0.25, 0.5, 0.25])[0]
         self.condition = max(1, min(9, self.condition + change))
 
@@ -602,9 +581,8 @@ class Player:
         return max(1, min(999, int(rating)))
 
 
-@dataclass
+@dataclass(eq=False)
 class Team:
-    # (変更なし)
     name: str
     league: League
     players: List[Player] = field(default_factory=list)
@@ -621,8 +599,6 @@ class Team:
     rotation_index: int = 0
     setup_pitchers: List[int] = field(default_factory=list)
     
-    # 修正: closer_idxを廃止し、closersリストを導入
-    # 古いデータとの互換性のため、プロパティで対応
     closers: List[int] = field(default_factory=list)
 
     bench_batters: List[int] = field(default_factory=list)
@@ -640,7 +616,6 @@ class Team:
     FARM_ROSTER_LIMIT = 40
     THIRD_ROSTER_LIMIT = 30
     
-    # 互換性プロパティ
     @property
     def closer_idx(self) -> int:
         return self.closers[0] if self.closers else -1
@@ -655,15 +630,11 @@ class Team:
             else:
                 self.closers[0] = val
 
-    # (メソッド群は変更なし)
     def get_today_starter(self) -> Optional[Player]:
         if not self.rotation: return None
-        # Skip empty slots (-1)
         valid_starters = [p for p in self.rotation if p != -1]
         if not valid_starters: return None
         
-        # 簡易的にリストの順番で回す
-        # 実際には日付管理が必要だが、ここではインデックスのみ
         idx = valid_starters[self.rotation_index % len(valid_starters)]
         if 0 <= idx < len(self.players): return self.players[idx]
         return None
@@ -751,9 +722,7 @@ class Team:
         for idx in self.third_roster: self.players[idx].team_level = TeamLevel.THIRD
 
     def auto_set_bench(self):
-        # ベンチ入り自動設定（割り当て済みを除く）
         assigned = set(self.current_lineup + self.rotation + self.setup_pitchers + self.closers)
-        
         self.bench_batters = []
         self.bench_pitchers = []
         for idx in self.active_roster:
@@ -763,14 +732,12 @@ class Team:
                 else: self.bench_batters.append(idx)
 
     def get_closer(self) -> Optional[Player]:
-        # 互換性のため最初の抑えを返す
         if self.closers and 0 <= self.closers[0] < len(self.players):
             return self.players[self.closers[0]]
         return None
 
     def get_setup_pitcher(self) -> Optional[Player]:
         if self.setup_pitchers:
-            # -1スキップ
             for idx in self.setup_pitchers:
                 if 0 <= idx < len(self.players): return self.players[idx]
         return None

@@ -744,6 +744,11 @@ class LiveGamePage(QWidget):
 
     def _finish(self):
         self.sim_timer.stop()
+        
+        # 【重要】試合終了時に成績を確定・反映させる
+        if self.live_engine:
+            self.live_engine.finalize_game_stats()
+            
         self._log("=== GAME SET ===", True)
         res = {
             "home_team": self.live_engine.home_team,

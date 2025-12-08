@@ -22,6 +22,7 @@ from UI.theme import ThemeManager, get_theme
 from UI.widgets.panels import SidebarPanel, HeaderPanel, StatusPanel, PageContainer
 from UI.widgets.buttons import ActionButton
 from farm_game_simulator import simulate_farm_games_for_day
+from models import GameStatus
 
 
 class MainWindow(QMainWindow):
@@ -264,10 +265,10 @@ class MainWindow(QMainWindow):
         if not self.game_state:
             return
 
-        # Simple opponent selection logic
+        # プレイヤーチーム
         player_team = self.game_state.player_team
         
-        # Check if player team is valid to play
+        # 有効性チェック
         valid_starters = len([x for x in player_team.current_lineup if x != -1])
         valid_rotation = len([x for x in player_team.rotation if x != -1])
         
@@ -278,30 +279,42 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "エラー", f"チーム {player_team.name} の先発投手が設定されていません。\nオーダー画面で設定してください。")
             return
 
-        opponents = [t for t in self.game_state.teams if t.name != player_team.name]
+        # 【修正】ランダムではなく、その日のスケジュールから対戦相手を取得する
+        today_games = self.game_state.get_today_games()
+        target_game = None
         
-        if not opponents:
-            return
-
-        opponent = random.choice(opponents)
+        # 自チームの試合を探す
+        for g in today_games:
+            if g.home_team_name == player_team.name or g.away_team_name == player_team.name:
+                target_game = g
+                break
         
-        # Check opponent validity (simple check)
-        opp_starters = len([x for x in opponent.current_lineup if x != -1])
-        opp_rotation = len([x for x in opponent.rotation if x != -1])
-        
-        if opp_starters < 9 or opp_rotation == 0:
-             # Auto fix for opponent if invalid (since user can't easily edit AI teams yet)
-             opponent.auto_assign_rosters()
-             opponent.auto_set_bench() # This might reset rosters to standard if broken
-             # Re-check? If auto-assign fails, we skip game or warn.
-             # For now assume auto-assign works.
-
-        is_home_game = random.choice([True, False])
-        
-        home_team = player_team if is_home_game else opponent
-        away_team = opponent if is_home_game else player_team
-        
-        self.show_game(home_team, away_team)
+        if target_game:
+            # 予定通りの試合を開始
+            home_team = next((t for t in self.game_state.teams if t.name == target_game.home_team_name), None)
+            away_team = next((t for t in self.game_state.teams if t.name == target_game.away_team_name), None)
+            
+            if home_team and away_team:
+                # 相手チームのロースター自動修正（念のため）
+                opponent = away_team if home_team == player_team else home_team
+                opponent.auto_assign_rosters()
+                opponent.auto_set_bench()
+                
+                self.show_game(home_team, away_team)
+            else:
+                QMessageBox.warning(self, "エラー", "対戦チームデータが見つかりませんでした。")
+        else:
+            # 試合がない場合 -> 日付を進める
+            self.game_state.finish_day_and_advance()
+            # 画面更新 (Refresh current page)
+            current_page = self.pages.currentWidget()
+            if current_page and hasattr(current_page, 'set_game_state'):
+                current_page.set_game_state(self.game_state)
+            
+            # ステータスバー更新
+            self._on_page_changed(0)
+            
+            QMessageBox.information(self, "日程進行", "本日は試合がありませんでした。次の日へ進みます。")
 
     def _on_game_finished(self, result):
         """Handle game finish"""
@@ -320,7 +333,24 @@ class MainWindow(QMainWindow):
             winner_name = away_team.name
             
         if self.game_state:
+            # 【重要】試合結果の履歴を記録（勝敗数更新含む）
             self.game_state.record_game_result(home_team, away_team, home_score, away_score)
+            
+            # 【重要】スケジュールの試合ステータスを更新
+            today_games = self.game_state.get_today_games()
+            for g in today_games:
+                if g.home_team_name == home_team.name and g.away_team_name == away_team.name:
+                    g.status = GameStatus.COMPLETED
+                    g.home_score = home_score
+                    g.away_score = away_score
+                    
+                    # 先発ローテーションを進める（試合消化時のみ）
+                    home_team.rotation_index = (home_team.rotation_index + 1) % 6
+                    away_team.rotation_index = (away_team.rotation_index + 1) % 6
+                    break
+            
+            # 【重要】他球場試合と二軍三軍の試合を消化し、日付を進める
+            self.game_state.finish_day_and_advance()
         
         msg = f"Game Finished\n\n{away_team.name} {away_score} - {home_score} {home_team.name}\n\nWinner: {winner_name}"
         QMessageBox.information(self, "Result", msg)
@@ -419,7 +449,7 @@ class MainWindow(QMainWindow):
     def _on_page_changed(self, index: int):
         """Handle page change"""
         if self.game_state:
-            self.status.set_left_text(f"Year {self.game_state.current_year}")
+            self.status.set_left_text(f"Year {self.game_state.current_year} | {self.game_state.current_date}")
             self.status.set_right_text(f"Team: {self.game_state.player_team.name if self.game_state.player_team else 'None'}")
 
     def _on_settings_changed(self, settings: dict):
