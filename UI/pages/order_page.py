@@ -145,11 +145,39 @@ class DraggableTableWidget(QTableWidget):
         self.setFocusPolicy(Qt.ClickFocus)
         self.theme = get_theme()
         
-        # Enable sorting for farm lists (source lists)
+        # 【修正】自動ソートを無効化し、ファームリストの場合のみ手動ソートを設定
+        self.setSortingEnabled(False)
+        
         if "farm" in mode:
-            self.setSortingEnabled(True)
+            # ヘッダーをクリック可能にし、ソートインジケータを表示
+            header = self.horizontalHeader()
+            header.setSectionsClickable(True)
+            header.setSortIndicatorShown(True)
+            header.sectionClicked.connect(self._on_header_clicked)
+
+    def _on_header_clicked(self, logicalIndex):
+        """ヘッダークリック時のカスタムソート（最初は降順）"""
+        # ソート禁止列の判定: 選手名、適正、守備適正 はソート不可
+        header_text = self.horizontalHeaderItem(logicalIndex).text()
+        if header_text in ["選手名", "適正", "守備適正"]:
+            return
+
+        header = self.horizontalHeader()
+        current_column = header.sortIndicatorSection()
+        current_order = header.sortIndicatorOrder()
+        
+        if current_column != logicalIndex:
+            # 新しい列をクリック -> 降順スタート
+            new_order = Qt.DescendingOrder
         else:
-            self.setSortingEnabled(False)
+            # 同じ列をクリック -> 順序反転
+            if current_order == Qt.DescendingOrder:
+                new_order = Qt.AscendingOrder
+            else:
+                new_order = Qt.DescendingOrder
+
+        self.sortItems(logicalIndex, new_order)
+        header.setSortIndicator(logicalIndex, new_order)
 
     def startDrag(self, supportedActions):
         item = self.currentItem()
@@ -775,7 +803,7 @@ class OrderPage(QWidget):
     def _refresh_batter_farm_list(self):
         team = self.current_team
         table = self.farm_batter_table
-        table.setSortingEnabled(False) # Disable while populating
+        # 【修正】手動ソートのため setSortingEnabled は操作しない
         
         active_ids = set(team.current_lineup + team.bench_batters)
         
@@ -823,7 +851,9 @@ class OrderPage(QWidget):
             for c in range(table.columnCount()):
                 if table.item(i, c): table.item(i, c).setData(ROLE_PLAYER_IDX, p_idx)
 
-        table.setSortingEnabled(True) # Re-enable sorting
+        # 【修正】手動で現在のソート設定に従ってソートを実行
+        header = table.horizontalHeader()
+        table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
 
     def _refresh_rotation_table(self):
         team = self.current_team
@@ -865,7 +895,7 @@ class OrderPage(QWidget):
     def _refresh_pitcher_farm_list(self):
         team = self.current_team
         table = self.farm_pitcher_table
-        table.setSortingEnabled(False)
+        # 【修正】手動ソートのため setSortingEnabled は操作しない
         
         active_ids = set([x for x in team.rotation if x >= 0])
         active_ids.update([x for x in team.setup_pitchers if x >= 0])
@@ -911,7 +941,9 @@ class OrderPage(QWidget):
             for c in range(table.columnCount()):
                 if table.item(i, c): table.item(i, c).setData(ROLE_PLAYER_IDX, p_idx)
                 
-        table.setSortingEnabled(True)
+        # 【修正】手動で現在のソート設定に従ってソートを実行
+        header = table.horizontalHeader()
+        table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
 
     def _fill_pitcher_data(self, table, row, p, p_idx, start_col):
         # Helper for fixed lists (Rotation/Bullpen) - Sorting not needed here, so UserRole can be whatever or unused for sort

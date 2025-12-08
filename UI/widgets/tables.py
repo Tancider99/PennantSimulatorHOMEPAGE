@@ -154,7 +154,13 @@ class PlayerTable(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(True)
+        
+        # 手動ソート制御
+        self.table.setSortingEnabled(False)
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -272,9 +278,7 @@ class PlayerTable(QWidget):
         """Set up table columns based on view mode"""
         self.table.clear()
         
-        # 【修正】以前のデリゲート設定をクリア
-        # これを行わないと、野手→投手へ切り替えたときに、通常のスタッツ列（勝敗など）に
-        # ランク表示用の色付きデリゲートが残ってしまうことがある
+        # 以前のデリゲート設定をクリア
         for i in range(self.table.columnCount()):
             self.table.setItemDelegateForColumn(i, None)
 
@@ -314,6 +318,31 @@ class PlayerTable(QWidget):
         self._refresh_columns(mode)
         self._update_status()
 
+    def _on_header_clicked(self, logicalIndex):
+        """
+        ヘッダー列クリック時のカスタムソートハンドラ
+        """
+        # ソート禁止列の判定: 名前(1)と守備位置/Pos(2)はソート不可
+        if logicalIndex in [1, 2]:
+            return
+
+        header = self.table.horizontalHeader()
+        current_column = header.sortIndicatorSection()
+        current_order = header.sortIndicatorOrder()
+        
+        if current_column != logicalIndex:
+            # 別の列をクリック -> 降順スタート
+            new_order = Qt.DescendingOrder
+        else:
+            # 同じ列をクリック -> トグル
+            if current_order == Qt.DescendingOrder:
+                new_order = Qt.AscendingOrder
+            else:
+                new_order = Qt.DescendingOrder
+
+        self.table.sortItems(logicalIndex, new_order)
+        header.setSortIndicator(logicalIndex, new_order)
+
     def _populate_table(self, mode: str = "batter"):
         """Fill table with player data"""
         # Filter players first
@@ -321,13 +350,13 @@ class PlayerTable(QWidget):
 
         self.table.setRowCount(len(filtered))
 
-        # ソート状態を維持するために一時的にソートを無効化
-        self.table.setSortingEnabled(False)
-
         for row, player in enumerate(filtered):
             self._set_player_row(row, player, mode)
 
-        self.table.setSortingEnabled(True)
+        # データ入力後に現在のソート状態に従ってソートを実行
+        header = self.table.horizontalHeader()
+        self.table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
+        
         self._update_status()
 
     def _set_player_row(self, row: int, player, mode: str):
@@ -357,13 +386,10 @@ class PlayerTable(QWidget):
             pitch_role = player.pitch_type.value[:2] if player.pitch_type else "投"
             era = record.era if record.innings_pitched > 0 else 0
             
-            # 【修正】球速(km/h)をランク用数値(1-99)に変換
-            # PlayerStatsクラスがインポートできない場合はインスタンスメソッドを利用
+            # 球速(km/h)をランク用数値(1-99)に変換
             if hasattr(stats, 'kmh_to_rating'):
-                # 静的メソッドだがインスタンスからも呼べる
                 vel_rating = stats.kmh_to_rating(stats.velocity)
             else:
-                # フォールバック計算 (30 + (kmh - 130) * 2)
                 vel_rating = int(max(1, min(99, (stats.velocity - 130) * 2 + 30)))
 
             data = [
@@ -371,7 +397,7 @@ class PlayerTable(QWidget):
                 player.name,
                 pitch_role,
                 str(player.age),
-                vel_rating,    # 【修正】stats.speed(走力)ではなく、球速ランクを使用
+                vel_rating,
                 stats.control,
                 stats.stamina,
                 stats.breaking,
@@ -406,7 +432,6 @@ class PlayerTable(QWidget):
                         pass
 
             # Store player reference in first column (Note: col 0 has #, UserRole is used for player obj)
-            # SortableTableWidgetItem handles this in try/except block for float conversion
             if col == 0:
                 item.setData(Qt.UserRole, player)
 
