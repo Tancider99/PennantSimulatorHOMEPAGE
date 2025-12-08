@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-二軍・三軍試合シミュレーター (本格版: LiveGameEngine使用)
+二軍・三軍試合シミュレーター (本格版: LiveGameEngine使用 + 守備適正考慮オーダー)
 """
 import random
 from typing import List, Optional, Dict
 from dataclasses import dataclass, field
-from models import Team, Player, Position, TeamLevel
+from models import Team, Player, Position, TeamLevel, generate_best_lineup
 from live_game_engine import LiveGameEngine, GameState
 
 @dataclass
@@ -67,7 +67,7 @@ class FarmLeagueManager:
             home = target_teams[i]
             away = target_teams[i+1]
             
-            # オーダー自動生成 (念のため)
+            # オーダー自動生成 (守備適正考慮)
             self._check_and_fix_lineup(home, level)
             self._check_and_fix_lineup(away, level)
             
@@ -78,13 +78,17 @@ class FarmLeagueManager:
         return results
 
     def _check_and_fix_lineup(self, team: Team, level: TeamLevel):
-        lineup = team.farm_lineup if level == TeamLevel.SECOND else team.third_lineup
-        if not lineup or len(lineup) < 9:
-            # 簡易生成
-            roster = team.get_players_by_level(level)
-            indices = [team.players.index(p) for p in roster if p.position != Position.PITCHER]
-            indices.sort(key=lambda i: team.players[i].stats.overall_batting(), reverse=True)
-            new_lineup = indices[:9]
+        """指定レベルのラインナップが存在しない、または不完全な場合に再生成"""
+        current_lineup = team.farm_lineup if level == TeamLevel.SECOND else team.third_lineup
+        
+        # 簡易チェック: 人数が足りない場合のみ再生成
+        if not current_lineup or len(current_lineup) < 9:
+            # 該当レベルの野手リストを取得
+            roster = [p for p in team.get_players_by_level(level) if p.position != Position.PITCHER]
+            
+            # 【修正】models.pyの共通関数を使用
+            new_lineup = generate_best_lineup(team, roster)
+            
             if level == TeamLevel.SECOND: team.farm_lineup = new_lineup
             else: team.third_lineup = new_lineup
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-データモデル定義
+データモデル定義 (修正版: オーダー生成ロジック追加)
 """
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
@@ -811,3 +811,112 @@ TEAM_ABBRS = {
     "Sapporo Fighters": "SF",
     "Kobe Buffaloes": "KB",
 }
+
+# =========================================================
+# 汎用オーダー自動生成ロジック (守備適正考慮)
+# =========================================================
+
+def generate_best_lineup(team: Team, roster_players: List[Player]) -> List[int]:
+    """
+    指定された選手リストから、守備位置を考慮した最適オーダー(9人)を生成して返す。
+    インデックスは team.players 内のインデックスを返す。
+    """
+    
+    # 1. 守備位置の優先順位とマッピング定義
+    # センターライン(捕手、二遊間、中堅)を優先的に埋める
+    def_priority = [
+        (Position.CATCHER, "捕手", 1.5),
+        (Position.SHORTSTOP, "遊撃手", 1.4),
+        (Position.SECOND, "二塁手", 1.3),
+        (Position.OUTFIELD, "中堅手", 1.2), 
+        (Position.THIRD, "三塁手", 1.0),
+        (Position.OUTFIELD, "右翼手", 1.0),
+        (Position.OUTFIELD, "左翼手", 1.0),
+        (Position.FIRST, "一塁手", 0.8)
+    ]
+    
+    # 全選手のマッピング {player_index: Player}
+    candidates = {}
+    for p in roster_players:
+        if p.position == Position.PITCHER: continue
+        try:
+            original_idx = team.players.index(p)
+            candidates[original_idx] = p
+        except ValueError:
+            continue
+
+    selected_starters = {} # position_name -> player_idx
+    used_indices = set()
+    
+    # ヘルパー: スコア計算
+    def calculate_score(player, pos_name_long, weight):
+        # 守備適正 (20未満は守らせない)
+        aptitude = player.stats.defense_ranges.get(pos_name_long, 0)
+        if aptitude < 20: return -1
+        
+        # 打撃スコア
+        bat_score = (player.stats.contact * 1.0 + player.stats.power * 1.2 + 
+                     player.stats.speed * 0.5 + player.stats.eye * 0.5)
+        
+        # 守備スコア
+        def_score = (aptitude * 1.5 + player.stats.error * 0.5 + player.stats.arm * 0.5)
+        
+        return bat_score + (def_score * weight)
+
+    # 2. 各ポジションに最適な選手を割り当て
+    has_detailed_outfield = False
+    if roster_players and "中堅手" in roster_players[0].stats.defense_ranges:
+        has_detailed_outfield = True
+
+    for pos_enum, pos_name, weight in def_priority:
+        # 外野手が統合されている場合の処理
+        search_key = pos_name
+        if not has_detailed_outfield and pos_enum == Position.OUTFIELD:
+            search_key = "外野手"
+            
+        best_idx = -1
+        best_score = -1.0
+        
+        for idx, p in candidates.items():
+            if idx in used_indices: continue
+            
+            score = calculate_score(p, search_key, weight)
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+        
+        if best_idx != -1:
+            # 既にそのポジションが埋まっている場合のガード
+            if pos_name not in selected_starters:
+                selected_starters[pos_name] = best_idx
+                used_indices.add(best_idx)
+    
+    # 3. DH (残りの打撃最強)
+    dh_best_idx = -1
+    dh_best_score = -1
+    for idx, p in candidates.items():
+        if idx in used_indices: continue
+        score = p.stats.overall_batting()
+        if score > dh_best_score:
+            dh_best_score = score
+            dh_best_idx = idx
+            
+    if dh_best_idx != -1:
+        selected_starters["DH"] = dh_best_idx
+        used_indices.add(dh_best_idx)
+
+    # 4. 足りないポジションがあれば適当に埋める
+    # 打順決定ロジック (簡易版: 選択された選手を打撃能力順に並べる)
+    lineup_candidates = []
+    for pos, idx in selected_starters.items():
+        lineup_candidates.append(idx)
+        
+    lineup_candidates.sort(key=lambda i: team.players[i].stats.overall_batting(), reverse=True)
+    
+    # 9人揃わなかった場合のフォールバック（残りの選手から埋める）
+    if len(lineup_candidates) < 9:
+        remaining = [i for i in candidates.keys() if i not in used_indices]
+        remaining.sort(key=lambda i: team.players[i].stats.overall_batting(), reverse=True)
+        lineup_candidates.extend(remaining[:9 - len(lineup_candidates)])
+    
+    return lineup_candidates[:9]

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ライブ試合エンジン (修正版: 全能力・調子反映 + インターフェース修正)
+ライブ試合エンジン (修正版: ホームラン数微減調整 + バグ修正・機能維持)
 """
 import random
 import math
@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional, Dict
 from enum import Enum
-from models import Position, Player, Team, PlayerRecord, PitchType, TeamLevel
+from models import Position, Player, Team, PlayerRecord, PitchType, TeamLevel, generate_best_lineup
 
 # ========================================
 # 定数・ユーティリティ
@@ -205,7 +205,8 @@ class GameState:
         return (self.runner_2b is not None) or (self.runner_3b is not None)
 
     def current_pitcher_stamina(self) -> float:
-        return self.away_pitcher_stamina if self.is_top else self.home_pitcher_stamina
+        # 表（is_top=True）はホーム投手が投げている
+        return self.home_pitcher_stamina if self.is_top else self.away_pitcher_stamina
 
 # ========================================
 # AI マネージャー
@@ -241,7 +242,7 @@ class AIManager:
         
         # 強振
         eff_power = get_effective_stat(batter, 'power', is_risp=state.is_risp())
-        if state.balls >= 3 and state.strikes < 2 and eff_power > 60:
+        if state.balls >= 3 and state.strikes < 2 and eff_power > 65: 
             return "POWER"
         
         # ミート打ち
@@ -309,8 +310,11 @@ class PitchGenerator:
         pitch_cost = 0.5
         if is_risp: pitch_cost *= 1.2
         
-        if state.is_top: state.away_pitcher_stamina = max(0, state.away_pitcher_stamina - pitch_cost)
-        else: state.home_pitcher_stamina = max(0, state.home_pitcher_stamina - pitch_cost)
+        # スタミナ減少対象を表裏で正しく切り替え
+        if state.is_top: 
+            state.home_pitcher_stamina = max(0, state.home_pitcher_stamina - pitch_cost)
+        else: 
+            state.away_pitcher_stamina = max(0, state.away_pitcher_stamina - pitch_cost)
         
         pitch_type = None
         breaking_balls = getattr(pitcher.stats, 'breaking_balls', [])
@@ -411,21 +415,25 @@ class BattedBallGenerator:
         
         meet_bonus = 0
         if strategy == "MEET": meet_bonus = 15
-        if strategy == "POWER": meet_bonus = -15
+        if strategy == "POWER": meet_bonus = -20 
         
         ball_penalty = 0 if pitch.location.is_strike else 20
         con_eff = contact + meet_bonus - (p_movement - 50) * 0.4 - ball_penalty
         
         quality_roll = random.uniform(0, 100)
         
-        if quality_roll < con_eff * 0.4: quality = "hard"
-        elif quality_roll < con_eff * 0.9: quality = "medium"
+        # ハードコンタクトの基準 (標準的)
+        if quality_roll < con_eff * 0.35: quality = "hard"
+        elif quality_roll < con_eff * 0.85: quality = "medium"
         else: quality = "soft"
         
-        base_v = 110 + (power - 50) * 0.8
+        # 【再修正】打球速度の微調整 (103 + ... に戻しつつ係数調整)
+        base_v = 101 + (power - 50) * 0.68
         
-        if strategy == "POWER": base_v += 10
-        if quality == "hard": base_v += 20 + (power/10)
+        if strategy == "POWER": base_v += 9
+        
+        # ハードコンタクトボーナス
+        if quality == "hard": base_v += 18 + (power/12)
         if quality == "soft": base_v -= 30
         
         traj_bias = 5 + (trajectory * 5)
@@ -451,7 +459,7 @@ class BattedBallGenerator:
             angle = random.gauss(angle_center, 12)
         
         velo = max(40, base_v + random.gauss(0, 5))
-        if quality == "hard": velo = max(velo, 130)
+        if quality == "hard": velo = max(velo, 120)
         
         if angle < 7: htype = BattedBallType.GROUNDBALL
         elif angle < 20: htype = BattedBallType.LINEDRIVE
@@ -466,8 +474,9 @@ class BattedBallGenerator:
         elif htype == BattedBallType.POPUP:
             dist *= 0.3
         else:
-            dist *= 0.8
-            dist *= (1.0 + (power-50)*0.002)
+            # 【再修正】飛距離減衰を 0.84 に微調整 (前回0.86, 前々回0.82の間)
+            dist *= 0.84
+            dist *= (1.0 + (power-50)*0.0022)
             
         dist = max(0, dist)
         spray = random.gauss(0, 25)
@@ -479,7 +488,8 @@ class BattedBallGenerator:
         return BattedBallData(velo, angle, spray, htype, dist, 4.0, land_x, land_y, [], quality)
 
 class DefenseEngine:
-    def judge(self, ball: BattedBallData, defense_team: Team):
+    # team_level引数を追加
+    def judge(self, ball: BattedBallData, defense_team: Team, team_level: TeamLevel = TeamLevel.FIRST):
         abs_spray = abs(ball.spray_angle)
         fence_dist = 122 - (abs_spray / 45.0) * (122 - 100)
         
@@ -489,7 +499,7 @@ class DefenseEngine:
         if abs_spray > 45:
             return PlayResult.FOUL
             
-        fielder, position_name = self._get_responsible_fielder(ball, defense_team)
+        fielder, position_name = self._get_responsible_fielder(ball, defense_team, team_level)
         
         if fielder:
             defense_range = getattr(fielder.stats, 'defense_ranges', {}).get(position_name, 1)
@@ -501,25 +511,26 @@ class DefenseEngine:
             
         hit_prob = 0.0
         
+        # ヒット確率 (打高傾向を維持)
         if ball.hit_type == BattedBallType.GROUNDBALL:
-            hit_prob = 0.45
+            hit_prob = 0.30
             if ball.distance < 45:
                  hit_prob -= (defense_range - 50) * 0.01
             else:
-                 hit_prob = 0.8
+                 hit_prob = 0.62
                  
         elif ball.hit_type == BattedBallType.LINEDRIVE:
-            hit_prob = 0.75
+            hit_prob = 0.65
             hit_prob -= (defense_range - 50) * 0.005
             
         elif ball.hit_type == BattedBallType.FLYBALL:
-            hit_prob = 0.2
+            hit_prob = 0.18
             hit_prob -= (defense_range - 50) * 0.005
             
         elif ball.hit_type == BattedBallType.POPUP:
             hit_prob = 0.01
         
-        if ball.contact_quality == "hard": hit_prob += 0.3
+        if ball.contact_quality == "hard": hit_prob += 0.25
         if ball.contact_quality == "soft": hit_prob -= 0.1
         
         is_hit = random.random() < hit_prob
@@ -539,18 +550,20 @@ class DefenseEngine:
             if ball.hit_type == BattedBallType.POPUP: return PlayResult.POPUP_OUT
             return PlayResult.FLYOUT
 
-    def _get_responsible_fielder(self, ball: BattedBallData, team: Team) -> Tuple[Optional[Player], str]:
+    def _get_responsible_fielder(self, ball: BattedBallData, team: Team, team_level: TeamLevel) -> Tuple[Optional[Player], str]:
         angle = ball.spray_angle
         dist = ball.distance
         pos_enum = Position
         
         if dist < 45 or ball.hit_type == BattedBallType.GROUNDBALL:
-            if angle < -20: return self._get_player_by_pos(team, pos_enum.THIRD), pos_enum.THIRD.value
-            elif angle < -5: return self._get_player_by_pos(team, pos_enum.SHORTSTOP), pos_enum.SHORTSTOP.value
-            elif angle < 15: return self._get_player_by_pos(team, pos_enum.SECOND), pos_enum.SECOND.value
-            else: return self._get_player_by_pos(team, pos_enum.FIRST), pos_enum.FIRST.value
+            if angle < -20: return self._get_player_by_pos(team, pos_enum.THIRD, team_level), pos_enum.THIRD.value
+            elif angle < -5: return self._get_player_by_pos(team, pos_enum.SHORTSTOP, team_level), pos_enum.SHORTSTOP.value
+            elif angle < 15: return self._get_player_by_pos(team, pos_enum.SECOND, team_level), pos_enum.SECOND.value
+            else: return self._get_player_by_pos(team, pos_enum.FIRST, team_level), pos_enum.FIRST.value
         else:
-            outfielders = [p for i, p in enumerate(team.players) if i in team.current_lineup and p.position == pos_enum.OUTFIELD]
+            lineup = self._get_lineup_by_level(team, team_level)
+            outfielders = [team.players[i] for i in lineup if 0 <= i < len(team.players) and team.players[i].position == pos_enum.OUTFIELD]
+            
             if not outfielders: return None, "外野手"
             
             idx = 0
@@ -560,13 +573,22 @@ class DefenseEngine:
             
             return outfielders[idx], pos_enum.OUTFIELD.value
 
-    def _get_player_by_pos(self, team: Team, pos: Position) -> Optional[Player]:
-        for idx in team.current_lineup:
+    def _get_player_by_pos(self, team: Team, pos: Position, team_level: TeamLevel) -> Optional[Player]:
+        lineup = self._get_lineup_by_level(team, team_level)
+        for idx in lineup:
             if 0 <= idx < len(team.players):
                 p = team.players[idx]
                 if p.position == pos:
                     return p
         return None
+
+    def _get_lineup_by_level(self, team: Team, level: TeamLevel) -> List[int]:
+        if level == TeamLevel.SECOND:
+            return team.farm_lineup
+        elif level == TeamLevel.THIRD:
+            return team.third_lineup
+        else:
+            return team.current_lineup
 
 # ========================================
 # 統合エンジン
@@ -586,9 +608,47 @@ class LiveGameEngine:
         self.game_stats = defaultdict(lambda: defaultdict(int))
         self._init_starters()
 
+        # オーダーが守備適正を考慮していない（CPU生成など）場合は自動修正する
+        if self.team_level == TeamLevel.FIRST:
+            self._ensure_valid_lineup(self.home_team)
+            self._ensure_valid_lineup(self.away_team)
+
+    def _ensure_valid_lineup(self, team: Team):
+        """オーダーをチェックし、不整合（特に捕手がいない等）があれば最適化する"""
+        if not team.current_lineup or len(team.current_lineup) < 9:
+            players = team.get_active_roster_players()
+            new_lineup = generate_best_lineup(team, players)
+            team.current_lineup = new_lineup
+            return
+
+        has_valid_catcher = False
+        catcher_idx = -1
+        if hasattr(team, 'lineup_positions') and len(team.lineup_positions) == 9:
+            for i, pos_str in enumerate(team.lineup_positions):
+                if pos_str in ["捕", "捕手"]:
+                    catcher_idx = team.current_lineup[i]
+                    break
+        
+        if catcher_idx == -1:
+            for idx in team.current_lineup:
+                if 0 <= idx < len(team.players):
+                    p = team.players[idx]
+                    if p.position == Position.CATCHER:
+                        has_valid_catcher = True
+                        break
+        else:
+            if 0 <= catcher_idx < len(team.players):
+                p = team.players[catcher_idx]
+                if p.stats.get_defense_range(Position.CATCHER) >= 20:
+                    has_valid_catcher = True
+
+        if not has_valid_catcher:
+            players = team.get_active_roster_players()
+            batters = [p for p in players if p.position != Position.PITCHER]
+            new_lineup = generate_best_lineup(team, batters)
+            team.current_lineup = new_lineup
+
     def _init_starters(self):
-        # チームレベルに応じた先発取得は呼び出し元でロースター設定済みと仮定
-        # 簡易的に一軍のメソッドをフォールバックとして使用
         hp = self.home_team.get_today_starter() or self.home_team.players[0]
         ap = self.away_team.get_today_starter() or self.away_team.players[0]
         
@@ -620,7 +680,6 @@ class LiveGameEngine:
         if self.team_level == TeamLevel.SECOND: lineup = team.farm_lineup
         elif self.team_level == TeamLevel.THIRD: lineup = team.third_lineup
         
-        # ラインナップが空の場合のガード
         if not lineup: 
             return team.players[0], 0
         
@@ -640,7 +699,7 @@ class LiveGameEngine:
         
         if not lineup: return None
         for p_idx in lineup:
-            if team.players[p_idx].position == Position.CATCHER:
+            if 0 <= p_idx < len(team.players) and team.players[p_idx].position == Position.CATCHER:
                 return team.players[p_idx]
         return None
 
@@ -687,7 +746,7 @@ class LiveGameEngine:
             return PitchResult.STRIKE_CALLED if pitch.location.is_strike else PitchResult.BALL, None
             
         contact = get_effective_stat(batter, 'contact', opponent=pitcher)
-        hit_prob = 0.80 + (contact - 50)*0.005
+        hit_prob = 0.78 + (contact - 50)*0.005
         if not pitch.location.is_strike: hit_prob -= 0.2
         
         if random.random() > hit_prob:
@@ -732,11 +791,16 @@ class LiveGameEngine:
             if self.state.strikes < 2: self.state.strikes += 1
         elif res == PitchResult.IN_PLAY:
             defense_team = self.home_team if self.state.is_top else self.away_team
-            play = self.def_eng.judge(ball, defense_team)
+            play = self.def_eng.judge(ball, defense_team, self.team_level)
             if play == PlayResult.FOUL:
                 if self.state.strikes < 2: self.state.strikes += 1
             else:
                 self._resolve_play(play)
+        
+        if res == PitchResult.IN_PLAY:
+            defense_team = self.home_team if self.state.is_top else self.away_team
+            return self.def_eng.judge(ball, defense_team, self.team_level)
+        return res
 
     def _walk(self):
         batter, _ = self.get_current_batter()
