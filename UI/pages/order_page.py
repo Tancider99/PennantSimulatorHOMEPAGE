@@ -1,395 +1,182 @@
 # -*- coding: utf-8 -*-
 """
 Baseball Team Architect 2027 - Order Page
-Intuitive Lineup Management with 31-Player Roster Limit
+Advanced Drag & Drop Order Management with DH support
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QComboBox, QListWidget, QListWidgetItem,
-    QAbstractItemView, QGridLayout, QScrollArea, QSplitter,
-    QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QSizePolicy
+    QPushButton, QComboBox, QSplitter, QTabWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QMessageBox, QScrollArea, QSizePolicy, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QFont, QIcon, QDrag
+from PySide6.QtCore import Qt, Signal, QMimeData, QByteArray, QDataStream, QIODevice, QPoint, QSize
+from PySide6.QtGui import QColor, QFont, QIcon, QDrag, QPixmap, QPainter, QBrush, QPen
 
 import sys
 import os
+
+# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from UI.theme import get_theme
 from UI.widgets.panels import ToolbarPanel
+from models import PlayerStats
 
+# MIME Types
+MIME_PLAYER_DATA = "application/x-pennant-player-data"
+MIME_POS_SWAP = "application/x-pennant-pos-swap"
 
-class PlayerSlot(QFrame):
-    """A visual slot for a player in the lineup"""
+def get_rank_color(rank: str, theme) -> QColor:
+    """Return color based on rank (S-G)"""
+    if rank == "S": return QColor("#FFD700") # Gold
+    if rank == "A": return QColor("#FF4500") # Orange Red
+    if rank == "B": return QColor("#FFA500") # Orange
+    if rank == "C": return QColor("#32CD32") # Lime Green
+    # 修正: テーマカラー（文字列）をQColorオブジェクトに変換
+    if rank == "D": return QColor(theme.text_primary)
+    if rank == "E": return QColor(theme.text_secondary)
+    if rank == "F": return QColor(theme.text_muted)
+    if rank == "G": return QColor("#808080") # Gray
+    return QColor(theme.text_primary)
 
-    clicked = Signal(object)  # Emits slot data
-    double_clicked = Signal(object)
+def get_pos_color(pos: str) -> str:
+    """Return background color code for position badge"""
+    if pos == "投": return "#3498db"
+    if pos == "捕": return "#27ae60"
+    if pos in ["一", "二", "三", "遊"]: return "#e67e22"
+    if pos in ["左", "中", "右"]: return "#9b59b6"
+    if pos == "DH": return "#e74c3c"
+    return "#7f8c8d"
 
-    def __init__(self, slot_number: int, slot_type: str = "lineup", parent=None):
+class DraggableTableWidget(QTableWidget):
+    """Enhanced TableWidget supporting Drag & Drop for Order Management"""
+    
+    items_changed = Signal()
+    position_swapped = Signal(int, int)
+
+    def __init__(self, mode="batter", parent=None):
         super().__init__(parent)
+        self.mode = mode # 'lineup', 'bench', 'rotation', 'bullpen', 'farm_batter', 'farm_pitcher'
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setViewportMargins(0, 0, 0, 0)
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.horizontalHeader().setStretchLastSection(True)
+        self.setShowGrid(False)
+        self.setFocusPolicy(Qt.ClickFocus)
         self.theme = get_theme()
-        self.slot_number = slot_number
-        self.slot_type = slot_type
-        self.player = None
-        self.player_idx = -1
-        self._selected = False
-        self._setup_ui()
 
-    def _setup_ui(self):
-        self.setFixedHeight(48)
-        self.setCursor(Qt.PointingHandCursor)
-        self._update_style()
+    def startDrag(self, supportedActions):
+        item = self.currentItem()
+        if not item: return
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
-
-        # Slot number
-        self.number_label = QLabel(str(self.slot_number))
-        self.number_label.setFixedWidth(24)
-        self.number_label.setAlignment(Qt.AlignCenter)
-        self.number_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 700;
-            color: {self.theme.primary};
-            background: transparent;
-        """)
-        layout.addWidget(self.number_label)
-
-        # Player info
-        self.player_label = QLabel("- 空き -")
-        self.player_label.setStyleSheet(f"""
-            font-size: 13px;
-            color: {self.theme.text_muted};
-            background: transparent;
-        """)
-        layout.addWidget(self.player_label, 1)
-
-        # Position badge
-        self.pos_label = QLabel("")
-        self.pos_label.setFixedWidth(36)
-        self.pos_label.setAlignment(Qt.AlignCenter)
-        self.pos_label.setStyleSheet(f"""
-            font-size: 11px;
-            font-weight: 600;
-            color: {self.theme.text_secondary};
-            background: {self.theme.bg_input};
-            border-radius: 4px;
-            padding: 2px 4px;
-        """)
-        layout.addWidget(self.pos_label)
-
-        # Rating
-        self.rating_label = QLabel("")
-        self.rating_label.setFixedWidth(40)
-        self.rating_label.setAlignment(Qt.AlignCenter)
-        self.rating_label.setStyleSheet(f"""
-            font-size: 12px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-            background: transparent;
-        """)
-        layout.addWidget(self.rating_label)
-
-    def _update_style(self):
-        if self._selected:
-            self.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {self.theme.primary};
-                    border: 2px solid {self.theme.primary_light};
-                    border-radius: 8px;
-                }}
-            """)
-        elif self.player:
-            self.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {self.theme.bg_card};
-                    border: 1px solid {self.theme.border};
-                    border-radius: 8px;
-                }}
-                QFrame:hover {{
-                    background-color: {self.theme.bg_card_hover};
-                    border-color: {self.theme.primary};
-                }}
-            """)
+        row = item.row()
+        col = item.column()
+        player_idx = item.data(Qt.UserRole)
+        
+        mime = QMimeData()
+        data = QByteArray()
+        stream = QDataStream(data, QIODevice.WriteOnly)
+        
+        # Lineup Position Swap (Column 1)
+        is_pos_swap = (self.mode == "lineup" and col == 1)
+        
+        if is_pos_swap:
+            stream.writeInt32(row)
+            mime.setData(MIME_POS_SWAP, data)
+            text = item.text()
+            pixmap = self._create_drag_pixmap(f"守備: {text}", is_pos=True)
         else:
-            self.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {self.theme.bg_input};
-                    border: 1px dashed {self.theme.border_muted};
-                    border-radius: 8px;
-                }}
-                QFrame:hover {{
-                    border-color: {self.theme.primary};
-                    border-style: solid;
-                }}
-            """)
+            if player_idx is None: return
+            stream.writeInt32(player_idx)
+            stream.writeInt32(row)
+            mime.setData(MIME_PLAYER_DATA, data)
+            
+            # Name column index varies
+            name_col = 2 if self.mode == "lineup" else 1
+            name_text = self.item(row, name_col).text()
+            pixmap = self._create_drag_pixmap(name_text, is_pos=False)
 
-    def set_player(self, player, player_idx: int):
-        """Set the player for this slot"""
-        self.player = player
-        self.player_idx = player_idx
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        drag.exec(Qt.MoveAction)
 
-        if player:
-            self.player_label.setText(player.name)
-            self.player_label.setStyleSheet(f"""
-                font-size: 13px;
-                font-weight: 600;
-                color: {self.theme.text_primary};
-                background: transparent;
-            """)
-            self.pos_label.setText(player.position.value[:2])
-            self.rating_label.setText(str(player.overall_rating))
+    def _create_drag_pixmap(self, text, is_pos=False):
+        width = 160 if is_pos else 200
+        height = 40
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 角張った背景 (Rect) - 黒背景
+        bg_color = QColor("#222222")
+        if is_pos:
+            bg_color = QColor("#c0392b") # Darker red for pos
+
+        # 完全に四角い描画
+        painter.setBrush(bg_color)
+        painter.setPen(QPen(QColor("#555555"), 1))
+        painter.drawRect(0, 0, width, height)
+        
+        # Text
+        painter.setPen(Qt.white)
+        font = QFont("Yu Gothic UI", 11, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, text)
+        painter.end()
+        return pixmap
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(MIME_PLAYER_DATA) or event.mimeData().hasFormat(MIME_POS_SWAP):
+            event.accept()
         else:
-            self.player_label.setText("- 空き -")
-            self.player_label.setStyleSheet(f"""
-                font-size: 13px;
-                color: {self.theme.text_muted};
-                background: transparent;
-            """)
-            self.pos_label.setText("")
-            self.rating_label.setText("")
+            event.ignore()
 
-        self._update_style()
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(MIME_PLAYER_DATA) or event.mimeData().hasFormat(MIME_POS_SWAP):
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
 
-    def clear_player(self):
-        """Clear the player from this slot"""
-        self.set_player(None, -1)
+    def dropEvent(self, event):
+        pos = event.position().toPoint()
+        target_item = self.itemAt(pos)
+        target_row = target_item.row() if target_item else self.rowCount() - 1
+        if target_row < 0: target_row = 0
 
-    def set_selected(self, selected: bool):
-        self._selected = selected
-        self._update_style()
-        if selected and self.player:
-            self.player_label.setStyleSheet(f"""
-                font-size: 13px;
-                font-weight: 600;
-                color: white;
-                background: transparent;
-            """)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit(self)
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.double_clicked.emit(self)
-        super().mouseDoubleClickEvent(event)
-
-
-class PlayerListWidget(QFrame):
-    """A list of available players with filtering"""
-
-    player_selected = Signal(object, int)  # player, index
-    player_double_clicked = Signal(object, int)
-
-    def __init__(self, title: str, parent=None):
-        super().__init__(parent)
-        self.theme = get_theme()
-        self.title = title
-        self.players = []  # List of (player, index) tuples
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {self.theme.bg_card};
-                border: 1px solid {self.theme.border};
-                border-radius: 8px;
-            }}
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        # Header
-        header = QHBoxLayout()
-        title_label = QLabel(self.title)
-        title_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-        """)
-        header.addWidget(title_label)
-
-        self.count_label = QLabel("0人")
-        self.count_label.setStyleSheet(f"""
-            font-size: 12px;
-            color: {self.theme.text_muted};
-        """)
-        header.addStretch()
-        header.addWidget(self.count_label)
-        layout.addLayout(header)
-
-        # List
-        self.list_widget = QListWidget()
-        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {self.theme.bg_input};
-                border: none;
-                border-radius: 6px;
-                outline: none;
-            }}
-            QListWidget::item {{
-                padding: 8px 12px;
-                border-bottom: 1px solid {self.theme.border_muted};
-                color: {self.theme.text_primary};
-            }}
-            QListWidget::item:selected {{
-                background-color: {self.theme.primary};
-                color: white;
-            }}
-            QListWidget::item:hover:!selected {{
-                background-color: {self.theme.bg_hover};
-            }}
-        """)
-        self.list_widget.itemClicked.connect(self._on_item_clicked)
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        layout.addWidget(self.list_widget)
-
-    def set_players(self, players_with_idx: list):
-        """Set the list of players: [(player, idx), ...]"""
-        self.players = players_with_idx
-        self.list_widget.clear()
-
-        for player, idx in players_with_idx:
-            pos = player.position.value[:2]
-            item_text = f"{pos}  {player.name}  ({player.overall_rating})"
-            item = QListWidgetItem(item_text)
-            item.setData(Qt.UserRole, (player, idx))
-            self.list_widget.addItem(item)
-
-        self.count_label.setText(f"{len(players_with_idx)}人")
-
-    def get_selected(self):
-        """Get currently selected player and index"""
-        items = self.list_widget.selectedItems()
-        if items:
-            return items[0].data(Qt.UserRole)
-        return None, -1
-
-    def _on_item_clicked(self, item):
-        player, idx = item.data(Qt.UserRole)
-        self.player_selected.emit(player, idx)
-
-    def _on_item_double_clicked(self, item):
-        player, idx = item.data(Qt.UserRole)
-        self.player_double_clicked.emit(player, idx)
-
-
-class RosterSection(QFrame):
-    """A section showing roster assignments"""
-
-    slot_clicked = Signal(object)
-    slot_double_clicked = Signal(object)
-
-    def __init__(self, title: str, num_slots: int, slot_type: str, parent=None):
-        super().__init__(parent)
-        self.theme = get_theme()
-        self.title = title
-        self.num_slots = num_slots
-        self.slot_type = slot_type
-        self.slots = []
-        self._selected_slot = None
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {self.theme.bg_card};
-                border: 1px solid {self.theme.border};
-                border-radius: 8px;
-            }}
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        # Header
-        header = QHBoxLayout()
-        title_label = QLabel(self.title)
-        title_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-        """)
-        header.addWidget(title_label)
-
-        self.filled_label = QLabel(f"0/{self.num_slots}")
-        self.filled_label.setStyleSheet(f"""
-            font-size: 12px;
-            color: {self.theme.text_muted};
-        """)
-        header.addStretch()
-        header.addWidget(self.filled_label)
-        layout.addLayout(header)
-
-        # Slots
-        for i in range(self.num_slots):
-            slot = PlayerSlot(i + 1, self.slot_type)
-            slot.clicked.connect(self._on_slot_clicked)
-            slot.double_clicked.connect(self._on_slot_double_clicked)
-            self.slots.append(slot)
-            layout.addWidget(slot)
-
-        layout.addStretch()
-
-    def _on_slot_clicked(self, slot):
-        # Deselect previous
-        if self._selected_slot and self._selected_slot != slot:
-            self._selected_slot.set_selected(False)
-        slot.set_selected(True)
-        self._selected_slot = slot
-        self.slot_clicked.emit(slot)
-
-    def _on_slot_double_clicked(self, slot):
-        self.slot_double_clicked.emit(slot)
-
-    def get_selected_slot(self):
-        return self._selected_slot
-
-    def clear_selection(self):
-        if self._selected_slot:
-            self._selected_slot.set_selected(False)
-            self._selected_slot = None
-
-    def set_slot_player(self, slot_idx: int, player, player_idx: int):
-        if 0 <= slot_idx < len(self.slots):
-            self.slots[slot_idx].set_player(player, player_idx)
-            self._update_filled_count()
-
-    def clear_slot(self, slot_idx: int):
-        if 0 <= slot_idx < len(self.slots):
-            self.slots[slot_idx].clear_player()
-            self._update_filled_count()
-
-    def get_all_player_indices(self) -> list:
-        """Get all assigned player indices"""
-        return [s.player_idx for s in self.slots if s.player_idx >= 0]
-
-    def find_empty_slot(self) -> int:
-        """Find first empty slot index, -1 if none"""
-        for i, slot in enumerate(self.slots):
-            if slot.player_idx < 0:
-                return i
-        return -1
-
-    def _update_filled_count(self):
-        filled = sum(1 for s in self.slots if s.player_idx >= 0)
-        color = self.theme.success if filled == self.num_slots else self.theme.text_muted
-        self.filled_label.setText(f"{filled}/{self.num_slots}")
-        self.filled_label.setStyleSheet(f"font-size: 12px; color: {color};")
-
+        if event.mimeData().hasFormat(MIME_POS_SWAP):
+            if self.mode != "lineup": return
+            data = event.mimeData().data(MIME_POS_SWAP)
+            stream = QDataStream(data, QIODevice.ReadOnly)
+            source_row = stream.readInt32()
+            if source_row != target_row:
+                self.position_swapped.emit(source_row, target_row)
+            event.accept()
+            
+        elif event.mimeData().hasFormat(MIME_PLAYER_DATA):
+            data = event.mimeData().data(MIME_PLAYER_DATA)
+            stream = QDataStream(data, QIODevice.ReadOnly)
+            player_idx = stream.readInt32()
+            
+            # Pass data to parent via properties/signals
+            self.dropped_player_idx = player_idx
+            self.dropped_target_row = target_row
+            
+            event.accept()
+            self.items_changed.emit()
 
 class OrderPage(QWidget):
-    """Comprehensive lineup management page with 31-player roster limit"""
-
+    """Redesigned Order Page with DH, Color Coding, and Advanced Filters"""
+    
     order_saved = Signal()
 
     def __init__(self, parent=None):
@@ -397,7 +184,13 @@ class OrderPage(QWidget):
         self.theme = get_theme()
         self.game_state = None
         self.current_team = None
-        self._selected_source = None  # Track what's selected
+        
+        # Filter States
+        self.show_dev_batters = False
+        self.show_dev_pitchers = False
+        self.sort_key_batter = "overall" # overall, meet, power, speed, age
+        self.sort_key_pitcher = "overall" # overall, speed, control, stamina, age
+        
         self._setup_ui()
 
     def _setup_ui(self):
@@ -409,707 +202,633 @@ class OrderPage(QWidget):
         toolbar = self._create_toolbar()
         layout.addWidget(toolbar)
 
-        # Main content
-        content = QWidget()
-        content.setStyleSheet(f"background-color: {self.theme.bg_dark};")
-        content_layout = QHBoxLayout(content)
-        content_layout.setContentsMargins(16, 16, 16, 16)
-        content_layout.setSpacing(16)
-
-        # Left panel - Available players
-        left_panel = self._create_left_panel()
-        content_layout.addWidget(left_panel, 1)
-
-        # Center panel - Action buttons
-        center_panel = self._create_center_panel()
-        content_layout.addWidget(center_panel)
-
-        # Right panel - Roster assignments (tabs)
-        right_panel = self._create_right_panel()
-        content_layout.addWidget(right_panel, 2)
-
-        layout.addWidget(content, 1)
+        # Main Tabs
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setStyleSheet(self._get_main_tab_style())
+        
+        self.batter_page = self._create_batter_page()
+        self.main_tabs.addTab(self.batter_page, "野手オーダー")
+        
+        self.pitcher_page = self._create_pitcher_page()
+        self.main_tabs.addTab(self.pitcher_page, "投手オーダー")
+        
+        layout.addWidget(self.main_tabs)
 
     def _create_toolbar(self) -> ToolbarPanel:
         toolbar = ToolbarPanel()
-        toolbar.setFixedHeight(56)
+        toolbar.setFixedHeight(50)
 
-        # Team selector
-        team_label = QLabel("チーム:")
-        team_label.setStyleSheet(f"color: {self.theme.text_secondary}; margin-left: 12px;")
-        toolbar.add_widget(team_label)
+        label = QLabel("チーム:")
+        label.setStyleSheet(f"color: {self.theme.text_secondary}; margin-left: 12px;")
+        toolbar.add_widget(label)
 
         self.team_selector = QComboBox()
         self.team_selector.setMinimumWidth(200)
-        self.team_selector.setFixedHeight(36)
+        self.team_selector.setFixedHeight(32)
         self.team_selector.currentIndexChanged.connect(self._on_team_changed)
+        self.team_selector.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; border-radius: 4px;")
         toolbar.add_widget(self.team_selector)
-
-        toolbar.add_separator()
-
-        # Roster count
-        self.roster_count_label = QLabel("一軍登録: 0/31")
-        self.roster_count_label.setStyleSheet(f"""
-            font-size: 14px;
-            font-weight: 600;
-            color: {self.theme.text_primary};
-            padding: 0 16px;
-        """)
-        toolbar.add_widget(self.roster_count_label)
+        
+        self.status_label = QLabel("一軍登録: --/--")
+        self.status_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; margin-left: 20px;")
+        toolbar.add_widget(self.status_label)
 
         toolbar.add_stretch()
-
-        # Auto-fill button
+        
         auto_btn = QPushButton("自動編成")
-        auto_btn.setFixedHeight(36)
         auto_btn.setCursor(Qt.PointingHandCursor)
-        auto_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme.bg_input};
-                color: {self.theme.text_primary};
-                border: 1px solid {self.theme.border};
-                border-radius: 6px;
-                padding: 0 20px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme.bg_card_hover};
-            }}
-        """)
+        auto_btn.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary}; padding: 6px 12px; border: 1px solid {self.theme.border}; border-radius: 4px;")
         auto_btn.clicked.connect(self._auto_fill)
         toolbar.add_widget(auto_btn)
 
-        # Save button
         save_btn = QPushButton("保存")
-        save_btn.setFixedHeight(36)
         save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme.primary};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 0 28px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme.primary_hover};
-            }}
-        """)
+        save_btn.setStyleSheet(f"background: {self.theme.primary}; color: white; padding: 6px 20px; border: none; border-radius: 4px; font-weight: bold;")
         save_btn.clicked.connect(self._save_order)
         toolbar.add_widget(save_btn)
 
         return toolbar
 
-    def _create_left_panel(self) -> QWidget:
-        """Create the available players panel"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+    def _create_batter_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet(f"QSplitter::handle {{ background: {self.theme.border}; width: 1px; }}")
 
-        # Title
-        title = QLabel("選手一覧")
-        title.setStyleSheet(f"""
-            font-size: 16px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-        """)
-        layout.addWidget(title)
+        # LEFT: Order
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(8, 8, 8, 8)
+        
+        l_header = QLabel("スタメン & ベンチ")
+        l_header.setStyleSheet(f"font-weight: bold; color: {self.theme.text_secondary}; font-size: 13px;")
+        left_layout.addWidget(l_header)
+        
+        self.lineup_table = self._create_table("lineup")
+        self.lineup_table.setMinimumHeight(350)
+        left_layout.addWidget(self.lineup_table)
+        
+        left_layout.addSpacing(4)
+        
+        self.bench_table = self._create_table("bench")
+        left_layout.addWidget(self.bench_table)
+        splitter.addWidget(left_widget)
 
-        # Tabs for filtering
-        self.player_tabs = QTabWidget()
-        self.player_tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: none;
-                background: transparent;
+        # RIGHT: Farm List
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(8, 8, 8, 8)
+        
+        # Filter/Sort Controls
+        ctrl_layout = QHBoxLayout()
+        r_header = QLabel("二軍選手一覧")
+        r_header.setStyleSheet(f"font-weight: bold; color: {self.theme.text_secondary}; font-size: 13px;")
+        ctrl_layout.addWidget(r_header)
+        
+        ctrl_layout.addStretch()
+        
+        self.batter_sort_combo = QComboBox()
+        self.batter_sort_combo.addItems(["総合力順", "ミート順", "パワー順", "走力順", "年齢順"])
+        self.batter_sort_combo.currentIndexChanged.connect(self._refresh_batter_farm_list)
+        self.batter_sort_combo.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 2px;")
+        ctrl_layout.addWidget(self.batter_sort_combo)
+        
+        self.batter_dev_check = QCheckBox("育成")
+        self.batter_dev_check.setStyleSheet(f"color: {self.theme.text_primary};")
+        self.batter_dev_check.stateChanged.connect(self._refresh_batter_farm_list)
+        ctrl_layout.addWidget(self.batter_dev_check)
+        
+        right_layout.addLayout(ctrl_layout)
+        
+        self.farm_batter_table = self._create_table("farm_batter")
+        right_layout.addWidget(self.farm_batter_table)
+        
+        splitter.addWidget(right_widget)
+        splitter.setSizes([600, 400])
+        layout.addWidget(splitter)
+        return page
+
+    def _create_pitcher_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet(f"QSplitter::handle {{ background: {self.theme.border}; width: 1px; }}")
+
+        # LEFT
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(8, 8, 8, 8)
+        
+        l_header = QLabel("投手陣容 (先発・中継ぎ・抑え)")
+        l_header.setStyleSheet(f"font-weight: bold; color: {self.theme.text_secondary}; font-size: 13px;")
+        left_layout.addWidget(l_header)
+        
+        self.rotation_table = self._create_table("rotation")
+        self.rotation_table.setMinimumHeight(240)
+        left_layout.addWidget(self.rotation_table)
+        
+        left_layout.addSpacing(4)
+        
+        self.bullpen_table = self._create_table("bullpen")
+        left_layout.addWidget(self.bullpen_table)
+        splitter.addWidget(left_widget)
+
+        # RIGHT
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(8, 8, 8, 8)
+        
+        ctrl_layout = QHBoxLayout()
+        r_header = QLabel("二軍投手一覧")
+        r_header.setStyleSheet(f"font-weight: bold; color: {self.theme.text_secondary}; font-size: 13px;")
+        ctrl_layout.addWidget(r_header)
+        
+        ctrl_layout.addStretch()
+        
+        self.pitcher_sort_combo = QComboBox()
+        self.pitcher_sort_combo.addItems(["総合力順", "球速順", "コン順", "スタ順", "年齢順"])
+        self.pitcher_sort_combo.currentIndexChanged.connect(self._refresh_pitcher_farm_list)
+        self.pitcher_sort_combo.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 2px;")
+        ctrl_layout.addWidget(self.pitcher_sort_combo)
+        
+        self.pitcher_dev_check = QCheckBox("育成")
+        self.pitcher_dev_check.setStyleSheet(f"color: {self.theme.text_primary};")
+        self.pitcher_dev_check.stateChanged.connect(self._refresh_pitcher_farm_list)
+        ctrl_layout.addWidget(self.pitcher_dev_check)
+        
+        right_layout.addLayout(ctrl_layout)
+        
+        self.farm_pitcher_table = self._create_table("farm_pitcher")
+        right_layout.addWidget(self.farm_pitcher_table)
+        
+        splitter.addWidget(right_widget)
+        splitter.setSizes([600, 400])
+        layout.addWidget(splitter)
+        return page
+
+    def _create_table(self, mode) -> DraggableTableWidget:
+        table = DraggableTableWidget(mode)
+        table.items_changed.connect(lambda: self._on_table_changed(table))
+        
+        if mode == "lineup":
+            cols = ["順", "守", "選手名", "ミ", "パ", "走", "肩", "守", "総合"]
+            widths = [30, 40, 130, 35, 35, 35, 35, 35, 45]
+            table.position_swapped.connect(self._on_pos_swapped)
+            
+        elif mode == "bench" or mode == "farm_batter":
+            cols = ["適性", "選手名", "ミ", "パ", "走", "肩", "守", "総合"]
+            widths = [70, 130, 35, 35, 35, 35, 35, 45]
+
+        elif mode == "rotation" or mode == "bullpen" or mode == "farm_pitcher":
+            cols = ["役", "選手名", "球速", "コ", "ス", "変", "先", "中", "抑", "総合"]
+            widths = [40, 130, 50, 35, 35, 35, 35, 35, 35, 45]
+
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+        for i, w in enumerate(widths):
+            table.setColumnWidth(i, w)
+
+        table.setStyleSheet(self._get_table_style())
+        return table
+
+    def _get_table_style(self):
+        return f"""
+            QTableWidget {{
+                background-color: {self.theme.bg_card};
+                border: 1px solid {self.theme.border};
+                gridline-color: {self.theme.border_muted};
+                selection-background-color: {self.theme.primary_light}40;
+                selection-color: {self.theme.text_primary};
             }}
-            QTabBar::tab {{
-                background: {self.theme.bg_card};
+            QHeaderView::section {{
+                background-color: {self.theme.bg_input};
                 color: {self.theme.text_secondary};
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
+                border: none;
+                border-bottom: 1px solid {self.theme.border};
+                padding: 4px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QTableWidget::item {{
+                padding: 2px;
+                border-bottom: 1px solid {self.theme.border_muted};
+            }}
+        """
+    
+    def _get_main_tab_style(self):
+        return f"""
+            QTabWidget::pane {{ border: none; }}
+            QTabBar::tab {{
+                background: {self.theme.bg_dark};
+                color: {self.theme.text_secondary};
+                padding: 8px 24px;
+                border-bottom: 2px solid {self.theme.border};
+                font-weight: bold;
+                font-size: 13px;
             }}
             QTabBar::tab:selected {{
-                background: {self.theme.primary};
-                color: white;
-            }}
-        """)
-
-        # All batters
-        self.batter_list = PlayerListWidget("野手")
-        self.batter_list.player_double_clicked.connect(self._on_batter_double_clicked)
-        self.player_tabs.addTab(self.batter_list, "野手")
-
-        # All pitchers
-        self.pitcher_list = PlayerListWidget("投手")
-        self.pitcher_list.player_double_clicked.connect(self._on_pitcher_double_clicked)
-        self.player_tabs.addTab(self.pitcher_list, "投手")
-
-        # Farm players
-        self.farm_list = PlayerListWidget("二軍")
-        self.farm_list.player_double_clicked.connect(self._on_farm_double_clicked)
-        self.player_tabs.addTab(self.farm_list, "二軍")
-
-        layout.addWidget(self.player_tabs, 1)
-
-        return panel
-
-    def _create_center_panel(self) -> QWidget:
-        """Create the action buttons panel"""
-        panel = QWidget()
-        panel.setFixedWidth(80)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        layout.addStretch()
-
-        # Add to lineup
-        add_btn = QPushButton("→")
-        add_btn.setFixedSize(48, 48)
-        add_btn.setStyleSheet(self._action_btn_style())
-        add_btn.clicked.connect(self._add_to_roster)
-        add_btn.setToolTip("一軍に追加")
-        layout.addWidget(add_btn, 0, Qt.AlignCenter)
-
-        # Remove from lineup
-        remove_btn = QPushButton("←")
-        remove_btn.setFixedSize(48, 48)
-        remove_btn.setStyleSheet(self._action_btn_style())
-        remove_btn.clicked.connect(self._remove_from_roster)
-        remove_btn.setToolTip("一軍から外す")
-        layout.addWidget(remove_btn, 0, Qt.AlignCenter)
-
-        # Swap
-        swap_btn = QPushButton("⇆")
-        swap_btn.setFixedSize(48, 48)
-        swap_btn.setStyleSheet(self._action_btn_style())
-        swap_btn.clicked.connect(self._swap_players)
-        swap_btn.setToolTip("入れ替え")
-        layout.addWidget(swap_btn, 0, Qt.AlignCenter)
-
-        layout.addStretch()
-
-        return panel
-
-    def _action_btn_style(self) -> str:
-        return f"""
-            QPushButton {{
-                background-color: {self.theme.bg_card};
-                color: {self.theme.text_primary};
-                border: 1px solid {self.theme.border};
-                border-radius: 8px;
-                font-size: 18px;
-                font-weight: 700;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme.primary};
-                color: white;
-                border-color: {self.theme.primary};
+                color: {self.theme.primary};
+                border-bottom: 2px solid {self.theme.primary};
+                background: {self.theme.bg_input};
             }}
         """
 
-    def _create_right_panel(self) -> QWidget:
-        """Create the roster assignments panel"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        # Title
-        title = QLabel("オーダー編成")
-        title.setStyleSheet(f"""
-            font-size: 16px;
-            font-weight: 700;
-            color: {self.theme.text_primary};
-        """)
-        layout.addWidget(title)
-
-        # Tabs for different roster sections
-        self.roster_tabs = QTabWidget()
-        self.roster_tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: none;
-                background: transparent;
-            }}
-            QTabBar::tab {{
-                background: {self.theme.bg_card};
-                color: {self.theme.text_secondary};
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }}
-            QTabBar::tab:selected {{
-                background: {self.theme.primary};
-                color: white;
-            }}
-        """)
-
-        # Scroll area for batting lineup
-        batting_scroll = QScrollArea()
-        batting_scroll.setWidgetResizable(True)
-        batting_scroll.setFrameShape(QFrame.NoFrame)
-        batting_scroll.setStyleSheet("background: transparent;")
-
-        batting_content = QWidget()
-        batting_layout = QVBoxLayout(batting_content)
-        batting_layout.setSpacing(12)
-
-        self.lineup_section = RosterSection("スターティングメンバー", 9, "lineup")
-        self.lineup_section.slot_double_clicked.connect(self._on_lineup_slot_double_clicked)
-        batting_layout.addWidget(self.lineup_section)
-
-        self.bench_section = RosterSection("ベンチ野手", 6, "bench")
-        self.bench_section.slot_double_clicked.connect(self._on_bench_slot_double_clicked)
-        batting_layout.addWidget(self.bench_section)
-
-        batting_layout.addStretch()
-        batting_scroll.setWidget(batting_content)
-        self.roster_tabs.addTab(batting_scroll, "打順・野手")
-
-        # Scroll area for pitching staff
-        pitching_scroll = QScrollArea()
-        pitching_scroll.setWidgetResizable(True)
-        pitching_scroll.setFrameShape(QFrame.NoFrame)
-        pitching_scroll.setStyleSheet("background: transparent;")
-
-        pitching_content = QWidget()
-        pitching_layout = QVBoxLayout(pitching_content)
-        pitching_layout.setSpacing(12)
-
-        self.rotation_section = RosterSection("先発ローテーション", 6, "rotation")
-        self.rotation_section.slot_double_clicked.connect(self._on_rotation_slot_double_clicked)
-        pitching_layout.addWidget(self.rotation_section)
-
-        self.relief_section = RosterSection("中継ぎ", 6, "relief")
-        self.relief_section.slot_double_clicked.connect(self._on_relief_slot_double_clicked)
-        pitching_layout.addWidget(self.relief_section)
-
-        self.closer_section = RosterSection("抑え", 1, "closer")
-        self.closer_section.slot_double_clicked.connect(self._on_closer_slot_double_clicked)
-        pitching_layout.addWidget(self.closer_section)
-
-        pitching_layout.addStretch()
-        pitching_scroll.setWidget(pitching_content)
-        self.roster_tabs.addTab(pitching_scroll, "投手")
-
-        layout.addWidget(self.roster_tabs, 1)
-
-        return panel
-
     def set_game_state(self, game_state):
-        """Set game state and populate team selector"""
         self.game_state = game_state
-        if not game_state:
-            return
-
+        if not game_state: return
         self.team_selector.clear()
         for team in game_state.teams:
             self.team_selector.addItem(team.name, team)
-
+        
         if game_state.player_team:
             idx = game_state.teams.index(game_state.player_team)
             self.team_selector.setCurrentIndex(idx)
 
-    def _on_team_changed(self, index: int):
-        if index < 0 or not self.game_state:
-            return
-        self.current_team = self.team_selector.itemData(index)
-        self._refresh_all()
-
-    def _refresh_all(self):
-        """Refresh all displays"""
-        if not self.current_team:
-            return
-
-        team = self.current_team
-
-        # Initialize active_roster if empty
-        if not team.active_roster:
-            # Auto-populate with first 31 non-developmental players
-            roster_players = team.get_roster_players()
-            for i, p in enumerate(roster_players[:31]):
-                team.active_roster.append(team.players.index(p))
-            # Rest go to farm
-            for i, p in enumerate(roster_players[31:]):
-                team.farm_roster.append(team.players.index(p))
-
-        # Get categorized players
-        active_batters = []
-        active_pitchers = []
-        farm_players = []
-
-        # Assigned indices (in lineup, rotation, etc.)
-        assigned = set()
-        assigned.update(team.current_lineup)
-        assigned.update(team.rotation)
-        assigned.update(team.setup_pitchers)
-        assigned.update(team.bench_batters)
-        assigned.update(team.bench_pitchers)
-        if team.closer_idx >= 0:
-            assigned.add(team.closer_idx)
-
-        for idx in team.active_roster:
-            if 0 <= idx < len(team.players):
-                p = team.players[idx]
-                if idx not in assigned:
-                    if p.position.value == "投手":
-                        active_pitchers.append((p, idx))
-                    else:
-                        active_batters.append((p, idx))
-
-        for idx in team.farm_roster:
-            if 0 <= idx < len(team.players):
-                farm_players.append((team.players[idx], idx))
-
-        # Update lists
-        self.batter_list.set_players(active_batters)
-        self.pitcher_list.set_players(active_pitchers)
-        self.farm_list.set_players(farm_players)
-
-        # Update roster sections
-        self._update_lineup_display()
-        self._update_pitching_display()
-        self._update_roster_count()
-
-    def _update_lineup_display(self):
-        """Update batting lineup display"""
-        team = self.current_team
-        if not team:
-            return
-
-        # Starting lineup
-        for i, slot in enumerate(self.lineup_section.slots):
-            if i < len(team.current_lineup):
-                idx = team.current_lineup[i]
-                if 0 <= idx < len(team.players):
-                    slot.set_player(team.players[idx], idx)
-                else:
-                    slot.clear_player()
-            else:
-                slot.clear_player()
-
-        # Bench batters
-        for i, slot in enumerate(self.bench_section.slots):
-            if i < len(team.bench_batters):
-                idx = team.bench_batters[i]
-                if 0 <= idx < len(team.players):
-                    slot.set_player(team.players[idx], idx)
-                else:
-                    slot.clear_player()
-            else:
-                slot.clear_player()
-
-    def _update_pitching_display(self):
-        """Update pitching staff display"""
-        team = self.current_team
-        if not team:
-            return
-
-        # Rotation
-        for i, slot in enumerate(self.rotation_section.slots):
-            if i < len(team.rotation):
-                idx = team.rotation[i]
-                if 0 <= idx < len(team.players):
-                    slot.set_player(team.players[idx], idx)
-                else:
-                    slot.clear_player()
-            else:
-                slot.clear_player()
-
-        # Relief
-        for i, slot in enumerate(self.relief_section.slots):
-            if i < len(team.setup_pitchers):
-                idx = team.setup_pitchers[i]
-                if 0 <= idx < len(team.players):
-                    slot.set_player(team.players[idx], idx)
-                else:
-                    slot.clear_player()
-            else:
-                slot.clear_player()
-
-        # Closer
-        if team.closer_idx >= 0 and team.closer_idx < len(team.players):
-            self.closer_section.slots[0].set_player(team.players[team.closer_idx], team.closer_idx)
-        else:
-            self.closer_section.slots[0].clear_player()
-
-    def _update_roster_count(self):
-        """Update roster count display"""
-        if self.current_team:
-            count = len(self.current_team.active_roster)
-            limit = self.current_team.ACTIVE_ROSTER_LIMIT
-            color = self.theme.success if count <= limit else self.theme.danger
-            self.roster_count_label.setText(f"一軍登録: {count}/{limit}")
-            self.roster_count_label.setStyleSheet(f"""
-                font-size: 14px;
-                font-weight: 600;
-                color: {color};
-                padding: 0 16px;
-            """)
-
-    # === Event handlers ===
-    def _on_batter_double_clicked(self, player, idx):
-        """Add batter to lineup"""
-        if not self.current_team:
-            return
-        # Find empty lineup slot, then bench
-        empty_lineup = self.lineup_section.find_empty_slot()
-        if empty_lineup >= 0:
-            self._add_player_to_lineup(idx, empty_lineup)
-        else:
-            empty_bench = self.bench_section.find_empty_slot()
-            if empty_bench >= 0:
-                self._add_player_to_bench(idx, empty_bench)
-
-    def _on_pitcher_double_clicked(self, player, idx):
-        """Add pitcher to staff"""
-        if not self.current_team:
-            return
-        # Try rotation, then relief, then closer
-        empty_rotation = self.rotation_section.find_empty_slot()
-        if empty_rotation >= 0:
-            self._add_player_to_rotation(idx, empty_rotation)
-        else:
-            empty_relief = self.relief_section.find_empty_slot()
-            if empty_relief >= 0:
-                self._add_player_to_relief(idx, empty_relief)
-            else:
-                if self.closer_section.slots[0].player_idx < 0:
-                    self._add_player_to_closer(idx)
-
-    def _on_farm_double_clicked(self, player, idx):
-        """Promote player from farm"""
-        if not self.current_team:
-            return
-        if self.current_team.add_to_active_roster(idx):
+    def _on_team_changed(self, index):
+        if index >= 0:
+            self.current_team = self.team_selector.itemData(index)
             self._refresh_all()
 
-    def _on_lineup_slot_double_clicked(self, slot):
-        """Remove from lineup"""
-        if slot.player_idx >= 0:
-            self._remove_from_lineup(slot)
-
-    def _on_bench_slot_double_clicked(self, slot):
-        """Remove from bench"""
-        if slot.player_idx >= 0:
-            self._remove_from_bench(slot)
-
-    def _on_rotation_slot_double_clicked(self, slot):
-        """Remove from rotation"""
-        if slot.player_idx >= 0:
-            self._remove_from_rotation(slot)
-
-    def _on_relief_slot_double_clicked(self, slot):
-        """Remove from relief"""
-        if slot.player_idx >= 0:
-            self._remove_from_relief(slot)
-
-    def _on_closer_slot_double_clicked(self, slot):
-        """Remove closer"""
-        if slot.player_idx >= 0:
-            self._remove_from_closer()
-
-    # === Roster modification methods ===
-    def _add_player_to_lineup(self, player_idx: int, slot_idx: int):
+    def _ensure_lists_initialized(self):
+        """Ensure team lists have correct length to avoid crashes"""
         team = self.current_team
-        while len(team.current_lineup) <= slot_idx:
+        if not team: return
+        
+        # Lineup: 9 slots
+        while len(team.current_lineup) < 9:
             team.current_lineup.append(-1)
-        team.current_lineup[slot_idx] = player_idx
-        self._refresh_all()
-
-    def _add_player_to_bench(self, player_idx: int, slot_idx: int):
-        team = self.current_team
-        while len(team.bench_batters) <= slot_idx:
-            team.bench_batters.append(-1)
-        team.bench_batters[slot_idx] = player_idx
-        self._refresh_all()
-
-    def _add_player_to_rotation(self, player_idx: int, slot_idx: int):
-        team = self.current_team
-        while len(team.rotation) <= slot_idx:
+            
+        # Rotation: 6 slots
+        while len(team.rotation) < 6:
             team.rotation.append(-1)
-        team.rotation[slot_idx] = player_idx
-        self._refresh_all()
-
-    def _add_player_to_relief(self, player_idx: int, slot_idx: int):
-        team = self.current_team
-        while len(team.setup_pitchers) <= slot_idx:
+            
+        # Setup: 6 slots
+        while len(team.setup_pitchers) < 6:
             team.setup_pitchers.append(-1)
-        team.setup_pitchers[slot_idx] = player_idx
+            
+        # Lineup positions
+        if not hasattr(team, 'lineup_positions') or len(team.lineup_positions) != 9:
+            team.lineup_positions = ["捕", "一", "二", "三", "遊", "左", "中", "右", "DH"]
+
+    def _refresh_all(self):
+        if not self.current_team: return
+        
+        self._ensure_lists_initialized()
+        
+        self._refresh_lineup_table()
+        self._refresh_bench_table()
+        self._refresh_batter_farm_list()
+        self._refresh_rotation_table()
+        self._refresh_bullpen_table()
+        self._refresh_pitcher_farm_list()
+        self._update_status_label()
+
+    def _update_status_label(self):
+        team = self.current_team
+        # Count unique non-negative indices in all order slots
+        active_set = set()
+        active_set.update([x for x in team.current_lineup if x >= 0])
+        active_set.update([x for x in team.bench_batters if x >= 0])
+        active_set.update([x for x in team.rotation if x >= 0])
+        active_set.update([x for x in team.setup_pitchers if x >= 0])
+        if team.closer_idx >= 0: active_set.add(team.closer_idx)
+        
+        count = len(active_set)
+        limit = team.ACTIVE_ROSTER_LIMIT
+        self.status_label.setText(f"一軍登録数: {count}/{limit}")
+        color = self.theme.success if count <= limit else self.theme.danger
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: bold; margin-left: 20px;")
+
+    # === Data Helpers ===
+    
+    def _create_item(self, text, align=Qt.AlignCenter, rank_color=False, pos_badge=None, is_star=False):
+        """Rich Table Item Factory"""
+        item = QTableWidgetItem(str(text))
+        item.setTextAlignment(align)
+        
+        if pos_badge:
+            item.setBackground(QColor(get_pos_color(pos_badge)))
+            item.setForeground(Qt.white)
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
+        elif rank_color:
+            color = get_rank_color(text, self.theme)
+            item.setForeground(color)
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
+        elif is_star:
+            item.setForeground(QColor("#FFD700")) # Gold for overall star
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
+            
+        return item
+
+    def _get_short_pos(self, p):
+        mapping = {
+            "投手": "投", "捕手": "捕", "一塁手": "一", "二塁手": "二",
+            "三塁手": "三", "遊撃手": "遊", "左翼手": "左", "中堅手": "中",
+            "右翼手": "右", "指名打者": "DH"
+        }
+        return mapping.get(p.position.value, p.position.value[:1])
+
+    def _format_aptitude(self, p):
+        """Create a string like '二A 遊B'"""
+        if p.position.value == "投手": return "投手"
+        parts = []
+        if hasattr(p.stats, 'defense_ranges'):
+            # Sort by rank score roughly
+            def sort_key(item): return item[1]
+            sorted_ranges = sorted(p.stats.defense_ranges.items(), key=sort_key, reverse=True)
+            
+            mapping = {"捕手":"捕","一塁手":"一","二塁手":"二","三塁手":"三",
+                       "遊撃手":"遊","左翼手":"左","中堅手":"中","右翼手":"右"}
+            
+            for pos, val in sorted_ranges:
+                if val >= 20: # Show only relevant
+                    short = mapping.get(pos, pos[0])
+                    rank = p.stats.get_rank(val)
+                    parts.append(f"{short}{rank}")
+        return " ".join(parts[:3]) # Limit to 3
+
+    # === Table Fillers ===
+
+    def _refresh_lineup_table(self):
+        team = self.current_team
+        table = self.lineup_table
+        table.setRowCount(9)
+            
+        for i in range(9):
+            p_idx = -1
+            if i < len(team.current_lineup):
+                p_idx = team.current_lineup[i]
+            
+            pos_label = team.lineup_positions[i]
+            
+            # 1. Order
+            table.setItem(i, 0, self._create_item(f"{i+1}"))
+            
+            # 2. Position (Draggable)
+            pos_item = self._create_item(pos_label, pos_badge=pos_label)
+            pos_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+            table.setItem(i, 1, pos_item)
+            
+            if p_idx != -1 and p_idx < len(team.players):
+                p = team.players[p_idx]
+                table.setItem(i, 2, self._create_item(p.name, Qt.AlignLeft))
+                
+                s = p.stats
+                table.setItem(i, 3, self._create_item(s.get_rank(s.contact), rank_color=True))
+                table.setItem(i, 4, self._create_item(s.get_rank(s.power), rank_color=True))
+                table.setItem(i, 5, self._create_item(s.get_rank(s.speed), rank_color=True))
+                table.setItem(i, 6, self._create_item(s.get_rank(s.arm), rank_color=True))
+                table.setItem(i, 7, self._create_item(s.get_rank(s.error), rank_color=True))
+                table.setItem(i, 8, self._create_item(f"★{p.overall_rating}", is_star=True))
+                
+                # Store user role
+                for c in range(table.columnCount()):
+                    if table.item(i, c): table.item(i, c).setData(Qt.UserRole, p_idx)
+            else:
+                self._clear_row(table, i, 2)
+
+    def _refresh_bench_table(self):
+        team = self.current_team
+        table = self.bench_table
+        table.setRowCount(len(team.bench_batters) + 2) # Extra space for dropping
+        
+        for i, p_idx in enumerate(team.bench_batters):
+            if p_idx != -1 and p_idx < len(team.players):
+                p = team.players[p_idx]
+                self._fill_batter_row(table, i, p, p_idx)
+            else:
+                self._clear_row(table, i, 0)
+        
+        # Clear remaining
+        for i in range(len(team.bench_batters), table.rowCount()):
+             self._clear_row(table, i, 0)
+
+    def _refresh_batter_farm_list(self):
+        team = self.current_team
+        table = self.farm_batter_table
+        
+        active_ids = set(team.current_lineup + team.bench_batters)
+        candidates = []
+        for i, p in enumerate(team.players):
+            if p.position.value != "投手" and i not in active_ids:
+                if not self.batter_dev_check.isChecked() and p.is_developmental: continue
+                candidates.append((i, p))
+                
+        # Sort
+        key = self.batter_sort_combo.currentText()
+        if "総合" in key: candidates.sort(key=lambda x: x[1].overall_rating, reverse=True)
+        elif "ミート" in key: candidates.sort(key=lambda x: x[1].stats.contact, reverse=True)
+        elif "パワー" in key: candidates.sort(key=lambda x: x[1].stats.power, reverse=True)
+        elif "走力" in key: candidates.sort(key=lambda x: x[1].stats.speed, reverse=True)
+        elif "年齢" in key: candidates.sort(key=lambda x: x[1].age)
+        
+        table.setRowCount(len(candidates))
+        for i, (p_idx, p) in enumerate(candidates):
+            self._fill_batter_row(table, i, p, p_idx)
+
+    def _fill_batter_row(self, table, row, p, p_idx):
+        apt = self._format_aptitude(p)
+        table.setItem(row, 0, self._create_item(apt))
+        table.setItem(row, 1, self._create_item(p.name, Qt.AlignLeft))
+        
+        s = p.stats
+        table.setItem(row, 2, self._create_item(s.get_rank(s.contact), rank_color=True))
+        table.setItem(row, 3, self._create_item(s.get_rank(s.power), rank_color=True))
+        table.setItem(row, 4, self._create_item(s.get_rank(s.speed), rank_color=True))
+        table.setItem(row, 5, self._create_item(s.get_rank(s.arm), rank_color=True))
+        table.setItem(row, 6, self._create_item(s.get_rank(s.error), rank_color=True))
+        table.setItem(row, 7, self._create_item(f"★{p.overall_rating}", is_star=True))
+        
+        for c in range(table.columnCount()):
+            if table.item(row, c): table.item(row, c).setData(Qt.UserRole, p_idx)
+
+    def _refresh_rotation_table(self):
+        team = self.current_team
+        table = self.rotation_table
+        table.setRowCount(6)
+        for i in range(6):
+            p_idx = -1
+            if i < len(team.rotation):
+                p_idx = team.rotation[i]
+            self._fill_pitcher_row_role(table, i, "先発", p_idx)
+
+    def _refresh_bullpen_table(self):
+        team = self.current_team
+        table = self.bullpen_table
+        table.setRowCount(7)
+        # Setup 1-6
+        for i in range(6):
+            p_idx = -1
+            if i < len(team.setup_pitchers):
+                p_idx = team.setup_pitchers[i]
+            self._fill_pitcher_row_role(table, i, "中継", p_idx)
+        # Closer
+        self._fill_pitcher_row_role(table, 6, "抑え", team.closer_idx)
+
+    def _fill_pitcher_row_role(self, table, row, role_lbl, p_idx):
+        table.setItem(row, 0, self._create_item(role_lbl, pos_badge=role_lbl[0])) # Color badge
+        if p_idx != -1 and p_idx < len(self.current_team.players):
+            p = self.current_team.players[p_idx]
+            self._fill_pitcher_data(table, row, p, p_idx, start_col=1)
+        else:
+            self._clear_row(table, row, 1)
+
+    def _refresh_pitcher_farm_list(self):
+        team = self.current_team
+        table = self.farm_pitcher_table
+        
+        active_ids = set([x for x in team.rotation if x >= 0])
+        active_ids.update([x for x in team.setup_pitchers if x >= 0])
+        if team.closer_idx != -1: active_ids.add(team.closer_idx)
+        
+        candidates = []
+        for i, p in enumerate(team.players):
+            if p.position.value == "投手" and i not in active_ids:
+                if not self.pitcher_dev_check.isChecked() and p.is_developmental: continue
+                candidates.append((i, p))
+                
+        # Sort
+        key = self.pitcher_sort_combo.currentText()
+        if "総合" in key: candidates.sort(key=lambda x: x[1].overall_rating, reverse=True)
+        elif "球速" in key: candidates.sort(key=lambda x: x[1].stats.speed, reverse=True)
+        elif "コン" in key: candidates.sort(key=lambda x: x[1].stats.control, reverse=True)
+        elif "スタ" in key: candidates.sort(key=lambda x: x[1].stats.stamina, reverse=True)
+        elif "年齢" in key: candidates.sort(key=lambda x: x[1].age)
+        
+        table.setRowCount(len(candidates))
+        for i, (p_idx, p) in enumerate(candidates):
+            # Determine role apt
+            role = p.pitch_type.value[:2]
+            table.setItem(i, 0, self._create_item(role))
+            self._fill_pitcher_data(table, i, p, p_idx, start_col=1)
+
+    def _fill_pitcher_data(self, table, row, p, p_idx, start_col):
+        table.setItem(row, start_col, self._create_item(p.name, Qt.AlignLeft))
+        kmh = p.stats.speed_to_kmh()
+        table.setItem(row, start_col+1, self._create_item(f"{kmh}km"))
+        table.setItem(row, start_col+2, self._create_item(p.stats.get_rank(p.stats.control), rank_color=True))
+        table.setItem(row, start_col+3, self._create_item(p.stats.get_rank(p.stats.stamina), rank_color=True))
+        table.setItem(row, start_col+4, self._create_item(p.stats.get_rank(p.stats.stuff), rank_color=True))
+        
+        # Aptitude Icons
+        st = "◎" if p.pitch_type.value == "先発" else "△"
+        rl = "◎" if p.pitch_type.value == "中継ぎ" else "△"
+        cl = "◎" if p.pitch_type.value == "抑え" else "△"
+        table.setItem(row, start_col+5, self._create_item(st))
+        table.setItem(row, start_col+6, self._create_item(rl))
+        table.setItem(row, start_col+7, self._create_item(cl))
+        table.setItem(row, start_col+8, self._create_item(f"★{p.overall_rating}", is_star=True))
+
+        for c in range(table.columnCount()):
+            if table.item(row, c): table.item(row, c).setData(Qt.UserRole, p_idx)
+
+    def _clear_row(self, table, row, start_col):
+        for c in range(start_col, table.columnCount()):
+            table.setItem(row, c, QTableWidgetItem(""))
+        if start_col < table.columnCount():
+            table.setItem(row, start_col, QTableWidgetItem("---"))
+
+    # === Event Handlers ===
+    
+    def _on_table_changed(self, table):
+        """Handle Drops"""
+        if not hasattr(table, 'dropped_player_idx'): return
+        p_idx = table.dropped_player_idx
+        row = table.dropped_target_row
+        team = self.current_team
+        
+        self._remove_player_from_active(p_idx)
+        
+        if table == self.lineup_table:
+            while len(team.current_lineup) <= row: team.current_lineup.append(-1)
+            team.current_lineup[row] = p_idx
+        elif table == self.bench_table:
+            if row < len(team.bench_batters): team.bench_batters[row] = p_idx
+            else: team.bench_batters.append(p_idx)
+        elif table == self.rotation_table:
+            while len(team.rotation) <= row: team.rotation.append(-1)
+            team.rotation[row] = p_idx
+        elif table == self.bullpen_table:
+            if row == 6: team.closer_idx = p_idx
+            else:
+                while len(team.setup_pitchers) <= row: team.setup_pitchers.append(-1)
+                team.setup_pitchers[row] = p_idx
+        
         self._refresh_all()
+        del table.dropped_player_idx
 
-    def _add_player_to_closer(self, player_idx: int):
-        self.current_team.closer_idx = player_idx
-        self._refresh_all()
+    def _on_pos_swapped(self, r1, r2):
+        """Swap position assignments in lineup"""
+        team = self.current_team
+        pos_list = team.lineup_positions
+        if r1 < 9 and r2 < 9:
+            pos_list[r1], pos_list[r2] = pos_list[r2], pos_list[r1]
+            self._refresh_lineup_table()
 
-    def _remove_from_lineup(self, slot):
-        idx = slot.slot_number - 1
-        if idx < len(self.current_team.current_lineup):
-            self.current_team.current_lineup[idx] = -1
-        self._refresh_all()
-
-    def _remove_from_bench(self, slot):
-        idx = slot.slot_number - 1
-        if idx < len(self.current_team.bench_batters):
-            self.current_team.bench_batters[idx] = -1
-        self._refresh_all()
-
-    def _remove_from_rotation(self, slot):
-        idx = slot.slot_number - 1
-        if idx < len(self.current_team.rotation):
-            self.current_team.rotation[idx] = -1
-        self._refresh_all()
-
-    def _remove_from_relief(self, slot):
-        idx = slot.slot_number - 1
-        if idx < len(self.current_team.setup_pitchers):
-            self.current_team.setup_pitchers[idx] = -1
-        self._refresh_all()
-
-    def _remove_from_closer(self):
-        self.current_team.closer_idx = -1
-        self._refresh_all()
-
-    def _add_to_roster(self):
-        """Add selected player to appropriate roster slot"""
-        tab_idx = self.player_tabs.currentIndex()
-        if tab_idx == 0:  # Batters
-            player, idx = self.batter_list.get_selected()
-            if player:
-                self._on_batter_double_clicked(player, idx)
-        elif tab_idx == 1:  # Pitchers
-            player, idx = self.pitcher_list.get_selected()
-            if player:
-                self._on_pitcher_double_clicked(player, idx)
-        elif tab_idx == 2:  # Farm
-            player, idx = self.farm_list.get_selected()
-            if player:
-                self._on_farm_double_clicked(player, idx)
-
-    def _remove_from_roster(self):
-        """Remove selected player from roster"""
-        roster_tab_idx = self.roster_tabs.currentIndex()
-        if roster_tab_idx == 0:  # Batting
-            slot = self.lineup_section.get_selected_slot()
-            if slot and slot.player_idx >= 0:
-                self._remove_from_lineup(slot)
-                return
-            slot = self.bench_section.get_selected_slot()
-            if slot and slot.player_idx >= 0:
-                self._remove_from_bench(slot)
-        else:  # Pitching
-            slot = self.rotation_section.get_selected_slot()
-            if slot and slot.player_idx >= 0:
-                self._remove_from_rotation(slot)
-                return
-            slot = self.relief_section.get_selected_slot()
-            if slot and slot.player_idx >= 0:
-                self._remove_from_relief(slot)
-                return
-            slot = self.closer_section.get_selected_slot()
-            if slot and slot.player_idx >= 0:
-                self._remove_from_closer()
-
-    def _swap_players(self):
-        """Swap two players"""
-        # TODO: Implement swap functionality
-        pass
+    def _remove_player_from_active(self, idx):
+        t = self.current_team
+        if idx in t.current_lineup: t.current_lineup[t.current_lineup.index(idx)] = -1
+        if idx in t.bench_batters: t.bench_batters.remove(idx)
+        if idx in t.rotation: t.rotation[t.rotation.index(idx)] = -1
+        if idx in t.setup_pitchers: t.setup_pitchers[t.setup_pitchers.index(idx)] = -1
+        if t.closer_idx == idx: t.closer_idx = -1
 
     def _auto_fill(self):
-        """Auto-fill roster based on ratings"""
-        if not self.current_team:
-            return
-
-        team = self.current_team
-        roster = team.get_roster_players()
-
-        # Clear current assignments
-        team.current_lineup = []
-        team.bench_batters = []
-        team.rotation = []
-        team.setup_pitchers = []
-        team.closer_idx = -1
-        team.active_roster = []
-        team.farm_roster = []
-
-        # Separate and sort players
-        batters = [(team.players.index(p), p) for p in roster if p.position.value != "投手"]
-        pitchers = [(team.players.index(p), p) for p in roster if p.position.value == "投手"]
-
-        batters.sort(key=lambda x: x[1].overall_rating, reverse=True)
-        pitchers.sort(key=lambda x: x[1].overall_rating, reverse=True)
-
-        # Assign top 9 batters to lineup
-        for idx, p in batters[:9]:
-            team.current_lineup.append(idx)
-            team.active_roster.append(idx)
-
-        # Assign next batters to bench (up to 6)
-        for idx, p in batters[9:15]:
-            team.bench_batters.append(idx)
-            team.active_roster.append(idx)
-
-        # Sort pitchers by type
-        starters = [(idx, p) for idx, p in pitchers if p.pitch_type and p.pitch_type.value == "先発"]
-        relievers = [(idx, p) for idx, p in pitchers if p.pitch_type and p.pitch_type.value == "中継ぎ"]
-        closers = [(idx, p) for idx, p in pitchers if p.pitch_type and p.pitch_type.value == "抑え"]
-
-        starters.sort(key=lambda x: x[1].overall_rating, reverse=True)
-        relievers.sort(key=lambda x: x[1].overall_rating, reverse=True)
-        closers.sort(key=lambda x: x[1].overall_rating, reverse=True)
-
-        # Assign rotation (up to 6)
-        for idx, p in starters[:6]:
-            team.rotation.append(idx)
-            if idx not in team.active_roster:
-                team.active_roster.append(idx)
-
-        # Assign closer
-        if closers:
-            idx, p = closers[0]
-            team.closer_idx = idx
-            if idx not in team.active_roster:
-                team.active_roster.append(idx)
-            closers = closers[1:]
-        elif relievers:
-            idx, p = relievers[0]
-            team.closer_idx = idx
-            if idx not in team.active_roster:
-                team.active_roster.append(idx)
-            relievers = relievers[1:]
-
-        # Assign relief (up to 6)
-        remaining = starters[6:] + relievers + closers
-        for idx, p in remaining[:6]:
-            team.setup_pitchers.append(idx)
-            if idx not in team.active_roster:
-                team.active_roster.append(idx)
-
-        # Rest go to farm
-        all_assigned = set(team.active_roster)
-        for p in roster:
-            idx = team.players.index(p)
-            if idx not in all_assigned:
-                team.farm_roster.append(idx)
-
+        if not self.current_team: return
+        t = self.current_team
+        
+        # Reset
+        t.current_lineup = [-1] * 9
+        t.bench_batters = []
+        t.rotation = [-1] * 6
+        t.setup_pitchers = [-1] * 6
+        t.closer_idx = -1
+        t.lineup_positions = ["捕", "一", "二", "三", "遊", "左", "中", "右", "DH"]
+        
+        # Logic: Pick best players for positions
+        # Simple implementation: Sort batters by rating, fill positions first, then DH, then bench
+        batters = [i for i,p in enumerate(t.players) if p.position.value != "投手" and not p.is_developmental]
+        batters.sort(key=lambda i: t.players[i].overall_rating, reverse=True)
+        
+        # Fill Lineup (Naive)
+        for i in range(min(9, len(batters))):
+            t.current_lineup[i] = batters[i]
+                
+        # Fill Bench
+        if len(batters) > 9:
+            t.bench_batters = batters[9:15] # Max 6 bench
+            
+        # Pitchers
+        pitchers = [i for i,p in enumerate(t.players) if p.position.value == "投手" and not p.is_developmental]
+        pitchers.sort(key=lambda i: t.players[i].overall_rating, reverse=True)
+        
+        # Starters
+        starters = [i for i in pitchers if t.players[i].pitch_type.value == "先発"]
+        relievers = [i for i in pitchers if i not in starters]
+        
+        # Fallback if shortage
+        if len(starters) < 6: starters += relievers[:6-len(starters)]
+        
+        t.rotation = starters[:6]
+        rem_relievers = [i for i in relievers if i not in t.rotation]
+        
+        if rem_relievers:
+            t.closer_idx = rem_relievers[0]
+            t.setup_pitchers = rem_relievers[1:7]
+            
         self._refresh_all()
 
     def _save_order(self):
-        """Save roster configuration"""
-        if not self.current_team:
-            return
-
-        # Clean up empty slots
-        team = self.current_team
-        team.current_lineup = [i for i in team.current_lineup if i >= 0]
-        team.bench_batters = [i for i in team.bench_batters if i >= 0]
-        team.rotation = [i for i in team.rotation if i >= 0]
-        team.setup_pitchers = [i for i in team.setup_pitchers if i >= 0]
-
         self.order_saved.emit()
-        QMessageBox.information(self, "保存完了", "オーダーを保存しました。")
+        self._update_status_label()
+        QMessageBox.information(self, "保存", "オーダーを保存しました。")

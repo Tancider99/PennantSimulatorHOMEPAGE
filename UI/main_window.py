@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         # SEASON
         sidebar.add_separator("SEASON")
         sidebar.add_nav_item("", "SCHEDULE", "schedule")
-        sidebar.add_nav_item("", "STANDINGS", "standings")
+        # STANDINGS removed
         sidebar.add_nav_item("", "STATS", "stats")
 
         # MANAGEMENT
@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
         sidebar.add_nav_item("", "FARM", "farm_swap")
         sidebar.add_nav_item("", "CONTRACTS", "contract_changes")
         sidebar.add_nav_item("", "ACQUISITIONS", "reinforcement")
+        sidebar.add_nav_item("", "TRAINING", "training")
 
         # BUSINESS
         sidebar.add_separator("BUSINESS")
@@ -198,6 +199,7 @@ class MainWindow(QMainWindow):
             page = self.schedule_page
             
         elif section == "standings":
+            # Page class is kept for potential internal use, though not in sidebar
             self.standings_page = StandingsPage(self)
             page = self.standings_page
             
@@ -224,7 +226,7 @@ class MainWindow(QMainWindow):
             page.settings_changed.connect(self._on_settings_changed)
             self.settings_page = page
 
-        # New sidebar items (farm_swap, contract_changes, reinforcement, staff, finance, save_load)
+        # New sidebar items (farm_swap, contract_changes, reinforcement, training, staff, finance, save_load)
         # are currently unimplemented and return None.
 
         return page
@@ -306,7 +308,7 @@ class MainWindow(QMainWindow):
             "2": "roster",
             "3": "stats",
             "4": "schedule",
-            "5": "standings",
+            # "5": "standings",  <-- Removed shortcut
             "6": "game",
             "0": "settings",
         }
@@ -361,9 +363,9 @@ class MainWindow(QMainWindow):
         # Map section IDs to button labels (as defined in _create_sidebar)
         section_map = {
             "home": "HOME", "roster": "ROSTER", "order": "ORDER", 
-            "schedule": "SCHEDULE", "standings": "STANDINGS", "stats": "STATS",
+            "schedule": "SCHEDULE", "stats": "STATS", # STANDINGS removed
             "farm_swap": "FARM", "contract_changes": "CONTRACTS",
-            "reinforcement": "ACQUISITIONS",
+            "reinforcement": "ACQUISITIONS", "training": "TRAINING",
             "staff": "STAFF", "finance": "FINANCE",
             "save_load": "SAVE / LOAD", "settings": "SETTINGS", "title": "TITLE"
         }
