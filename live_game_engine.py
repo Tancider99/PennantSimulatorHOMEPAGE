@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-ライブ試合エンジン (AI搭載・リアル志向・修正版)
+ライブ試合エンジン (修正版: 全能力反映)
 """
 import random
 import math
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional, Dict
 from enum import Enum
+from models import Position # modelsからインポート
 
 # ========================================
 # 定数・ユーティリティ
@@ -197,7 +198,7 @@ class AIManager:
         return "NORMAL"
 
 # ========================================
-# 投球・打球エンジン
+# 投球・打球エンジン (能力値反映)
 # ========================================
 
 class PitchGenerator:
@@ -214,7 +215,13 @@ class PitchGenerator:
         "スプリット": {"base_speed": 140, "h_break": 3, "v_break": -28}
     }
 
-    def generate_pitch(self, p_stats, pitch_type, state: GameState, strategy="NORMAL") -> PitchData:
+    def generate_pitch(self, p_stats, pitch_type, state, strategy="NORMAL") -> PitchData:
+        # 能力値
+        velocity = getattr(p_stats, 'velocity', 145)
+        control = getattr(p_stats, 'control', 50)
+        movement = getattr(p_stats, 'movement', 50)
+        stamina = getattr(p_stats, 'stamina', 50)
+        
         # スタミナ消費
         current_stamina = state.current_pitcher_stamina()
         fatigue = 1.0 if current_stamina > 30 else 0.9
@@ -231,41 +238,38 @@ class PitchGenerator:
             pitch_type = "ストレート" if random.random() < 0.5 else random.choice(breaking)
             
         base = self.PITCH_DATA.get(pitch_type, self.PITCH_DATA["ストレート"])
-        speed_stat = getattr(p_stats, 'speed', 50) * fatigue
         
         # 球速
-        velo = base["base_speed"] + (speed_stat - 50)*0.4 + random.gauss(0, 1.2)
+        base_velo = velocity * fatigue
+        velo = random.gauss(base_velo, 2.0)
         velo = max(80, min(168, velo))
         
-        # 変化
-        control_stat = getattr(p_stats, 'control', 50) * fatigue
-        h_brk = base["h_break"] + random.gauss(0, 2)
-        v_brk = base["v_break"] + random.gauss(0, 2)
+        # 変化 (Movementが高いとキレが増す)
+        move_factor = 1.0 + (movement - 50) * 0.005
+        h_brk = base["h_break"] * move_factor + random.gauss(0, 2)
+        v_brk = base["v_break"] * move_factor + random.gauss(0, 2)
         
         # ロケーション
-        loc = self._calc_location(control_stat, state, strategy)
+        loc = self._calc_location(control * fatigue, state, strategy)
         
         # 軌道
         traj = self._calc_traj(velo, h_brk, v_brk, loc)
         
-        return PitchData(pitch_type, round(velo,1), 2000, h_brk, v_brk, loc, (0,18.44,1.8), traj)
+        return PitchData(pitch_type, round(velo,1), 2200, h_brk, v_brk, loc, (0,18.44,1.8), traj)
 
     def _calc_location(self, control, state, strategy):
-        # 精度 (Control 50 -> 0.1m, 80 -> 0.06m)
-        sigma = max(0.04, 0.15 - (control * 0.0015))
+        # 精度 (Control 50 -> 0.15m, 99 -> 0.05m)
+        sigma = max(0.05, 0.25 - (control * 0.002))
         
         # ターゲット
         tx, tz = 0, STRIKE_ZONE['center_z']
         
-        if strategy == "STRIKE": # ストライク狙い
+        if strategy == "STRIKE":
             sigma *= 0.7
-        elif strategy == "BALL": # 誘い球
-            if random.random() < 0.5: # 低め
-                tz -= 0.3
-            else: # 外角
-                tx = 0.25 if random.random() < 0.5 else -0.25
+        elif strategy == "BALL":
+            if random.random() < 0.5: tz -= 0.3
+            else: tx = 0.25 if random.random() < 0.5 else -0.25
         else:
-            # 散らす
             if random.random() < 0.6:
                 tx = random.choice([-0.2, 0.2])
                 tz += random.choice([-0.25, 0.25])
@@ -290,25 +294,29 @@ class PitchGenerator:
 
 class BattedBallGenerator:
     def generate(self, b_stats, p_stats, pitch: PitchData, strategy="SWING"):
-        pow_stat = getattr(b_stats, 'power', 50)
-        con_stat = getattr(b_stats, 'contact', 50)
+        power = getattr(b_stats, 'power', 50)
+        contact = getattr(b_stats, 'contact', 50)
+        gap = getattr(b_stats, 'gap', 50)
+        
+        p_movement = getattr(p_stats, 'movement', 50)
+        p_gb_tendency = getattr(p_stats, 'gb_tendency', 50)
         
         # ミート補正
         meet_bonus = 0
         if strategy == "MEET": meet_bonus = 15
         if strategy == "POWER": meet_bonus = -15
         
-        con_eff = con_stat + meet_bonus
-        if not pitch.location.is_strike: con_eff -= 30
-        
         # コンタクト品質
+        con_eff = contact + meet_bonus - (p_movement - 50) * 0.3
+        if not pitch.location.is_strike: con_eff -= 20
+        
         quality_roll = random.uniform(0, 100)
         if quality_roll < con_eff * 0.4: quality = "hard"
         elif quality_roll < con_eff * 0.9: quality = "medium"
         else: quality = "soft"
         
         # 速度
-        base_v = 110 + (pow_stat - 50)*0.9
+        base_v = 110 + (power - 50)*0.9
         if strategy == "POWER": base_v += 10
         if quality == "hard": base_v += 20
         if quality == "soft": base_v -= 25
@@ -316,14 +324,16 @@ class BattedBallGenerator:
         velo = max(60, base_v + random.gauss(0, 6))
         
         # 角度
-        angle_bias = 15
-        if pitch.location.z < 0.6: angle_bias = 0
-        if pitch.location.z > 0.9: angle_bias = 30
+        angle_bias = 15 - (p_gb_tendency - 50) * 0.2
+        if pitch.location.z < 0.6: angle_bias -= 10
+        if pitch.location.z > 0.9: angle_bias += 15
         if strategy == "BUNT":
             angle = -15
             velo = 30
             quality = "soft"
         else:
+            # Gapが高いとライナー性
+            if gap > 60 and random.random() < (gap/200): angle_bias = 20
             angle = random.gauss(angle_bias, 15)
         
         # タイプ
@@ -335,7 +345,7 @@ class BattedBallGenerator:
         # 飛距離
         v_ms = velo / 3.6
         dist = (v_ms**2 * math.sin(math.radians(2 * angle))) / 9.8
-        dist *= (0.6 + random.random()*0.3) # 空気抵抗
+        dist *= (0.6 + random.random()*0.3)
         if htype == BattedBallType.GROUNDBALL: dist *= 0.4
         dist = max(0, dist)
         
@@ -453,6 +463,11 @@ class LiveGameEngine:
         if strategy == "WAIT": swing_prob *= 0.2
         if self.state.strikes == 2: swing_prob += 0.2
         
+        # Eyeによる選球眼補正
+        eye = getattr(batter.stats, 'eye', 50)
+        if not pitch.location.is_strike:
+            swing_prob -= (eye - 50) * 0.005
+        
         is_swing = random.random() < swing_prob
         
         if not is_swing:
@@ -490,7 +505,7 @@ class LiveGameEngine:
         return None
 
     def _walk(self):
-        batter, _ = self.get_current_batter() # Get current batter BEFORE next_batter
+        batter, _ = self.get_current_batter()
         self._advance_runners(1, batter)
         self._reset_count()
         self._next_batter()
@@ -504,7 +519,7 @@ class LiveGameEngine:
         return kind
 
     def _resolve_play(self, play):
-        batter, _ = self.get_current_batter() # Get current batter
+        batter, _ = self.get_current_batter()
         
         self._reset_count()
         self._next_batter()
@@ -538,21 +553,21 @@ class LiveGameEngine:
                     
             if self.state.runner_1b: self.state.runner_2b = self.state.runner_1b
             
-            self.state.runner_1b = batter # Assign Batter Object
+            self.state.runner_1b = batter
             
         elif bases == 2:
             if self.state.runner_3b: score += 1; self.state.runner_3b = None
             if self.state.runner_2b: score += 1; self.state.runner_2b = None
             if self.state.runner_1b: self.state.runner_3b = self.state.runner_1b; self.state.runner_1b = None
             
-            self.state.runner_2b = batter # Assign Batter
+            self.state.runner_2b = batter
             
         elif bases == 3:
             if self.state.runner_3b: score += 1
             if self.state.runner_2b: score += 1
             if self.state.runner_1b: score += 1
             self.state.runner_1b = self.state.runner_2b = None
-            self.state.runner_3b = batter # Assign Batter
+            self.state.runner_3b = batter
         
         self._score(score)
 

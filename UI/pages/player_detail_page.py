@@ -492,7 +492,14 @@ class PlayerDetailPage(QWidget):
         layout.addWidget(info_card, stretch=1) # Let info card take remaining space
 
         # 3. Position info
-        if player.sub_positions:
+        # 修正: sub_positionsの判定をdefense_rangesから行う
+        sub_positions = []
+        if hasattr(player.stats, 'defense_ranges'):
+            for pos_name, rating in player.stats.defense_ranges.items():
+                if pos_name != player.position.value and rating >= 2:
+                    sub_positions.append(pos_name)
+        
+        if sub_positions:
             pos_container = QFrame()
             pos_container.setStyleSheet(f"""
                 QFrame {{
@@ -523,7 +530,7 @@ class PlayerDetailPage(QWidget):
             """)
             pos_layout.addWidget(main_pos)
 
-            sub_pos_text = ", ".join([p.value for p in player.sub_positions])
+            sub_pos_text = ", ".join(sub_positions)
             sub_pos = QLabel(f"サブ: {sub_pos_text}")
             sub_pos.setStyleSheet(f"""
                 font-size: 13px;
@@ -732,21 +739,29 @@ class PlayerDetailPage(QWidget):
         f_grid = QGridLayout()
         f_grid.setSpacing(8)
         
-        # Infield
-        self._add_detail_stat(f_grid, "内野守備", stats.inf_range, 0, 0)
-        self._add_detail_stat(f_grid, "内野エラー", stats.inf_error, 0, 1)
-        self._add_detail_stat(f_grid, "内野肩", stats.inf_arm, 0, 2)
-        self._add_detail_stat(f_grid, "併殺処理", stats.turn_dp, 0, 3)
+        # 修正: 統合された守備能力値を表示
+        # 共通
+        self._add_detail_stat(f_grid, "肩力", stats.arm, 0, 0)
+        self._add_detail_stat(f_grid, "捕球/エラー", stats.error, 0, 1)
+        self._add_detail_stat(f_grid, "併殺処理", stats.turn_dp, 0, 2)
         
-        # Outfield
-        self._add_detail_stat(f_grid, "外野守備", stats.of_range, 1, 0)
-        self._add_detail_stat(f_grid, "外野エラー", stats.of_error, 1, 1)
-        self._add_detail_stat(f_grid, "外野肩", stats.of_arm, 1, 2)
+        # 捕手専用
+        if stats.get_defense_range(player.position) > 0 and player.position.value == "捕手":
+             self._add_detail_stat(f_grid, "捕手リード", stats.catcher_lead, 1, 0)
         
-        # Catcher
-        self._add_detail_stat(f_grid, "捕手リード", stats.catcher_ability, 2, 0)
-        self._add_detail_stat(f_grid, "捕手肩", stats.catcher_arm, 2, 1)
-        
+        # 守備範囲 (保持しているポジション全て)
+        row = 2
+        col = 0
+        if hasattr(stats, 'defense_ranges'):
+            for pos_name, val in stats.defense_ranges.items():
+                if val >= 2:
+                    label = f"守備範囲({pos_name})"
+                    self._add_detail_stat(f_grid, label, val, row, col)
+                    col += 1
+                    if col > 2:
+                        col = 0
+                        row += 1
+
         fielding_layout.addLayout(f_grid)
         layout.addWidget(fielding_container)
 

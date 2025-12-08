@@ -1,4 +1,4 @@
-# filename: tancider99/pennantsimulator/PennantSimulator-dc826ddd1c528c22b1587f45283260277b108bea/player_data_manager.py
+# filename: tancider99/pennantsimulator/PennantSimulator-74e5e1ba92308cf746a532be9f08c61e03fdf900/player_data_manager.py
 # -*- coding: utf-8 -*-
 """
 固定選手データ管理モジュール
@@ -56,38 +56,74 @@ class PlayerDataManager:
             "チームレベル": player.team_level.value if player.team_level else None,
         }
         
+        # 共通能力
+        base_data["共通能力"] = {
+            "ケガしにくさ": player.stats.durability,
+            "回復": player.stats.recovery,
+            "練習態度": player.stats.work_ethic,
+            "野球脳": player.stats.intelligence,
+            "メンタル": player.stats.mental
+        }
+        
         if is_pitcher:
             # 投手の場合
             base_data["球種"] = player.pitch_type.value if player.pitch_type else None
             base_data["先発適性"] = player.starter_aptitude
             base_data["中継ぎ適性"] = player.middle_aptitude
             base_data["抑え適性"] = player.closer_aptitude
+            
+            # 守備範囲は投手も持つ
+            defense_ranges = {}
+            if hasattr(player.stats, 'defense_ranges'):
+                defense_ranges = player.stats.defense_ranges
+
             base_data["能力値"] = {
-                "球速": player.stats.velocity,       # 修正: speed(走力)ではなくvelocity(球速)
+                "球速": player.stats.velocity,
                 "コントロール": player.stats.control,
                 "スタミナ": player.stats.stamina,
-                "変化球": player.stats.stuff,        # 修正: breaking(prop)ではなくstuff(field)
-                "精神力": player.stats.intelligence, # 修正: mental(prop)ではなくintelligence(field)
+                "変化球": player.stats.stuff,
                 "ムーブメント": player.stats.movement,
-                "持ち球": player.stats.pitches,      # 修正: 辞書形式で保存
+                "持ち球": player.stats.pitches,
+                "対左打者": player.stats.vs_left_pitcher,
+                "対ピンチ": player.stats.vs_pinch,
+                "安定感": player.stats.stability,
+                "ゴロ傾向": player.stats.gb_tendency,
+                "クイック": player.stats.hold_runners,
+                "守備適正": defense_ranges,
+                "肩力": player.stats.arm,
+                "捕球": player.stats.error,
+                "守備": player.stats.turn_dp, 
             }
         else:
             # 野手の場合
-            base_data["サブポジション"] = [p.value for p in player.sub_positions]
-            base_data["サブポジション評価"] = player.sub_position_ratings
+            # サブポジションはdefense_rangesから算出（表示用）
+            sub_positions_list = []
+            if hasattr(player.stats, 'defense_ranges'):
+                 for pos_name, rating in player.stats.defense_ranges.items():
+                    if pos_name != player.position.value and rating >= 2:
+                        sub_positions_list.append(pos_name)
+
+            base_data["サブポジション"] = sub_positions_list
+            
             base_data["能力値"] = {
                 "ミート": player.stats.contact,
                 "パワー": player.stats.power,
-                "走力": player.stats.speed,          # 修正: run(prop)ではなくspeed(field)
+                "走力": player.stats.speed,
                 "盗塁": player.stats.steal,
                 "走塁": player.stats.baserunning,
-                "肩力": player.stats.arm,            # プロパティ値を保存(読み込み時に各fieldへ展開)
-                "守備": player.stats.fielding,       # プロパティ値を保存
-                "捕球": player.stats.catching,       # プロパティ値を保存
-                "精神力": player.stats.intelligence,
+                "肩力": player.stats.arm,
+                "守備": player.stats.turn_dp, # 併殺処理
+                "捕球": player.stats.error,
                 "ギャップ": player.stats.gap,
                 "選球眼": player.stats.eye,
-                "三振回避": player.stats.avoid_k
+                "三振回避": player.stats.avoid_k,
+                "弾道": player.stats.trajectory,
+                "対左投手": player.stats.vs_left_batter,
+                "チャンス": player.stats.chance,
+                "バント": player.stats.bunt_sac,
+                "セーフティ": player.stats.bunt_hit,
+                "守備適正": player.stats.defense_ranges,
+                "捕手リード": player.stats.catcher_lead
             }
         
         return base_data
@@ -116,8 +152,6 @@ class PlayerDataManager:
         starter_aptitude = self._get_value(data, "先発適性", "starter_aptitude", 50)
         middle_aptitude = self._get_value(data, "中継ぎ適性", "middle_aptitude", 50)
         closer_aptitude = self._get_value(data, "抑え適性", "closer_aptitude", 50)
-        sub_positions_data = self._get_value(data, "サブポジション", "sub_positions", [])
-        sub_position_ratings = self._get_value(data, "サブポジション評価", "sub_position_ratings", {})
         
         # Position変換
         position = None
@@ -146,6 +180,7 @@ class PlayerDataManager:
         
         # PlayerStats復元（日本語キー対応）
         stats_data = self._get_value(data, "能力値", "stats", {})
+        common_data = self._get_value(data, "共通能力", "common", {})
         
         def get_stat(jp_key: str, en_key: str, default):
             """statsからの値取得"""
@@ -154,6 +189,13 @@ class PlayerDataManager:
             if en_key in stats_data and stats_data[en_key] is not None:
                 return stats_data[en_key]
             return default
+            
+        def get_common(jp_key: str, en_key: str, default):
+            """共通能力からの値取得"""
+            # common_dataにあればそこから、なければstats_dataから（互換性）
+            if jp_key in common_data: return common_data[jp_key]
+            if en_key in common_data: return common_data[en_key]
+            return get_stat(jp_key, en_key, default)
         
         # 旧形式のデータを読み込んで変数に格納
         run_val = get_stat("走力", "run", 50)
@@ -161,19 +203,38 @@ class PlayerDataManager:
         fielding_val = get_stat("守備", "fielding", 50)
         catching_val = get_stat("捕球", "catching", 50)
         breaking_val = get_stat("変化球", "breaking", 50)
-        mental_val = get_stat("精神力", "mental", 50)
+        catcher_lead_val = get_stat("捕手リード", "catcher_lead", fielding_val)
         
         # 持ち球の処理（リストか辞書か判別）
         pitches_data = get_stat("持ち球", "breaking_balls", {})
         pitches_dict = {}
         if isinstance(pitches_data, list):
-            # リストの場合は全て同じ値（変化球値）で辞書化
             for p_name in pitches_data:
                 pitches_dict[p_name] = breaking_val
         elif isinstance(pitches_data, dict):
             pitches_dict = pitches_data
 
-        # PlayerStatsの生成（正しいフィールド引数のみを使用）
+        # 守備適正(defense_ranges)の構築
+        defense_ranges = get_stat("守備適正", "defense_ranges", {})
+        
+        if not defense_ranges:
+            defense_ranges = {}
+            # メインポジションを設定
+            defense_ranges[position.value] = fielding_val
+            
+            # サブポジションを設定
+            sub_positions_data = self._get_value(data, "サブポジション", "sub_positions", [])
+            sub_position_ratings = self._get_value(data, "サブポジション評価", "sub_position_ratings", {})
+            
+            for sp_value in sub_positions_data:
+                rating = sub_position_ratings.get(sp_value)
+                if rating is None:
+                    rating = int(fielding_val * 0.7)
+                elif isinstance(rating, float) and rating <= 1.0:
+                    rating = int(rating * 99)
+                defense_ranges[sp_value] = max(1, int(rating))
+
+        # PlayerStatsの生成
         stats = PlayerStats(
             # 打撃
             contact = get_stat("ミート", "contact", 50),
@@ -181,42 +242,47 @@ class PlayerDataManager:
             power = get_stat("パワー", "power", 50),
             eye = get_stat("選球眼", "eye", 50),
             avoid_k = get_stat("三振回避", "avoid_k", 50),
+            trajectory = get_stat("弾道", "trajectory", 2),
+            vs_left_batter = get_stat("対左投手", "vs_left_batter", 50),
+            chance = get_stat("チャンス", "chance", 50),
             
             # 走塁
             speed = run_val,
             steal = get_stat("盗塁", "stealing", 50),
             baserunning = get_stat("走塁", "baserunning", 50),
             
-            # 守備 (統合値を各ポジションへ展開)
-            catcher_ability = fielding_val,
-            catcher_arm = arm_val,
-            inf_range = fielding_val,
-            inf_error = catching_val,
-            inf_arm = arm_val,
-            turn_dp = fielding_val,
-            of_range = fielding_val,
-            of_error = catching_val,
-            of_arm = arm_val,
+            # バント
+            bunt_sac = get_stat("バント", "bunt_sac", 50),
+            bunt_hit = get_stat("セーフティ", "bunt_hit", 50),
+            
+            # 守備
+            arm = arm_val,
+            error = catching_val,
+            defense_ranges = defense_ranges,
+            catcher_lead = catcher_lead_val,
+            turn_dp = fielding_val, 
             
             # 投手
             stuff = breaking_val,
             movement = get_stat("ムーブメント", "movement", 50),
             control = get_stat("コントロール", "control", 50),
-            velocity = get_stat("球速", "speed", 145), # speedキーで球速が入っている場合に対応
+            velocity = get_stat("球速", "speed", 145),
             stamina = get_stat("スタミナ", "stamina", 50),
+            hold_runners = get_stat("クイック", "hold_runners", 50),
+            gb_tendency = get_stat("ゴロ傾向", "gb_tendency", 50),
+            vs_left_pitcher = get_stat("対左打者", "vs_left_pitcher", 50),
+            vs_pinch = get_stat("対ピンチ", "vs_pinch", 50),
+            stability = get_stat("安定感", "stability", 50),
             
             # 共通
-            intelligence = mental_val,
+            durability = get_common("ケガしにくさ", "durability", 50),
+            recovery = get_common("回復", "recovery", 50),
+            work_ethic = get_common("練習態度", "work_ethic", 50),
+            intelligence = get_common("野球脳", "intelligence", 50),
+            mental = get_common("メンタル", "mental", 50),
+            
             pitches = pitches_dict
         )
-        
-        # サブポジション復元
-        sub_positions = []
-        for sp_value in sub_positions_data:
-            for p in Position:
-                if p.value == sp_value:
-                    sub_positions.append(p)
-                    break
         
         player = Player(
             name=name,
@@ -232,8 +298,6 @@ class PlayerDataManager:
             draft_round=draft_round,
             is_developmental=is_developmental,
             team_level=team_level,
-            sub_positions=sub_positions,
-            sub_position_ratings=sub_position_ratings,
             starter_aptitude=starter_aptitude,
             middle_aptitude=middle_aptitude,
             closer_aptitude=closer_aptitude
@@ -293,8 +357,8 @@ class PlayerDataManager:
             
             data = {
                 "説明": "このファイルを編集して選手の能力値・名前・背番号などを変更できます",
-                "能力値の範囲": "1～200（100が平均）", # メッセージ修正
-                "バージョン": "2.0",
+                "能力値の範囲": "1～99（50が平均）", # メッセージ修正
+                "バージョン": "2.2",
                 **self.team_to_dict(team)
             }
             
@@ -306,6 +370,8 @@ class PlayerDataManager:
         
         except Exception as e:
             print(f"球団データ保存エラー: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def load_team(self, team_name: str) -> Optional[Team]:

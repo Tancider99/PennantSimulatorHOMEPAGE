@@ -50,6 +50,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.CATCHER, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_catcher(p)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -58,6 +59,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.FIRST, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_infielder(p, Position.FIRST)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -66,6 +68,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.SECOND, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_infielder(p, Position.SECOND)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -74,6 +77,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.THIRD, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_infielder(p, Position.THIRD)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -82,6 +86,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.SHORTSTOP, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_infielder(p, Position.SHORTSTOP)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -90,6 +95,7 @@ def create_team(team_name: str, league: League) -> Team:
         p = create_random_player(Position.OUTFIELD, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_outfielder(p)
+        p.fix_main_position() # 守備範囲再チェック
         p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
@@ -131,6 +137,10 @@ def create_team(team_name: str, league: League) -> Team:
         else:
             _add_sub_positions_infielder(p, pos)
         _adjust_developmental_stats(p)
+        
+        # 最後に守備範囲再チェック
+        p.fix_main_position()
+        
         team.players.append(p)
         dev_number += 1
     
@@ -152,8 +162,6 @@ def _add_sub_positions_catcher(player):
 
 def _add_sub_positions_infielder(player, main_pos: Position):
     """内野手のサブポジション"""
-    infield_positions = [Position.FIRST, Position.SECOND, Position.THIRD, Position.SHORTSTOP]
-    
     # 二遊間はお互い守りやすい
     if main_pos == Position.SECOND:
         if random.random() < 0.6:
@@ -204,19 +212,16 @@ def _adjust_developmental_stats(player):
     stats.steal = max(1, int(stats.steal * factor))
     stats.baserunning = max(1, int(stats.baserunning * factor))
     
-    # 守備 (全て調整)
-    stats.inf_range = max(1, int(stats.inf_range * factor))
-    stats.inf_arm = max(1, int(stats.inf_arm * factor))
-    stats.inf_error = max(1, int(stats.inf_error * factor))
-    # 修正: inf_dp はプロパティなので turn_dp を操作する
+    # 守備 (統合された項目)
+    stats.arm = max(1, int(stats.arm * factor))
+    stats.error = max(1, int(stats.error * factor))
+    stats.catcher_lead = max(1, int(stats.catcher_lead * factor))
     stats.turn_dp = max(1, int(stats.turn_dp * factor))
-    
-    stats.of_range = max(1, int(stats.of_range * factor))
-    stats.of_arm = max(1, int(stats.of_arm * factor))
-    stats.of_error = max(1, int(stats.of_error * factor))
-    
-    stats.catcher_ability = max(1, int(stats.catcher_ability * factor))
-    stats.catcher_arm = max(1, int(stats.catcher_arm * factor))
+
+    # 守備範囲 (保持している全ポジションを調整)
+    for pos_key in stats.defense_ranges:
+        original = stats.defense_ranges[pos_key]
+        stats.defense_ranges[pos_key] = max(1, int(original * factor))
     
     # 投手
     if player.position == Position.PITCHER:
@@ -228,16 +233,9 @@ def _adjust_developmental_stats(player):
         stats.control = max(1, int(stats.control * factor))
         stats.stamina = max(1, int(stats.stamina * factor))
 
+
 def load_or_create_teams(central_team_names: list, pacific_team_names: list) -> tuple:
-    """固定選手データを読み込み、なければ新規生成して保存（球団別ファイル）
-    
-    Args:
-        central_team_names: セ・リーグのチーム名リスト
-        pacific_team_names: パ・リーグのチーム名リスト
-    
-    Returns:
-        tuple: (central_teams, pacific_teams)
-    """
+    """固定選手データを読み込み、なければ新規生成して保存（球団別ファイル）"""
     from player_data_manager import player_data_manager
     
     all_team_names = central_team_names + pacific_team_names
@@ -281,15 +279,7 @@ def load_or_create_teams(central_team_names: list, pacific_team_names: list) -> 
 
 
 def regenerate_and_save_teams(central_team_names: list, pacific_team_names: list) -> tuple:
-    """選手データを新規生成して保存（既存データを上書き・球団別ファイル）
-    
-    Args:
-        central_team_names: セ・リーグのチーム名リスト
-        pacific_team_names: パ・リーグのチーム名リスト
-    
-    Returns:
-        tuple: (central_teams, pacific_teams)
-    """
+    """選手データを新規生成して保存（既存データを上書き・球団別ファイル）"""
     from player_data_manager import player_data_manager
     
     print("選手データを再生成します")

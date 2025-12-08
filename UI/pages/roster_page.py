@@ -474,9 +474,17 @@ class RosterPage(QWidget):
 
         # Position info
         pos_text = player.position.value
-        if player.sub_positions:
-            sub_pos = ", ".join([p.value[:2] for p in player.sub_positions])
-            pos_text += f" (サブ: {sub_pos})"
+        
+        # 修正: defense_rangesからサブポジションを判定
+        sub_positions = []
+        if hasattr(player.stats, 'defense_ranges'):
+            for pos_name, rating in player.stats.defense_ranges.items():
+                if pos_name != player.position.value and rating >= 2:
+                    sub_positions.append(pos_name[:2]) # "二塁手" -> "二塁"
+        
+        if sub_positions:
+            pos_text += f" (サブ: {', '.join(sub_positions)})"
+            
         self.info_panel.add_row("ポジション", pos_text)
 
     def _update_stats_panel(self, player):

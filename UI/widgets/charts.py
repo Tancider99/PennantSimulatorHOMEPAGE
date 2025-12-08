@@ -36,8 +36,18 @@ class RadarChart(QWidget):
         """Set data from player stats"""
         stats = player.stats
         if is_pitcher:
+            # 球速(km/h)を評価値(1-99)に変換
+            # PlayerStats.kmh_to_ratingメソッドを使用、なければ簡易計算
+            if hasattr(stats, 'kmh_to_rating'):
+                velocity_rating = stats.kmh_to_rating(stats.velocity)
+            else:
+                velocity_rating = (stats.velocity - 130) * 2 + 30
+            
+            # 範囲制限
+            velocity_rating = max(1, min(99, int(velocity_rating)))
+
             data = {
-                "球速": stats.speed,
+                "球速": velocity_rating,
                 "制球": stats.control,
                 "スタミナ": stats.stamina,
                 "変化球": stats.breaking,
