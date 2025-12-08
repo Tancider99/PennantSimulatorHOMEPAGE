@@ -177,7 +177,7 @@ class StatsPage(QWidget):
         layout.addWidget(league_label)
 
         self.league_combo = QComboBox()
-        self.league_combo.addItems(["両リーグ", "セ・リーグ", "パ・リーグ"])
+        self.league_combo.addItems(["両リーグ", "North League", "South League"])
         self.league_combo.currentIndexChanged.connect(self._filter_stats)
         self.league_combo.setMinimumWidth(140)
         layout.addWidget(self.league_combo)

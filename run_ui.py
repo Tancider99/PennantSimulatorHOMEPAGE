@@ -125,7 +125,7 @@ class GameController(QMainWindow):
     def _setup_screens(self):
         """Set up all screens in a stacked widget"""
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        self.setNorthWidget(self.stack)
 
         # Create screens
         self.loading_screen = self.LoadingScreen()

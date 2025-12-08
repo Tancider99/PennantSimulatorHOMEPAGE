@@ -234,66 +234,66 @@ def _adjust_developmental_stats(player):
         stats.stamina = max(1, int(stats.stamina * factor))
 
 
-def load_or_create_teams(central_team_names: list, pacific_team_names: list) -> tuple:
+def load_or_create_teams(north_team_names: list, south_team_names: list) -> tuple:
     """固定選手データを読み込み、なければ新規生成して保存（球団別ファイル）"""
     from player_data_manager import player_data_manager
     
-    all_team_names = central_team_names + pacific_team_names
+    all_team_names = north_team_names + south_team_names
     
     # 全球団のデータがあれば読み込み
     if player_data_manager.has_all_team_data(all_team_names):
-        central_teams = []
-        pacific_teams = []
+        north_teams = []
+        south_teams = []
         
-        for team_name in central_team_names:
+        for team_name in north_team_names:
             team = player_data_manager.load_team(team_name)
             if team:
-                central_teams.append(team)
+                north_teams.append(team)
         
-        for team_name in pacific_team_names:
+        for team_name in south_team_names:
             team = player_data_manager.load_team(team_name)
             if team:
-                pacific_teams.append(team)
+                south_teams.append(team)
         
-        # 全チームが正しく読み込めたか確認
-        if len(central_teams) == len(central_team_names) and len(pacific_teams) == len(pacific_team_names):
-            print("固定選手データを使用します（球団別ファイル）")
-            return central_teams, pacific_teams
+            # 全チームが正しく読み込めたか確認
+            if len(north_teams) == len(north_team_names) and len(south_teams) == len(south_team_names):
+                print("固定選手データを使用します（球団別ファイル）")
+                return north_teams, south_teams
+        
+        # 新規生成
+        print("新規選手データを生成します")
+        north_teams = []
+        south_teams = []
+        
+        for team_name in north_team_names:
+            team = create_team(team_name, League.NORTH)
+            north_teams.append(team)
+            player_data_manager.save_team(team)  # 個別保存
+        
+        for team_name in south_team_names:
+            team = create_team(team_name, League.SOUTH)
+            south_teams.append(team)
+            player_data_manager.save_team(team)  # 個別保存
+        
+        return north_teams, south_teams
     
-    # 新規生成
-    print("新規選手データを生成します")
-    central_teams = []
-    pacific_teams = []
     
-    for team_name in central_team_names:
-        team = create_team(team_name, League.CENTRAL)
-        central_teams.append(team)
-        player_data_manager.save_team(team)  # 個別保存
-    
-    for team_name in pacific_team_names:
-        team = create_team(team_name, League.PACIFIC)
-        pacific_teams.append(team)
-        player_data_manager.save_team(team)  # 個別保存
-    
-    return central_teams, pacific_teams
-
-
-def regenerate_and_save_teams(central_team_names: list, pacific_team_names: list) -> tuple:
-    """選手データを新規生成して保存（既存データを上書き・球団別ファイル）"""
-    from player_data_manager import player_data_manager
-    
-    print("選手データを再生成します")
-    central_teams = []
-    pacific_teams = []
-    
-    for team_name in central_team_names:
-        team = create_team(team_name, League.CENTRAL)
-        central_teams.append(team)
-        player_data_manager.save_team(team)  # 個別保存
-    
-    for team_name in pacific_team_names:
-        team = create_team(team_name, League.PACIFIC)
-        pacific_teams.append(team)
-        player_data_manager.save_team(team)  # 個別保存
-    
-    return central_teams, pacific_teams
+    def regenerate_and_save_teams(north_team_names: list, south_team_names: list) -> tuple:
+        """選手データを新規生成して保存（既存データを上書き・球団別ファイル）"""
+        from player_data_manager import player_data_manager
+        
+        print("選手データを再生成します")
+        north_teams = []
+        south_teams = []
+        
+        for team_name in north_team_names:
+            team = create_team(team_name, League.NORTH)
+            north_teams.append(team)
+            player_data_manager.save_team(team)  # 個別保存
+        
+        for team_name in south_team_names:
+            team = create_team(team_name, League.SOUTH)
+            south_teams.append(team)
+            player_data_manager.save_team(team)  # 個別保存
+        
+        return north_teams, south_teams

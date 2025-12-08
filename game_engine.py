@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB試合シミュレーションエンジン (修正版)
+試合シミュレーションエンジン (修正版)
 """
 import random
 from dataclasses import dataclass, field

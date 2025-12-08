@@ -79,8 +79,8 @@ class GameStateManager:
 
         # ゲーム進行データ
         self.player_team: Optional[Team] = None
-        self.central_teams: List[Team] = []
-        self.pacific_teams: List[Team] = []
+        self.north_teams: List[Team] = []
+        self.south_teams: List[Team] = []
         self.all_teams: List[Team] = []
 
         self.current_year = 2027
@@ -110,16 +110,16 @@ class GameStateManager:
 
     def initialize_schedule(self):
         """日程を初期化"""
-        from npb_schedule_engine import LeagueScheduleEngine
+        from league_schedule_engine import LeagueScheduleEngine
         from models import League
 
         self.schedule_engine = LeagueScheduleEngine(self.current_year)
 
         # チームをリーグ別に分類
-        central = [t for t in self.all_teams if t.league == League.CENTRAL]
-        pacific = [t for t in self.all_teams if t.league == League.PACIFIC]
+        north = [t for t in self.all_teams if t.league == League.NORTH]
+        south = [t for t in self.all_teams if t.league == League.SOUTH]
 
-        self.schedule = self.schedule_engine.generate_schedule(central, pacific)
+        self.schedule = self.schedule_engine.generate_schedule(north, south)
         self.current_date = self.schedule_engine.opening_day.strftime("%Y-%m-%d")
 
     def get_next_game(self):

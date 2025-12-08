@@ -1,14 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB式日程作成エンジン（完全再現版）
-
-NPBの日程編成ルールを完全に再現:
-- 143試合制（同一リーグ25試合×5=125試合、交流戦18試合）
-- 火〜日の週6日制（月曜休み）
-- 3連戦を基本単位
-- ホーム/ビジター均等配分
-- 交流戦期間（5月末〜6月中旬）
-- オールスター休み（7月中旬）
+日程作成エンジン（完全再現版）
 """
 import random
 from dataclasses import dataclass, field
@@ -22,7 +14,7 @@ from models import Team, League, Schedule, ScheduledGame, GameStatus
 class LeagueScheduleEngine:
     """リーグ日程作成エンジン"""
 
-    # NPB基本設定
+    # 基本設定
     GAMES_PER_SEASON = 143
     INTRA_LEAGUE_GAMES = 25  # 同一リーグ対戦数（5チーム×25試合=125試合）
     INTERLEAGUE_GAMES = 18   # 交流戦（6チーム×3試合=18試合）
@@ -30,7 +22,7 @@ class LeagueScheduleEngine:
     def __init__(self, year: int = 2027):
         self.year = year
 
-        # NPBカレンダー設定
+        # カレンダー設定
         self.opening_day = datetime.date(year, 3, 29)
         self.interleague_start = datetime.date(year, 5, 30)
         self.interleague_end = datetime.date(year, 6, 16)
@@ -39,15 +31,15 @@ class LeagueScheduleEngine:
         self.season_end = datetime.date(year, 10, 6)
 
         self.schedule = Schedule()
-        self.central_teams = []
-        self.pacific_teams = []
+        self.north_teams = []
+        self.south_teams = []
 
-    def generate_schedule(self, central_teams: List[Team],
-                         pacific_teams: List[Team]) -> Schedule:
-        """完全なNPB式日程を生成"""
-        self.central_teams = [t.name for t in central_teams]
-        self.pacific_teams = [t.name for t in pacific_teams]
-        self.all_teams = self.central_teams + self.pacific_teams
+    def generate_schedule(self, north_teams: List[Team],
+                         south_teams: List[Team]) -> Schedule:
+        """日程を生成"""
+        self.north_teams = [t.name for t in north_teams]
+        self.south_teams = [t.name for t in south_teams]
+        self.all_teams = self.north_teams + self.south_teams
 
         self.schedule = Schedule()
 
@@ -64,7 +56,7 @@ class LeagueScheduleEngine:
         games = []
 
         # リーグ内対戦（25試合×5対戦=125試合/チーム）
-        for teams in [self.central_teams, self.pacific_teams]:
+        for teams in [self.north_teams, self.south_teams]:
             for i, team1 in enumerate(teams):
                 for j, team2 in enumerate(teams):
                     if i >= j:
@@ -78,17 +70,17 @@ class LeagueScheduleEngine:
                         games.append((team2, team1, False))
 
         # 交流戦（3試合×6対戦=18試合/チーム）
-        for c_team in self.central_teams:
-            for p_team in self.pacific_teams:
+        for n_team in self.north_teams:
+            for s_team in self.south_teams:
                 # 偶数年：セ主催2試合、パ主催1試合
                 if self.year % 2 == 0:
-                    games.append((c_team, p_team, True))
-                    games.append((c_team, p_team, True))
-                    games.append((p_team, c_team, True))
+                    games.append((n_team, s_team, True))
+                    games.append((n_team, s_team, True))
+                    games.append((s_team, n_team, True))
                 else:
-                    games.append((p_team, c_team, True))
-                    games.append((p_team, c_team, True))
-                    games.append((c_team, p_team, True))
+                    games.append((s_team, n_team, True))
+                    games.append((s_team, n_team, True))
+                    games.append((n_team, s_team, True))
 
         return games
 
@@ -248,8 +240,8 @@ class LeagueScheduleEngine:
 
         return stats
 
-def create_league_schedule(year: int, central_teams: List[Team],
-                       pacific_teams: List[Team]) -> Schedule:
+def create_league_schedule(year: int, north_teams: List[Team],
+                       south_teams: List[Team]) -> Schedule:
     """リーグ日程を作成するヘルパー関数"""
     engine = LeagueScheduleEngine(year)
-    return engine.generate_schedule(central_teams, pacific_teams)
+    return engine.generate_schedule(north_teams, south_teams)

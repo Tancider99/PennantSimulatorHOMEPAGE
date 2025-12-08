@@ -480,10 +480,10 @@ class TeamCard(Card):
         if hasattr(team, 'color') and team.color:
             team_color = team.color
         elif hasattr(team, 'league'):
-            if team.league.value == "セントラル":
-                team_color = self.theme.central_league
-            elif team.league.value == "パシフィック":
-                team_color = self.theme.pacific_league
+            if team.league.value == "North League":
+                team_color = self.theme.north_league
+            elif team.league.value == "South League":
+                team_color = self.theme.south_league
         # 背景色にチームカラー要素を反映（控えめな透明度）
         if team_color:
             self.setStyleSheet(f"""

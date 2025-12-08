@@ -76,10 +76,10 @@ class Theme:
     bg_header: str = "#141619"
 
     # === Team Colors ===
-    central_league: str = "#5fbcd3"
-    pacific_league: str = "#e06c75"
-    north_league: str = "#5fbcd3"   # Use same as central_league for now
-    south_league: str = "#e06c75"   # Use same as pacific_league for now
+    north_league: str = "#5fbcd3"
+    south_league: str = "#e06c75"
+    north_league: str = "#5fbcd3"   # Use same as north_league for now
+    south_league: str = "#e06c75"   # Use same as south_league for now
 
     # === Rating Colors ===
     rating_s: str = "#ff6b6b"   # S Rank

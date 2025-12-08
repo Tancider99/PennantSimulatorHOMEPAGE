@@ -36,8 +36,8 @@ class PlayerStatus(Enum):
 
 
 class League(Enum):
-    CENTRAL = "セントラル"
-    PACIFIC = "パシフィック"
+    NORTH = "North League"
+    SOUTH = "South League"
 
 
 class GameStatus(Enum):

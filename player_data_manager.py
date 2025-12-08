@@ -317,7 +317,7 @@ class PlayerDataManager:
     def dict_to_team(self, data: Dict[str, Any]) -> Team:
         """Dict形式からTeamオブジェクトを復元（日本語キー対応）"""
         name = data.get("球団名") or data.get("name", "チーム")
-        league_value = data.get("リーグ") or data.get("league", "セントラル・リーグ")
+        league_value = data.get("リーグ") or data.get("league", "North League")
         budget = data.get("予算") or data.get("budget", 5000000000)
         players_data = data.get("選手一覧") or data.get("players", [])
         
@@ -328,7 +328,7 @@ class PlayerDataManager:
                 league = lg
                 break
         if league is None:
-            league = League.CENTRAL
+            league = League.NORTH
         
         team = Team(
             name=name,

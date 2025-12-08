@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NPB打席結果判定エンジン（能力値完全反映版）
+打席結果判定エンジン（能力値完全反映版）
 
 すべての選手能力（gap, eye, avoid_k, stuff, movement, defense_rangesなど）を
 計算ロジックに組み込んだリアルな野球シミュレーション

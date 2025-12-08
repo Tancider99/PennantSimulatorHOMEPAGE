@@ -23,19 +23,19 @@ class ScheduleManager:
         self.season_end = datetime.date(year, 10, 6)
     
     # ... (generate_season_schedule 等の既存メソッドはそのまま) ...
-    def generate_season_schedule(self, central_teams: List[Team], pacific_teams: List[Team]) -> Schedule:
+    def generate_season_schedule(self, north_teams: List[Team], south_teams: List[Team]) -> Schedule:
         """リーグのシーズンスケジュールを生成（143試合制）"""
         self.schedule = Schedule()
         
         # 各リーグのカードリストを生成
-        central_cards = self._generate_league_matchups(central_teams, 25)  # 同一リーグ25試合
-        pacific_cards = self._generate_league_matchups(pacific_teams, 25)
+        north_cards = self._generate_league_matchups(north_teams, 25)  # 同一リーグ25試合
+        south_cards = self._generate_league_matchups(south_teams, 25)
         
         # 交流戦カードを生成
-        interleague_cards = self._generate_interleague_matchups(central_teams, pacific_teams, 3)  # 各3試合
+        interleague_cards = self._generate_interleague_matchups(north_teams, south_teams, 3)  # 各3試合
         
         # 日程に振り分け
-        self._schedule_games(central_cards, pacific_cards, interleague_cards)
+        self._schedule_games(north_cards, south_cards, interleague_cards)
         
         return self.schedule
     
@@ -57,10 +57,10 @@ class ScheduleManager:
                         else: matchups.append((team2.name, team1.name))
         return matchups
     
-    def _generate_interleague_matchups(self, central_teams: List[Team], pacific_teams: List[Team], games_per_matchup: int) -> List[Tuple[str, str]]:
+    def _generate_interleague_matchups(self, north_teams: List[Team], south_teams: List[Team], games_per_matchup: int) -> List[Tuple[str, str]]:
         matchups = []
-        for c_team in central_teams:
-            for p_team in pacific_teams:
+        for n_team in north_teams:
+            for s_team in south_teams:
                 for i in range(games_per_matchup):
                     if i < 2:
                         if self.year % 2 == 0: matchups.append((c_team.name, p_team.name))
@@ -70,16 +70,16 @@ class ScheduleManager:
                         else: matchups.append((c_team.name, p_team.name))
         return matchups
     
-    def _schedule_games(self, central_cards, pacific_cards, interleague_cards):
-        random.shuffle(central_cards)
-        random.shuffle(pacific_cards)
+    def _schedule_games(self, north_cards, south_cards, interleague_cards):
+        random.shuffle(north_cards)
+        random.shuffle(south_cards)
         random.shuffle(interleague_cards)
         
         current_date = self.opening_day
         game_number = 1
         
-        central_idx = 0
-        pacific_idx = 0
+        north_idx = 0
+        south_idx = 0
         
         # 簡易実装: 日程埋め込み
         while current_date <= self.season_end:
@@ -103,16 +103,16 @@ class ScheduleManager:
             else:
                 # リーグ戦
                 for _ in range(3):
-                    if central_idx < len(central_cards):
-                        h, a = central_cards[central_idx]
+                    if north_idx < len(north_cards):
+                        h, a = north_cards[north_idx]
                         self.schedule.games.append(ScheduledGame(game_number, date_str, h, a))
                         game_number += 1
-                        central_idx += 1
-                    if pacific_idx < len(pacific_cards):
-                        h, a = pacific_cards[pacific_idx]
+                        north_idx += 1
+                    if south_idx < len(south_cards):
+                        h, a = south_cards[south_idx]
                         self.schedule.games.append(ScheduledGame(game_number, date_str, h, a))
                         game_number += 1
-                        pacific_idx += 1
+                        south_idx += 1
             
             current_date += datetime.timedelta(days=1)
         

@@ -278,7 +278,7 @@ class RecordBook:
         # シーズン打撃記録
         self.records["season_batting_avg"] = HistoricalRecord(
             "シーズン最高打率", RecordType.SEASON, 0.389,
-            "イチロー", "オリックス", 2000, "2000年パ・リーグ"
+            "イチロー", "オリックス", 2000, "2000年South League"
         )
         self.records["season_home_runs"] = HistoricalRecord(
             "シーズン最多本塁打", RecordType.SEASON, 60,

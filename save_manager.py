@@ -443,8 +443,8 @@ def load_save_data(game, save_data: Dict[str, Any]) -> bool:
         if teams:
             game.state_manager.all_teams = teams
             # リーグ別にも分類
-            game.state_manager.central_teams = [t for t in teams if hasattr(t, 'league') and t.league.value == "セントラル"]
-            game.state_manager.pacific_teams = [t for t in teams if hasattr(t, 'league') and t.league.value == "パシフィック"]
+            game.state_manager.north_teams = [t for t in teams if hasattr(t, 'league') and t.league.value == "North League"]
+            game.state_manager.south_teams = [t for t in teams if hasattr(t, 'league') and t.league.value == "South League"]
         
         # プレイヤーチームを設定
         player_team_name = save_data.get("player_team_name")
@@ -496,7 +496,7 @@ def _deserialize_team(data: Dict[str, Any]):
     
     team = Team(
         name=data["name"],
-        league=data.get("league", "セ・リーグ")
+        league=data.get("league", "North League")
     )
     team.wins = data.get("wins", 0)
     team.losses = data.get("losses", 0)

@@ -73,12 +73,12 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """Create the main UI layout"""
-        # Central widget
-        central = QWidget()
-        central.setStyleSheet(f"background-color: {self.theme.bg_dark};") # 背景色設定
-        self.setCentralWidget(central)
+        # North widget
+        north = QWidget()
+        north.setStyleSheet(f"background-color: {self.theme.bg_dark};") # 背景色設定
+        self.setNorthWidget(north)
 
-        main_layout = QHBoxLayout(central)
+        main_layout = QHBoxLayout(north)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 

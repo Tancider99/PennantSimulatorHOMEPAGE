@@ -585,7 +585,7 @@ class HomePage(ContentPanel):
 
         # Header
         self.team_name_label.setText(team.name.upper())
-        league_name = "North League" if getattr(team.league, 'value', None) == "セントラル" else ("South League" if getattr(team.league, 'value', None) == "パシフィック" else (team.league.value if team.league else ""))
+        league_name = "North League" if getattr(team.league, 'value', None) == "North League" else ("South League" if getattr(team.league, 'value', None) == "South League" else (team.league.value if team.league else ""))
         date_str = getattr(game_state, 'current_date', '2027-03-29')
         self.season_label.setText(f"{game_state.current_year} SEASON  |  {league_name}  |  {date_str}")
 
