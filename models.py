@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-データモデル定義 (修正版: 外野3ポジション化・利き腕・詳細指標対応)
+データモデル定義 (修正版: 外野3ポジション化・利き腕・詳細指標対応・Plate Discipline追加)
 """
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
@@ -411,10 +411,22 @@ class PlayerRecord:
 
     balls_in_play: int = 0
 
-    pitches_thrown: int = 0
+    # Plate Discipline / Pitch Tracking (New)
+    pitches_seen: int = 0      # 打者用：見た投球数
+    pitches_thrown: int = 0    # 投手用：投げた投球数
     strikes_thrown: int = 0
     balls_thrown: int = 0
     first_pitch_strikes: int = 0
+    
+    zone_pitches: int = 0      # ゾーン内投球数
+    chase_pitches: int = 0     # ゾーン外投球数
+    zone_swings: int = 0       # ゾーン内スイング数
+    chase_swings: int = 0      # ゾーン外スイング数
+    zone_contact: int = 0      # ゾーン内コンタクト数
+    chase_contact: int = 0     # ゾーン外コンタクト数
+    swings: int = 0            # 総スイング数
+    whiffs: int = 0            # 空振り数 (Swinging Strikes)
+
     ground_outs: int = 0
     fly_outs: int = 0
     quality_starts: int = 0
@@ -473,6 +485,42 @@ class PlayerRecord:
     @property
     def ops(self) -> float:
         return self.obp + self.slg
+
+    # --- Plate Discipline Properties (New) ---
+    @property
+    def o_swing_pct(self) -> float:
+        return self.chase_swings / self.chase_pitches if self.chase_pitches > 0 else 0.0
+    
+    @property
+    def z_swing_pct(self) -> float:
+        return self.zone_swings / self.zone_pitches if self.zone_pitches > 0 else 0.0
+        
+    @property
+    def swing_pct(self) -> float:
+        # 打者の場合pitches_seen、投手の場合pitches_thrownを分母にする
+        total = self.pitches_seen if self.pitches_seen > 0 else self.pitches_thrown
+        return self.swings / total if total > 0 else 0.0
+
+    @property
+    def o_contact_pct(self) -> float:
+        return self.chase_contact / self.chase_swings if self.chase_swings > 0 else 0.0
+
+    @property
+    def z_contact_pct(self) -> float:
+        return self.zone_contact / self.zone_swings if self.zone_swings > 0 else 0.0
+
+    @property
+    def contact_pct(self) -> float:
+        return (self.zone_contact + self.chase_contact) / self.swings if self.swings > 0 else 0.0
+        
+    @property
+    def whiff_pct(self) -> float:
+        return self.whiffs / self.swings if self.swings > 0 else 0.0
+        
+    @property
+    def swstr_pct(self) -> float:
+        total = self.pitches_seen if self.pitches_seen > 0 else self.pitches_thrown
+        return self.whiffs / total if total > 0 else 0.0
 
     # --- Sabermetrics Properties ---
     @property

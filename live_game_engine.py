@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ライブ試合エンジン (修正版: 二塁打増・特殊指標[HBP,SF,SH,DP]実装・盗塁積極化)
+ライブ試合エンジン (修正版: 二塁打増・特殊指標[HBP,SF,SH,DP]実装・Plate Discipline集計対応・Power反映Hard%)
 """
 import random
 import math
@@ -23,7 +23,6 @@ STRIKE_ZONE = {
     'half_height': 0.28
 }
 
-# ▼▼▼ 追加: get_rank 関数 (ImportError回避のため) ▼▼▼
 def get_rank(value: int) -> str:
     if value >= 90: return "S"
     if value >= 80: return "A"
@@ -33,7 +32,6 @@ def get_rank(value: int) -> str:
     if value >= 40: return "E"
     if value >= 30: return "F"
     return "G"
-# ▲▲▲ 追加終了 ▲▲▲
 
 def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player] = None, is_risp: bool = False, is_close_game: bool = False) -> float:
     if not hasattr(player.stats, stat_name):
@@ -388,9 +386,22 @@ class BattedBallGenerator:
         ball_penalty = 0 if pitch.location.is_strike else 20
         con_eff = contact + meet_bonus - (p_movement - 50) * 0.4 - ball_penalty
         
+        # 修正: Powerが高いほどHard%を上げやすくする
+        # Base hard chance is derived from contact, but high power boosts the probability of a hard hit
+        power_bonus_factor = (power - 50) * 0.3
+        hard_chance = (con_eff * 0.35) + power_bonus_factor
+        hard_chance = max(1.0, hard_chance)
+        
+        # Medium limit calculation
+        # Maintain a separation for medium hits, ensuring it captures hits that aren't hard
+        # If hard_chance is very high, medium_limit pushes up
+        medium_limit = (con_eff * 0.85)
+        if medium_limit < hard_chance + 10:
+             medium_limit = hard_chance + 10
+        
         quality_roll = random.uniform(0, 100)
-        if quality_roll < con_eff * 0.35: quality = "hard"
-        elif quality_roll < con_eff * 0.85: quality = "medium"
+        if quality_roll < hard_chance: quality = "hard"
+        elif quality_roll < medium_limit: quality = "medium"
         else: quality = "soft"
         
         base_v = 101 + (power - 50) * 0.45
@@ -793,6 +804,59 @@ class LiveGameEngine:
     def process_pitch_result(self, res, pitch, ball, strategy="NORMAL"):
         pitcher, _ = self.get_current_pitcher()
         batter, _ = self.get_current_batter()
+
+        # --- Plate Discipline Tracking (New) ---
+        is_in_zone = pitch.location.is_strike
+        is_swing = res in [PitchResult.STRIKE_SWINGING, PitchResult.FOUL, PitchResult.IN_PLAY]
+        is_contact = res in [PitchResult.FOUL, PitchResult.IN_PLAY]
+        is_whiff = res == PitchResult.STRIKE_SWINGING
+        
+        # 1. Total Pitches
+        self.game_stats[pitcher]['pitches_thrown'] += 1
+        self.game_stats[batter]['pitches_seen'] += 1
+
+        # 2. Zone / Chase counts
+        if is_in_zone:
+            self.game_stats[pitcher]['zone_pitches'] += 1
+            self.game_stats[batter]['zone_pitches'] += 1
+        else:
+            self.game_stats[pitcher]['chase_pitches'] += 1
+            self.game_stats[batter]['chase_pitches'] += 1
+
+        # 3. Swing counts
+        if is_swing:
+            self.game_stats[pitcher]['swings'] += 1
+            self.game_stats[batter]['swings'] += 1
+            
+            if is_in_zone:
+                self.game_stats[pitcher]['zone_swings'] += 1
+                self.game_stats[batter]['zone_swings'] += 1
+                if is_contact:
+                    self.game_stats[pitcher]['zone_contact'] += 1
+                    self.game_stats[batter]['zone_contact'] += 1
+            else:
+                self.game_stats[pitcher]['chase_swings'] += 1
+                self.game_stats[batter]['chase_swings'] += 1
+                if is_contact:
+                    self.game_stats[pitcher]['chase_contact'] += 1
+                    self.game_stats[batter]['chase_contact'] += 1
+            
+            if is_whiff:
+                self.game_stats[pitcher]['whiffs'] += 1
+                self.game_stats[batter]['whiffs'] += 1
+
+        # 4. Strikes / Balls / First Pitch Strike
+        is_strike_result = res in [PitchResult.STRIKE_CALLED, PitchResult.STRIKE_SWINGING, PitchResult.FOUL, PitchResult.IN_PLAY]
+        
+        if is_strike_result:
+            self.game_stats[pitcher]['strikes_thrown'] += 1
+            if self.state.balls == 0 and self.state.strikes == 0:
+                self.game_stats[pitcher]['first_pitch_strikes'] += 1
+                self.game_stats[batter]['first_pitch_strikes'] += 1
+        else:
+            self.game_stats[pitcher]['balls_thrown'] += 1
+
+        # --- End of Plate Discipline Tracking ---
 
         if res == PitchResult.BALL:
             self.state.balls += 1
