@@ -272,14 +272,11 @@ class NPBPitcherManager:
         if score_diff > 0 and score_diff <= 3:
             if state.inning == 9: # クローザー
                 closer = team.get_closer()
-                if closer and closer != current_pitcher:
-                    # まだ登板していないなら投入
-                    # リストでチェックが必要（簡易的に）
+                if closer and closer != current_pitcher and not closer.is_injured:
                     return closer
             elif state.inning == 8: # セットアッパー
                 setup = team.get_setup_pitcher()
-                if setup and setup != current_pitcher:
-                    # 現在の投手が先発で余力がある場合は続投もありだが、基本はセットアッパー
+                if setup and setup != current_pitcher and not setup.is_injured:
                     if is_starter and current_stamina > 30 and pitch_count < 110:
                         pass
                     else:
@@ -311,7 +308,7 @@ class NPBPitcherManager:
         for p_idx in team.active_roster:
             if 0 <= p_idx < len(team.players):
                 p = team.players[p_idx]
-                if p.position == Position.PITCHER and p not in used_pitchers and p not in rotation_players:
+                if p.position == Position.PITCHER and p not in used_pitchers and p not in rotation_players and not p.is_injured:
                     available_pitchers.append(p)
         
         if not available_pitchers: return None
@@ -864,6 +861,14 @@ class LiveGameEngine:
             get_lineup = lambda: team.current_lineup; set_lineup = lambda l: setattr(team, 'current_lineup', l); get_roster = team.get_active_roster_players
 
         current_lineup = get_lineup()
+        # ★追加: 現在のオーダーに怪我人が含まれていないかチェック
+        has_injured_player = False
+        if current_lineup and len(current_lineup) >= 9:
+            for idx in current_lineup:
+                if 0 <= idx < len(team.players):
+                    if team.players[idx].is_injured:
+                        has_injured_player = True
+                        break
         if not current_lineup or len(current_lineup) < 9:
             players = get_roster()
             if len(players) < 9 and self.team_level != TeamLevel.FIRST:

@@ -472,6 +472,10 @@ class RosterPage(QWidget):
             status += " (外国人)"
         self.info_panel.add_row("ステータス", status)
 
+        # ★追加: 怪我情報の表示
+        if player.is_injured:
+            self.info_panel.add_row("怪我", f"{player.injury_name} (残{player.injury_days}日)")
+
         # Position info
         pos_text = player.position.value
         

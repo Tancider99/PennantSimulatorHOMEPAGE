@@ -30,8 +30,11 @@ class Theme:
     primary_light: str = "#ffffff"    # Bright white alias
     
     accent_blue: str = "#5fbcd3"      # HUD Cyan/Blue
+    accent_blue_hover: str = "#78cce2" # Lighter Cyan (Hover)
     accent_orange: str = "#d65d0e"    # Industrial Orange
+    accent_orange_hover: str = "#e67f33" # Lighter Orange (Hover)
     accent_red: str = "#cc241d"       # Alert Red
+    accent_red_hover: str = "#e04f4f" # Lighter Red (Hover)
     
     # === Text Colors (High Contrast) ===
     text_primary: str = "#f0f0f0"     # Main Text
@@ -60,6 +63,9 @@ class Theme:
     danger_light: str = "#ea959b"
     danger_hover: str = "#d65560"
     
+    # ★追加: エラー用カラー（dangerのエイリアス）
+    error: str = "#e06c75"
+    
     info: str = "#61afef"
     info_light: str = "#8dc5f4"
     info_hover: str = "#4d9fe8"
@@ -78,8 +84,6 @@ class Theme:
     # === Team Colors ===
     north_league: str = "#5fbcd3"
     south_league: str = "#e06c75"
-    north_league: str = "#5fbcd3"   # Use same as north_league for now
-    south_league: str = "#e06c75"   # Use same as south_league for now
 
     # === Rating Colors ===
     rating_s: str = "#ff6b6b"   # S Rank

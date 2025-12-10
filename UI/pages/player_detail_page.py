@@ -457,6 +457,32 @@ class PlayerDetailPage(QWidget):
         add_card_item(0, 1, "年齢", f"{player.age}歳")
         add_card_item(1, 0, "プロ年数", years_str)
         add_card_item(1, 1, "ドラフト", draft_str)
+
+        # ★追加・修正: 怪我情報の表示とコンディション表示
+        if player.is_injured:
+            # 怪我している場合、赤色で表示
+            injury_text = f"{player.injury_name}"
+            days_text = f"残り {player.injury_days} 日"
+            # themeにerrorがない場合に備えてハードコードまたはaccentを使用
+            error_color = getattr(self.theme, 'error', '#FF4444') 
+            
+            add_card_item(2, 0, "怪我状態", injury_text, error_color)
+            add_card_item(2, 1, "全治", days_text, error_color)
+        else:
+            # 健康な場合はコンディション（調子）を表示
+            cond_map = {
+                9: ("絶好調", "#FF0000"), # 赤
+                8: ("絶好調", "#FF0000"),
+                7: ("好調", "#FF8800"),   # オレンジ
+                6: ("好調", "#FF8800"),
+                5: ("普通", self.theme.text_primary),
+                4: ("不調", "#4488FF"),   # 青
+                3: ("不調", "#4488FF"),
+                2: ("絶不調", "#0000FF"), # 濃い青
+                1: ("絶不調", "#0000FF")
+            }
+            cond_text, cond_color = cond_map.get(player.condition, ("普通", self.theme.text_primary))
+            add_card_item(2, 0, "調子", cond_text, cond_color)
         
         # 出身地削除済み
 

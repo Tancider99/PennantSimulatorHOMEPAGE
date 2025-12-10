@@ -1040,6 +1040,10 @@ class Team:
     farm_rotation: List[int] = field(default_factory=list)
     third_lineup: List[int] = field(default_factory=list)
     third_rotation: List[int] = field(default_factory=list)
+    
+    # ★追加: 不足していたフィールド
+    best_order: List[int] = field(default_factory=list)
+    lineup_positions: List[str] = field(default_factory=lambda: ["捕", "一", "二", "三", "遊", "左", "中", "右", "DH"])
 
     ACTIVE_ROSTER_LIMIT = 31
     FARM_ROSTER_LIMIT = 40

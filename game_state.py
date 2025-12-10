@@ -181,6 +181,9 @@ class GameStateManager:
             # 怪我人は論外
             if hasattr(p, 'is_injured') and p.is_injured: continue
             
+            # ★追加: 再昇格待機期間中の選手は除外
+            if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0: continue
+
             # 調子ボーナス
             if p.condition >= 8: score += 50
             elif p.condition <= 3: score -= 50
@@ -355,29 +358,82 @@ class GameStateManager:
                 team.auto_assign_pitching_roles(TeamLevel.THIRD)
 
     def _rotate_lineup_based_on_condition(self, team: Team):
-        """調子や疲労に基づいてスタメンを入れ替える"""
-        # 現在のベストメンバーを生成（models.pyのロジックは調子を加味するよう修正済み）
-        # ただし、全員を毎回入れ替えるとコロコロ変わりすぎるため、
-        # 「絶不調」や「怪我明け」などをベンチの「好調」選手と入れ替える処理を行う
+        """調子や疲労に基づいてスタメンを入れ替える（ベストオーダー優先）"""
         
-        active_batters = [p_idx for p_idx in team.active_roster 
-                          if 0 <= p_idx < len(team.players) 
-                          and team.players[p_idx].position != Position.PITCHER]
-        
-        # スタメン再生成（調子重視）
-        # generate_best_lineup は調子(condition)を見てスコア計算するため、
-        # これを呼び直すだけで自動的に不調な主力が外れ、好調な控えが入る
-        roster_players = [team.players[i] for i in active_batters]
-        new_lineup = generate_best_lineup(team, roster_players)
-        
-        # 捕手のローテーション（疲労概念の簡易実装）
-        # 連戦が続いている場合、2番手捕手を起用する確率を上げる等のロジックも可
-        
-        team.current_lineup = new_lineup
-        
-        # ベンチメンバーの更新
-        assigned = set(team.current_lineup)
-        team.bench_batters = [i for i in active_batters if i not in assigned]
+        # ★追加: ベストオーダーがある場合はそれをベースにする
+        if hasattr(team, 'best_order') and team.best_order and len(team.best_order) >= 9:
+            # ベストオーダーのコピーを作成
+            new_lineup = list(team.best_order)
+            
+            # 使用済み選手セット（ベンチメンバー選定用）
+            used_indices = set(new_lineup)
+            
+            # 交代が必要なポジションを探して埋める
+            for i, p_idx in enumerate(new_lineup):
+                if not (0 <= p_idx < len(team.players)): continue
+                
+                player = team.players[p_idx]
+                needs_replacement = False
+                
+                # 1. 一軍登録抹消されている
+                if p_idx not in team.active_roster:
+                    needs_replacement = True
+                # 2. 怪我している
+                elif player.is_injured:
+                    needs_replacement = True
+                # 3. 絶不調 (コンディション2以下)
+                elif player.condition <= 2:
+                    needs_replacement = True
+                    
+                if needs_replacement:
+                    # 代役を探す (ベンチにいる元気な選手)
+                    # 同じポジションを守れる選手を優先
+                    candidates = []
+                    for bench_idx in team.active_roster:
+                        if bench_idx in used_indices: continue # 既にオーダーに入っている選手は除外
+                        if not (0 <= bench_idx < len(team.players)): continue
+                        
+                        bench_p = team.players[bench_idx]
+                        if bench_p.is_injured: continue
+                        if bench_p.condition <= 2: continue # 不調な選手は選ばない
+                        
+                        # ポジション適性チェック
+                        if bench_p.can_play_position(player.position):
+                            # スコア計算 (打撃 + 調子)
+                            score = bench_p.stats.overall_batting() + (bench_p.condition - 5) * 10
+                            candidates.append((bench_idx, score))
+                    
+                    # 候補がいれば最高スコアの選手と交代
+                    if candidates:
+                        candidates.sort(key=lambda x: x[1], reverse=True)
+                        best_sub_idx = candidates[0][0]
+                        new_lineup[i] = best_sub_idx
+                        used_indices.add(best_sub_idx)
+                        # 元の選手をusedから外す必要はない（どうせ使えないので）
+            
+            team.current_lineup = new_lineup
+            
+            # ベンチメンバーの更新
+            active_batters = [p_idx for p_idx in team.active_roster 
+                            if 0 <= p_idx < len(team.players) 
+                            and team.players[p_idx].position.value != "投手"]
+            assigned = set(team.current_lineup)
+            team.bench_batters = [i for i in active_batters if i not in assigned]
+            
+        else:
+            # 既存ロジック: ベストオーダーがない場合は毎回自動生成
+            active_batters = [p_idx for p_idx in team.active_roster 
+                            if 0 <= p_idx < len(team.players) 
+                            and team.players[p_idx].position.value != "投手"]
+            
+            # スタメン再生成（調子重視）
+            roster_players = [team.players[i] for i in active_batters]
+            new_lineup = generate_best_lineup(team, roster_players)
+            
+            team.current_lineup = new_lineup
+            
+            assigned = set(team.current_lineup)
+            team.bench_batters = [i for i in active_batters if i not in assigned]
 
     def _ensure_valid_roster(self, team: Team):
         valid_starters = len([x for x in team.current_lineup if x != -1])
