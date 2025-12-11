@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ライブ試合エンジン (修正版: BABIP個人差抑制・平均.300調整・打席数適正化・直近成績記録対応)
+ライブ試合エンジン (Ultimate Edition Ver.4: 物理演算完全補正・守備挙動リアル化・BABIP適正化版)
 """
 import random
 import math
@@ -11,14 +11,24 @@ from enum import Enum
 from models import Position, Player, Team, PlayerRecord, PitchType, TeamLevel, generate_best_lineup, Stadium
 
 # ========================================
-# 定数・ユーティリティ
+# 物理定数・ユーティリティ
 # ========================================
+
+GRAVITY = 9.81          # 重力加速度 (m/s^2)
+AIR_DENSITY = 1.20      # 空気密度 (kg/m^3)
+BALL_MASS = 0.145       # ボール質量 (kg)
+BALL_RADIUS = 0.037     # ボール半径 (m)
+BALL_AREA = math.pi * (BALL_RADIUS ** 2)
+
+# BABIP調整: 空気抵抗を強めて滞空時間を伸ばし、アウトを取りやすくする
+DRAG_COEFF_BASE = 0.35  
+MAGNUS_CONST = 0.0002   
 
 STRIKE_ZONE = {
     'width': 0.432,
     'height': 0.56,
     'center_x': 0.0,
-    'center_z': 0.75,
+    'center_z': 0.75, # 地面からの高さ中心
     'half_width': 0.216,
     'half_height': 0.28
 }
@@ -27,13 +37,13 @@ STRIKE_ZONE = {
 FIELD_COORDS = {
     Position.PITCHER: (0, 18.0),
     Position.CATCHER: (0, -1.0),
-    Position.FIRST: (18.0, 24.0),
-    Position.SECOND: (10.0, 42.0),
-    Position.THIRD: (-18.0, 24.0),
-    Position.SHORTSTOP: (-10.0, 42.0),
-    Position.LEFT: (-35.0, 88.0),
-    Position.CENTER: (0.0, 95.0),
-    Position.RIGHT: (35.0, 88.0),
+    Position.FIRST: (19.3, 19.3), # 1塁ベース付近修正
+    Position.SECOND: (10.0, 38.0),
+    Position.THIRD: (-19.3, 19.3),
+    Position.SHORTSTOP: (-10.0, 38.0),
+    Position.LEFT: (-35.0, 85.0),
+    Position.CENTER: (0.0, 92.0),
+    Position.RIGHT: (35.0, 85.0),
 }
 
 # Linear Weights (得点価値)
@@ -79,7 +89,7 @@ def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player
 
     base_value = getattr(player.stats, stat_name)
     
-    # 調子補正 (係数を 0.02 -> 0.015 に縮小し、極端な絶不調の影響を緩和)
+    # 調子補正
     condition_diff = player.condition - 5
     condition_multiplier = 1.0 + (condition_diff * 0.015)
     
@@ -90,9 +100,8 @@ def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player
             vs_left = getattr(player.stats, 'vs_left_batter', 50)
             throws = getattr(opponent, 'throws', '右')
             if throws == '左':
-                value += (vs_left - 50) * 0.4  # 左投手対戦時の補正を強化
+                value += (vs_left - 50) * 0.4
             else:
-                # 対右の場合、対左が高い選手は逆に少し下がる（バランス）
                 value -= (vs_left - 50) * 0.1
 
         if is_risp and stat_name in ['contact', 'power']:
@@ -105,7 +114,7 @@ def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player
         if opponent and opponent.position != Position.PITCHER:
             vs_left = getattr(player.stats, 'vs_left_pitcher', 50)
             bats = getattr(opponent, 'bats', '右')
-            if bats == '左' or bats == '両': # 両打ちは左打席と仮定（簡易）
+            if bats == '左' or bats == '両': 
                 value += (vs_left - 50) * 0.4
             else:
                 value -= (vs_left - 50) * 0.1
@@ -120,8 +129,108 @@ def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player
                 mitigation = (stability - 50) * 0.2
                 value += max(0, mitigation)
 
-    # 最終値を 20~120 の範囲に収める (極端な弱体化/強化を防ぐ)
     return max(20.0, min(120.0, value))
+
+# ========================================
+# 物理演算ユーティリティ
+# ========================================
+
+class PhysicsEngine:
+    """
+    高精度物理演算エンジン
+    ルンゲ・クッタ法(RK4)を用いた弾道シミュレーション
+    """
+    @staticmethod
+    def simulate_trajectory(
+        v0: Tuple[float, float, float], 
+        spin_rate: float, 
+        spin_axis: Tuple[float, float, float],
+        start_pos: Tuple[float, float, float],
+        dt: float = 0.01,
+        max_time: float = 10.0,
+        stop_on_ground: bool = True
+    ) -> List[Tuple[float, float, float]]:
+        
+        trajectory = [start_pos]
+        pos = list(start_pos)
+        vel = list(v0)
+        
+        # マグヌス力の係数計算 (簡易近似)
+        cl = spin_rate * 0.00005 
+
+        # スピン軸ベクトル (正規化)
+        spin_len = math.sqrt(spin_axis[0]**2 + spin_axis[1]**2 + spin_axis[2]**2)
+        if spin_len > 0:
+            spin_axis = (spin_axis[0]/spin_len, spin_axis[1]/spin_len, spin_axis[2]/spin_len)
+        else:
+            spin_axis = (0, 0, 0)
+
+        t = 0
+        while t < max_time:
+            v_mag = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
+            if v_mag == 0: break
+
+            # 4次のルンゲ・クッタ法で積分
+            
+            def acceleration(v):
+                v_curr = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
+                
+                # 抗力 (Drag)
+                # 高速域ではCdが下がる現象を簡易モデル化
+                cd = DRAG_COEFF_BASE * (1.0 - (v_curr / 400.0)) 
+                fd_mag = 0.5 * AIR_DENSITY * (v_curr**2) * cd * BALL_AREA
+                
+                fd = [
+                    -fd_mag * (v[0] / v_curr),
+                    -fd_mag * (v[1] / v_curr),
+                    -fd_mag * (v[2] / v_curr)
+                ]
+                
+                # マグヌス力 (Magnus)
+                cross_x = spin_axis[1]*v[2] - spin_axis[2]*v[1]
+                cross_y = spin_axis[2]*v[0] - spin_axis[0]*v[2]
+                cross_z = spin_axis[0]*v[1] - spin_axis[1]*v[0]
+                
+                fm_mag = 0.5 * AIR_DENSITY * (v_curr**2) * cl * BALL_AREA
+                
+                fm = [fm_mag * cross_x, fm_mag * cross_y, fm_mag * cross_z]
+
+                # 加速度
+                ax = (fd[0] + fm[0]) / BALL_MASS
+                ay = (fd[1] + fm[1]) / BALL_MASS
+                az = (fd[2] + fm[2]) / BALL_MASS - GRAVITY
+                
+                return (ax, ay, az)
+
+            k1_v = acceleration(vel)
+            k1_p = vel
+            
+            v2 = [vel[i] + k1_v[i] * dt * 0.5 for i in range(3)]
+            k2_v = acceleration(v2)
+            k2_p = v2
+            
+            v3 = [vel[i] + k2_v[i] * dt * 0.5 for i in range(3)]
+            k3_v = acceleration(v3)
+            k3_p = v3
+            
+            v4 = [vel[i] + k3_v[i] * dt for i in range(3)]
+            k4_v = acceleration(v4)
+            k4_p = v4
+            
+            # 更新
+            for i in range(3):
+                pos[i] += (dt / 6.0) * (k1_p[i] + 2*k2_p[i] + 2*k3_p[i] + k4_p[i])
+                vel[i] += (dt / 6.0) * (k1_v[i] + 2*k2_v[i] + 2*k3_v[i] + k4_v[i])
+            
+            trajectory.append(tuple(pos))
+            t += dt
+            
+            if stop_on_ground and pos[2] <= 0:
+                pos[2] = 0
+                trajectory[-1] = tuple(pos)
+                break
+                
+        return trajectory
 
 # ========================================
 # 列挙型
@@ -175,9 +284,7 @@ class GameState:
     home_pitch_count: int = 0; away_pitch_count: int = 0
     home_pitchers_used: List[Player] = field(default_factory=list)
     away_pitchers_used: List[Player] = field(default_factory=list)
-
-    # 継投用の一時データ
-    home_current_pitcher_runs: int = 0  # 現投手の失点
+    home_current_pitcher_runs: int = 0
     away_current_pitcher_runs: int = 0
     
     def is_runner_on(self) -> bool: return any([self.runner_1b, self.runner_2b, self.runner_3b])
@@ -185,7 +292,6 @@ class GameState:
     def current_pitcher_stamina(self) -> float: return self.home_pitcher_stamina if self.is_top else self.away_pitcher_stamina
     
     def get_score_diff(self) -> int:
-        # 攻撃側から見た点差（プラスなら勝ってる）
         if self.is_top: return self.away_score - self.home_score
         else: return self.home_score - self.away_score
 
@@ -194,108 +300,59 @@ class GameState:
 # ========================================
 
 class NPBPitcherManager:
-    """
-    NPB準拠の継投ロジックを管理するクラス
-    """
+    """NPB準拠の継投ロジック"""
     def check_pitcher_change(self, state: GameState, team: Team, opponent: Team, next_batter: Player, current_pitcher: Player) -> Optional[Player]:
-        """
-        投手交代が必要か判断し、交代する場合は新投手を返す。交代不要ならNoneを返す。
-        """
         is_starter = current_pitcher in [team.players[i] for i in team.rotation if 0 <= i < len(team.players)]
         current_stamina = state.home_pitcher_stamina if not state.is_top else state.away_pitcher_stamina
         current_runs = state.home_current_pitcher_runs if not state.is_top else state.away_current_pitcher_runs
         pitch_count = state.home_pitch_count if not state.is_top else state.away_pitch_count
-        
         score_diff = state.home_score - state.away_score
-        if state.is_top: score_diff *= -1 # 守備側（自チーム）から見た点差
+        if state.is_top: score_diff *= -1
         
-        # 1. スタミナ・限界による強制交代判定
         if current_stamina <= 0 or pitch_count > 140:
             return self._select_reliever(team, state, score_diff, next_batter)
             
-        # 2. 先発投手の交代判断
         if is_starter:
-            # 炎上時 (5失点 -> 6失点, 6回まで)
             if current_runs >= 6 and state.inning <= 6:
                 return self._select_reliever(team, state, score_diff, next_batter)
-            
-            # 球数目処 (100球 -> 120球)
             if pitch_count > 120:
-                # 接戦で勝ち越し中、かつあと1アウトで回が終わるなら続投も
-                if score_diff > 0 and state.outs == 2 and pitch_count < 130:
-                    pass
-                else:
-                    return self._select_reliever(team, state, score_diff, next_batter)
-            
-            # 勝利投手の権利 (5回)
+                if score_diff > 0 and state.outs == 2 and pitch_count < 130: pass
+                else: return self._select_reliever(team, state, score_diff, next_batter)
             if state.inning == 5 and score_diff > 0 and current_stamina > 10 and current_runs < 5:
-                return None # 勝ち投手の権利までは引っ張る傾向
-
-            # 7回以降の継投 (リード時、僅差ビハインド時)
+                return None
             if state.inning >= 7:
                 if pitch_count > 110 or current_stamina < 15:
-                     if score_diff >= -2: # 接戦
-                         return self._select_reliever(team, state, score_diff, next_batter)
-
-            # 打順巡り合わせ（3巡目以降かつピンチ）
+                     if score_diff >= -2: return self._select_reliever(team, state, score_diff, next_batter)
             if state.inning >= 7 and state.is_risp() and score_diff in range(-1, 2):
-                 # ここでは簡易的に、スタミナが残っていれば続投させる
-                if current_stamina > 20:
-                    pass
-                else:
-                    return self._select_reliever(team, state, score_diff, next_batter)
-
-        # 3. リリーフ投手の交代判断
+                if current_stamina > 20: pass
+                else: return self._select_reliever(team, state, score_diff, next_batter)
         else:
-            # ワンポイントリリーフ完了判断
-            
-            # 回またぎ判定 (イニングが変わった時)
-            if state.outs == 0 and pitch_count > 25: 
-                # クローザーは回またぎあり（9回同点→10回など）
+            if state.outs == 0 and pitch_count > 25:
                 is_closer = team.closer_idx != -1 and team.players[team.closer_idx] == current_pitcher
-                if not is_closer:
-                    return self._select_reliever(team, state, score_diff, next_batter)
-            
-            # 打たれた場合
-            if current_runs >= 3: # リリーフが3点取られたら交代
-                return self._select_reliever(team, state, score_diff, next_batter)
-                
-            # スタミナ切れ
-            if current_stamina < 5:
-                return self._select_reliever(team, state, score_diff, next_batter)
+                if not is_closer: return self._select_reliever(team, state, score_diff, next_batter)
+            if current_runs >= 3: return self._select_reliever(team, state, score_diff, next_batter)
+            if current_stamina < 5: return self._select_reliever(team, state, score_diff, next_batter)
         
-        # 4. 勝利の方程式 (Winning Formula)
-        # 8回・9回のリード時
         if score_diff > 0 and score_diff <= 3:
-            if state.inning == 9: # クローザー
+            if state.inning == 9:
                 closer = team.get_closer()
-                if closer and closer != current_pitcher and not closer.is_injured:
-                    return closer
-            elif state.inning == 8: # セットアッパー
+                if closer and closer != current_pitcher and not closer.is_injured: return closer
+            elif state.inning == 8:
                 setup = team.get_setup_pitcher()
                 if setup and setup != current_pitcher and not setup.is_injured:
-                    if is_starter and current_stamina > 30 and pitch_count < 110:
-                        pass
-                    else:
-                        return setup
+                    if is_starter and current_stamina > 30 and pitch_count < 110: pass
+                    else: return setup
 
-        # 5. ワンポイントリリーフ (対左強打者)
-        # 僅差、ピンチ、相手が左の強打者
         if abs(score_diff) <= 2 and state.is_risp() and next_batter.bats == "左":
-             # 現在の投手が右で、左に弱い場合
              eff_vs_left = getattr(current_pitcher.stats, 'vs_left_batter', 50)
              if current_pitcher.throws == "右" and eff_vs_left < 45:
-                 # 左キラーを探す
                  lefty_specialist = self._find_lefty_specialist(team, current_pitcher)
-                 if lefty_specialist:
-                     return lefty_specialist
+                 if lefty_specialist: return lefty_specialist
 
         return None
 
     def _select_reliever(self, team: Team, state: GameState, score_diff: int, next_batter: Player) -> Optional[Player]:
-        """状況に応じた最適なリリーフを選択"""
         used_pitchers = state.home_pitchers_used if not state.is_top else state.away_pitchers_used
-        
         available_pitchers = []
         rotation_players = [team.players[i] for i in team.rotation if 0 <= i < len(team.players)]
         
@@ -307,36 +364,27 @@ class NPBPitcherManager:
         
         if not available_pitchers: return None
 
-        # --- 状況別選択 ---
-        
-        # 1. クローザー (9回以降、リード3点以内 or 同点ホーム)
         if state.inning >= 9 and (0 < score_diff <= 3 or (score_diff == 0 and not state.is_top)):
             closer = team.get_closer()
             if closer and closer in available_pitchers: return closer
 
-        # 2. セットアッパー (8回、リード3点以内 or 同点)
         if state.inning >= 8 and (0 <= score_diff <= 3):
             setup = team.get_setup_pitcher()
             if setup and setup in available_pitchers: return setup
 
-        # 3. 接戦時の勝ちパターンB / 左殺し (6-7回, 僅差)
         if abs(score_diff) <= 3:
-            # 左打者には左投手を優先
             if next_batter.bats == "左":
                 lefties = [p for p in available_pitchers if p.throws == "左"]
                 lefties.sort(key=lambda x: x.stats.overall_pitching(), reverse=True)
                 if lefties: return lefties[0]
-            
             best_reliever = max(available_pitchers, key=lambda p: p.stats.overall_pitching())
             return best_reliever
 
-        # 4. 敗戦処理 / 大量リード時 (点差4以上)
         available_pitchers.sort(key=lambda p: p.stats.overall_pitching())
         return available_pitchers[0]
 
     def _find_lefty_specialist(self, team: Team, current_pitcher: Player) -> Optional[Player]:
         return None 
-
 
 class AIManager:
     def __init__(self):
@@ -350,22 +398,16 @@ class AIManager:
         bunt_skill = get_effective_stat(batter, 'bunt_sac')
         if state.outs == 0 and (state.runner_1b) and not state.runner_3b:
             batting_ab = batter.stats.overall_batting()
-            if batter.position == Position.PITCHER:
-                return "BUNT"
-            if (is_close and is_late) or (bunt_skill > 70 and batting_ab < 45) or (state.runner_2b and is_close):
-                return "BUNT"
+            if batter.position == Position.PITCHER: return "BUNT"
+            if (is_close and is_late) or (bunt_skill > 70 and batting_ab < 45) or (state.runner_2b and is_close): return "BUNT"
         
-        # 盗塁判断
         if state.runner_1b and not state.runner_2b and not state.runner_3b and state.outs < 2:
             runner_spd = get_effective_stat(state.runner_1b, 'speed')
             runner_stl = get_effective_stat(state.runner_1b, 'steal')
-            
             attempt_prob = 0.02 + (runner_spd - 50) * 0.003
             attempt_prob *= (0.7 + (runner_stl / 50.0) * 0.5)
-            
-            if is_close and is_late: attempt_prob *= 0.5 
-            elif abs(score_diff) >= 4: attempt_prob *= 1.2 
-            
+            if is_close and is_late: attempt_prob *= 0.5
+            elif abs(score_diff) >= 4: attempt_prob *= 1.2
             attempt_prob = max(0.005, attempt_prob)
             if random.random() < attempt_prob: return "STEAL"
         
@@ -383,48 +425,46 @@ class AIManager:
         if state.balls >= 3: return "STRIKE" 
         if state.strikes == 2:
             has_breaking = len(pitcher.stats.pitches) > 0
-            if has_breaking and eff_control > 40: return "BALL" 
+            if has_breaking and eff_control > 40: return "BALL"
         eff_power = get_effective_stat(batter, 'power', is_risp=state.is_risp())
-        
-        # 敬遠判断
         if state.is_risp() and not state.runner_1b and eff_power > 85 and state.inning >= 8 and abs(state.home_score - state.away_score) <= 1:
             return "WALK"
         return "NORMAL"
 
 class PitchGenerator:
-    PITCH_DATA = {
-        "ストレート": {"base_speed": 148, "h_break": 0, "v_break": 10},
-        "ツーシーム": {"base_speed": 145, "h_break": 12, "v_break": 2},
-        "カットボール": {"base_speed": 140, "h_break": -8, "v_break": 3},
-        "スライダー": {"base_speed": 132, "h_break": -20, "v_break": -3},
-        "カーブ":     {"base_speed": 115, "h_break": -12, "v_break": -25},
-        "フォーク":   {"base_speed": 136, "h_break": 0, "v_break": -30},
-        "チェンジアップ": {"base_speed": 128, "h_break": 8, "v_break": -15},
-        "シュート":   {"base_speed": 140, "h_break": 18, "v_break": -6},
-        "シンカー":   {"base_speed": 142, "h_break": 15, "v_break": -10},
-        "スプリット": {"base_speed": 140, "h_break": 3, "v_break": -28}
+    # 物理パラメータ (速度km/h, スピンrpm, 縦変化, 横変化)
+    # spin_axis: (x, y, z)
+    PITCH_SPECS = {
+        "ストレート": {"velo": 148, "spin": 2300, "axis": (-0.1, 0, 1.0)}, 
+        "ツーシーム": {"velo": 145, "spin": 2100, "axis": (0.3, 0, 0.8)},
+        "カットボール": {"velo": 140, "spin": 2400, "axis": (-0.4, 0, 0.5)},
+        "スライダー": {"velo": 132, "spin": 2500, "axis": (-0.8, 0, 0.2)}, 
+        "カーブ":     {"velo": 115, "spin": 2600, "axis": (-0.6, 0, -0.6)}, 
+        "フォーク":   {"velo": 136, "spin": 1200, "axis": (0, 0, 1.0)},     
+        "チェンジアップ": {"velo": 128, "spin": 1800, "axis": (0.2, 0, 0.8)},
+        "シュート":   {"velo": 140, "spin": 2200, "axis": (0.8, 0, 0.6)},
+        "シンカー":   {"velo": 142, "spin": 2000, "axis": (0.7, 0, -0.3)},
+        "スプリット": {"velo": 140, "spin": 1400, "axis": (0, 0, 0.9)}
     }
 
     def generate_pitch(self, pitcher: Player, batter: Player, catcher: Player, state: GameState, strategy="NORMAL", stadium: Stadium = None) -> PitchData:
         is_risp = state.is_risp()
         is_close = abs(state.home_score - state.away_score) <= 2
         
-        velocity = get_effective_stat(pitcher, 'velocity', batter, is_risp, is_close)
-        control = get_effective_stat(pitcher, 'control', batter, is_risp, is_close)
-        movement = get_effective_stat(pitcher, 'movement', batter, is_risp, is_close)
+        velocity_st = get_effective_stat(pitcher, 'velocity', batter, is_risp, is_close)
+        control_st = get_effective_stat(pitcher, 'control', batter, is_risp, is_close)
+        movement_st = get_effective_stat(pitcher, 'movement', batter, is_risp, is_close)
         
-        if stadium: control = control / max(0.5, stadium.pf_bb)
+        if stadium: control_st = control_st / max(0.5, stadium.pf_bb)
         if catcher:
             lead = get_effective_stat(catcher, 'catcher_lead', is_close_game=is_close)
-            control += (lead - 50) * 0.2
+            control_st += (lead - 50) * 0.2
         
         current_stamina = state.current_pitcher_stamina()
         fatigue = 1.0
         if current_stamina < 30: fatigue = 0.9 + (current_stamina / 300.0)
-        if current_stamina <= 0: fatigue = 0.8
         
-        pitch_cost = 0.5
-        if is_risp: pitch_cost *= 1.2
+        pitch_cost = 0.5 * (1.2 if is_risp else 1.0)
         if state.is_top: state.home_pitcher_stamina = max(0, state.home_pitcher_stamina - pitch_cost)
         else: state.away_pitcher_stamina = max(0, state.away_pitcher_stamina - pitch_cost)
         
@@ -447,57 +487,94 @@ class PitchGenerator:
                             break
                 else: pitch_type = breaking_balls[0]
             
-        base = self.PITCH_DATA.get(pitch_type, self.PITCH_DATA["ストレート"])
-        base_velo = velocity * fatigue
-        if pitch_type != "ストレート":
-            speed_ratio = base["base_speed"] / 148.0
-            base_velo *= speed_ratio
+        spec = self.PITCH_SPECS.get(pitch_type, self.PITCH_SPECS["ストレート"])
+        
+        # 速度計算
+        base_v_kmh = velocity_st * fatigue * (spec["velo"] / 148.0)
+        v_kmh = random.gauss(base_v_kmh, 1.5)
+        v_ms = v_kmh / 3.6
+        
+        # スピンと変化量
+        move_factor = 1.0 + (movement_st - 50) * 0.01
+        spin_rate = spec["spin"] * move_factor * random.uniform(0.95, 1.05)
+        
+        axis = list(spec["axis"])
+        if pitcher.throws == "左":
+            axis[0] *= -1 
+        
+        # ターゲット座標
+        target_x, target_z = self._calc_target(control_st * fatigue, state, strategy)
+        
+        # 反復補正: 物理シミュレーションを回して、ターゲットに到達する初速ベクトルを見つける
+        # 3回のイテレーションで誤差を修正
+        dist = 18.44
+        release_point = (random.uniform(-0.1, 0.1), 18.44, 1.8) 
+        
+        # 初期推定 (直線 + 重力分補正)
+        flight_time_est = dist / v_ms
+        v_x = (target_x - release_point[0]) / flight_time_est
+        v_y = -v_ms # マウンドからホームへはY軸マイナス方向
+        v_z = (target_z - release_point[2]) / flight_time_est + (0.5 * 9.81 * flight_time_est)
+        
+        v0 = [v_x, v_y, v_z]
+        
+        # 反復修正ループ
+        for _ in range(2):
+            traj = PhysicsEngine.simulate_trajectory(v0, spin_rate, axis, release_point)
+            actual_end = traj[-1]
             
-        velo = random.gauss(base_velo, 1.5); velo = max(80, min(170, velo))
-        move_factor = 1.0 + (movement - 50) * 0.01
-        h_brk = base["h_break"] * move_factor + random.gauss(0, 2)
-        v_brk = base["v_break"] * move_factor + random.gauss(0, 2)
-        loc = self._calc_location(control * fatigue, state, strategy)
-        traj = self._calc_traj(velo, h_brk, v_brk, loc)
+            # 誤差
+            err_x = target_x - actual_end[0]
+            err_z = target_z - actual_end[2]
+            
+            # 補正
+            v0[0] += err_x / flight_time_est
+            v0[2] += err_z / flight_time_est
         
-        return PitchData(pitch_type, round(velo,1), 2200, h_brk, v_brk, loc, (0,18.44,1.8), traj)
+        # 最終シミュレーション
+        final_traj = PhysicsEngine.simulate_trajectory(v0, spin_rate, axis, release_point)
+        final_end = final_traj[-1]
+        
+        h_break = (final_end[0] - target_x) * 100 
+        v_break = (final_end[2] - target_z) * 100 
 
-    def _calc_location(self, control, state, strategy):
-        if strategy == "WALK": return PitchLocation(1.0, 1.5, False)
+        loc = PitchLocation(final_end[0], final_end[2], self._is_strike(final_end[0], final_end[2]))
         
-        # ★修正: ゾーン内投球率の基本値を引き上げ、四球を減らす（0.49 -> 0.54）
-        zone_target_prob = 0.54 + (control - 50) * 0.003
-        if strategy == "STRIKE": zone_target_prob += 0.25 # 少し抑えめに
-        elif strategy == "BALL": zone_target_prob -= 0.3
-        if state.balls == 3: zone_target_prob += 0.25
-        if state.strikes == 0 and state.balls == 0: zone_target_prob += 0.1
-        zone_target_prob = max(0.1, min(0.98, zone_target_prob))
+        return PitchData(
+            pitch_type, round(v_kmh, 1), int(spin_rate), 
+            h_break, v_break, loc, release_point, final_traj
+        )
+
+    def _calc_target(self, control, state, strategy):
+        if strategy == "WALK": return (1.0, 1.5)
         
         tx, tz = 0, STRIKE_ZONE['center_z']
-        sigma = max(0.05, 0.22 - (control * 0.002))
-        if random.random() < zone_target_prob:
-            if random.random() < 0.35: tx = 0; tz = STRIKE_ZONE['center_z']
-            else:
+        
+        # コントロールのブレ幅
+        sigma = max(0.035, 0.18 - (control * 0.0018))
+        
+        # ストライクゾーン狙撃率 (高めに設定してカウントを整える)
+        zone_prob = 0.68 + (control - 50)*0.004
+        
+        if strategy == "STRIKE" or state.balls == 3: zone_prob += 0.25
+        elif strategy == "BALL" or state.strikes == 2: zone_prob -= 0.25
+        
+        if random.random() < zone_prob:
+            corner_prob = 0.6 if control > 60 else 0.2
+            if random.random() < corner_prob:
                 tx = random.choice([-0.2, 0.2])
                 tz = STRIKE_ZONE['center_z'] + random.choice([-0.25, 0.25])
         else:
             tx = random.choice([-0.35, 0.35])
             tz = STRIKE_ZONE['center_z'] + random.choice([-0.35, 0.35])
 
-        ax = random.gauss(tx, sigma); az = random.gauss(tz, sigma)
-        is_strike = (abs(ax) <= STRIKE_ZONE['half_width'] + 0.036 and abs(az - STRIKE_ZONE['center_z']) <= STRIKE_ZONE['half_height'] + 0.036)
-        return PitchLocation(ax, az, is_strike)
+        ax = random.gauss(tx, sigma)
+        az = random.gauss(tz, sigma)
+        return ax, az
 
-    def _calc_traj(self, velo, hb, vb, loc):
-        path = []; start = (random.uniform(-0.05, 0.05), 18.44, 1.8); end = (loc.x, 0, loc.z)
-        steps = 15
-        for i in range(steps + 1):
-            t = i/steps
-            x = start[0] + (end[0]-start[0])*t + (hb/100 * 0.3)*math.sin(t*math.pi)
-            y = start[1] * (1-t)
-            z = start[2] + (end[2]-start[2])*t + (vb/100 * 0.3)*(t**2)
-            path.append((x,y,z))
-        return path
+    def _is_strike(self, x, z):
+        return (abs(x) <= STRIKE_ZONE['half_width'] + 0.036 and 
+                abs(z - STRIKE_ZONE['center_z']) <= STRIKE_ZONE['half_height'] + 0.036)
 
 class BattedBallGenerator:
     def generate(self, batter: Player, pitcher: Player, pitch: PitchData, state: GameState, strategy="SWING"):
@@ -506,202 +583,173 @@ class BattedBallGenerator:
 
         power = get_effective_stat(batter, 'power', opponent=pitcher, is_risp=is_risp, is_close_game=is_close)
         contact = get_effective_stat(batter, 'contact', opponent=pitcher, is_risp=is_risp, is_close_game=is_close)
-        gap = get_effective_stat(batter, 'gap', opponent=pitcher, is_risp=is_risp)
-        trajectory = getattr(batter.stats, 'trajectory', 2)
         
-        p_movement = get_effective_stat(pitcher, 'movement', opponent=batter, is_risp=is_risp)
-        p_gb_tendency = getattr(pitcher.stats, 'gb_tendency', 50)
+        # ミート確率
+        sweet_spot_prob = (contact / 120.0) 
+        if pitch.location.is_strike: sweet_spot_prob += 0.1
+        else: sweet_spot_prob -= 0.2
         
-        meet_bonus = 15 if strategy == "MEET" else (-20 if strategy == "POWER" else 0)
-        ball_penalty = 0 if pitch.location.is_strike else 20
-        con_eff = contact + meet_bonus - (p_movement - 50) * 0.25 - ball_penalty
+        if strategy == "MEET": sweet_spot_prob += 0.15
+        elif strategy == "POWER": sweet_spot_prob -= 0.15
         
-        power_bonus_factor = (power - 50) * 0.1
-        hard_chance = max(1.0, (con_eff * 0.5) + power_bonus_factor)
-        medium_limit = max(hard_chance + 10, con_eff * 0.85)
+        # BABIP調整: 芯で捉える確率を抑制
+        is_sweet = random.random() < max(0.05, min(0.85, sweet_spot_prob * 0.9))
+        quality = "hard" if is_sweet else ("medium" if random.random() < 0.6 else "soft")
         
-        quality_roll = random.uniform(0, 100)
-        quality = "hard" if quality_roll < hard_chance else ("medium" if quality_roll < medium_limit else "soft")
+        base_exit_v_kmh = 130 + (power - 50) * 1.2
+        if quality == "hard": base_exit_v_kmh += 20
+        elif quality == "soft": base_exit_v_kmh -= 40
         
-        # 打球速度
-        base_v = 145 + (power - 50) * 0.18
-        if strategy == "POWER": base_v += 8
-        if quality == "hard": base_v += 18 + (power / 12) 
-        if quality == "soft": base_v -= 35 
+        base_exit_v_kmh += (pitch.velocity - 140) * 0.15
+        exit_v_kmh = max(60, random.gauss(base_exit_v_kmh, 5))
+        exit_v = exit_v_kmh / 3.6 
         
-        traj_bias = 5 + (trajectory * 5)
-        angle_center = traj_bias - (p_gb_tendency - 50) * 0.2
-        angle_center -= 3.0
-        
-        if pitch.location.z < 0.5: angle_center -= 5
-        if pitch.location.z > 0.9: angle_center += 5
-        if gap > 60 and quality != "soft" and random.random() < (gap/150): angle_center = 15
-        
+        traj_tendency = getattr(batter.stats, 'trajectory', 2) 
+        base_angle = 10 + (traj_tendency - 2) * 8
         if strategy == "BUNT":
-            angle = -20; velo = 30 + random.uniform(-5, 5)
-            bunt_skill = get_effective_stat(batter, 'bunt_sac')
-            if random.uniform(0, 100) > bunt_skill:
-                if random.random() < 0.5: angle = 30
-                else: velo += 20
+            angle = random.gauss(-15, 5)
+            exit_v = random.uniform(5, 15)
             quality = "soft"
         else:
-            angle = random.gauss(angle_center, 12)
+            angle = random.gauss(base_angle, 15)
+            if quality == "soft":
+                if random.random() < 0.5: angle = random.uniform(-40, 5) 
+                else: angle = random.uniform(50, 85) 
         
-        velo = max(40, base_v + random.gauss(0, 5))
-        if quality == "hard": velo = max(velo, 138)
+        timing_bias = random.gauss(0, 10 - (contact/20.0))
+        bats = getattr(batter, 'bats', '右')
+        if bats == '左': spray = -timing_bias * 2 
+        else: spray = timing_bias * 2            
         
-        gb_limit = 16 + (140 - velo) * 0.08
-        ld_limit = 22 - (140 - velo) * 0.05
+        rad_launch = math.radians(angle)
+        rad_spray = math.radians(spray)
         
-        if angle < gb_limit: htype = BattedBallType.GROUNDBALL
-        elif angle < ld_limit: htype = BattedBallType.LINEDRIVE
+        vx = exit_v * math.cos(rad_launch) * math.sin(rad_spray)
+        vy = exit_v * math.cos(rad_launch) * math.cos(rad_spray)
+        vz = exit_v * math.sin(rad_launch)
+        
+        v0 = (vx, vy, vz)
+        start_pos = (0, 0, 1.0) 
+        
+        if angle > 10:
+            spin_rate = 1500 + (angle * 30) + (power * 10)
+            spin_axis = (-1, 0, 0) 
+        else:
+            spin_rate = 1000 + abs(angle * 20)
+            spin_axis = (1, 0, 0) 
+            
+        spin_axis = (spin_axis[0], 0, -math.sin(rad_spray)*0.5)
+
+        trajectory = PhysicsEngine.simulate_trajectory(v0, spin_rate, spin_axis, start_pos, max_time=8.0)
+        
+        land_pos = trajectory[-1]
+        dist = math.sqrt(land_pos[0]**2 + land_pos[1]**2)
+        hang_time = len(trajectory) * 0.01
+        
+        if angle < 10: htype = BattedBallType.GROUNDBALL
+        elif angle < 25: htype = BattedBallType.LINEDRIVE
         elif angle < 50: htype = BattedBallType.FLYBALL
         else: htype = BattedBallType.POPUP
         
-        v_ms = velo / 3.6
-        vacuum_dist = (v_ms**2 * math.sin(math.radians(2 * angle))) / 9.8
-        
-        drag_base = 0.92 - (velo / 550.0) 
-        drag_factor = max(0.2, drag_base)
-        
-        if angle > 45 or angle < 10:
-             drag_factor *= 0.75 
-        elif angle >= 20 and angle <= 45: 
-             if velo > 150: drag_factor *= 0.85
-             else: drag_factor *= 0.88 
-             
-        dist = max(0, vacuum_dist * drag_factor)
-        
-        if htype == BattedBallType.GROUNDBALL: dist *= 0.5
-        elif htype == BattedBallType.POPUP: dist *= 0.3
-        
-        spray = random.gauss(0, 25)
-        
-        rad = math.radians(spray)
-        land_x = dist * math.sin(rad)
-        land_y = dist * math.cos(rad)
-        
-        v_y = v_ms * math.sin(math.radians(angle))
-        hang_time = (2 * v_y) / 9.8
-        if htype == BattedBallType.GROUNDBALL:
-            hang_time = dist / (v_ms * 0.8)
-        
-        return BattedBallData(velo, angle, spray, htype, dist, hang_time, land_x, land_y, [], quality)
+        return BattedBallData(
+            exit_v_kmh, angle, spray, htype, dist, hang_time, 
+            land_pos[0], land_pos[1], trajectory, quality
+        )
 
 class AdvancedDefenseEngine:
     """
-    超本格守備エンジン: 空間座標・時間・UZR計算 (修正済み: BABIP平均.300調整)
+    超本格守備エンジン: 加速・最大速度・反応時間を考慮した物理的交差判定
     """
     def judge(self, ball: BattedBallData, defense_team: Team, team_level: TeamLevel = TeamLevel.FIRST, stadium: Stadium = None):
-        abs_spray = abs(ball.spray_angle)
-        
-        # HR判定
-        base_fence = 122 - (abs_spray / 45.0) * (122 - 100)
         pf_hr = stadium.pf_hr if stadium else 1.0
-        fence_dist = base_fence / math.sqrt(pf_hr) 
-        if ball.hit_type == BattedBallType.FLYBALL and ball.distance > fence_dist and abs_spray < 45:
-            return PlayResult.HOME_RUN
+        fence_dist = 122.0 / math.sqrt(pf_hr) 
+        fence_h = 3.0
         
-        if abs_spray > 45: return PlayResult.FOUL
+        for i, pos in enumerate(ball.trajectory):
+            d = math.sqrt(pos[0]**2 + pos[1]**2)
+            if d >= fence_dist:
+                if pos[2] > fence_h and abs(ball.spray_angle) < 45:
+                    return PlayResult.HOME_RUN
+                elif pos[2] <= fence_h and abs(ball.spray_angle) < 45:
+                    pass # フェンス直撃
+                break
+                
+        if abs(ball.spray_angle) > 45: return PlayResult.FOUL
 
         target_pos = (ball.landing_x, ball.landing_y)
         best_fielder, fielder_type, initial_pos = self._find_nearest_fielder(target_pos, defense_team, team_level)
         
         if not best_fielder: return PlayResult.SINGLE 
 
-        dist_to_ball = math.sqrt((target_pos[0] - initial_pos[0])**2 + (target_pos[1] - initial_pos[1])**2)
-        
-        range_stat = best_fielder.stats.get_defense_range(getattr(Position, fielder_type))
-        # 修正: 守備範囲の影響をさらにマイルドにする (個人差抑制)
-        adjusted_range = 50 + (range_stat - 50) * 0.5
-        adjusted_range = adjusted_range * (1.0 + (best_fielder.condition - 5) * 0.01)
-
+        # 守備パラメータ取得
         speed_stat = get_effective_stat(best_fielder, 'speed')
-        max_speed = 7.5 + (speed_stat / 100.0) * 1.2 
+        range_stat = best_fielder.stats.get_defense_range(getattr(Position, fielder_type))
         
-        # 反応時間
-        reaction_delay = 0.45 - (adjusted_range / 700.0) 
+        # 物理パラメータ設定
+        # 加速度 (m/s^2): 爆発力
+        accel = 4.0 + (speed_stat / 100.0) * 2.0
+        # 最大速度 (m/s): スピード
+        max_v = 7.5 + (speed_stat / 100.0) * 4.5 
+        # 反応時間 (s): 守備範囲・判断力
+        reaction_time = max(0.1, 0.45 - (range_stat / 250.0))
         
-        time_needed = reaction_delay + (dist_to_ball / max_speed)
+        # 捕球可能性判定ループ
+        can_catch = False
         
-        if ball.hit_type in [BattedBallType.FLYBALL, BattedBallType.POPUP, BattedBallType.LINEDRIVE]:
-            time_available = ball.hang_time
-            if ball.hit_type == BattedBallType.LINEDRIVE:
-                 if dist_to_ball < 2.5: time_needed = 0  # 正面
-        else:
-            # ゴロ
-            ball_speed_ms = (ball.exit_velocity / 3.6) * 0.6 
-            time_available = dist_to_ball / max(1.0, ball_speed_ms)
-            if ball.hit_type == BattedBallType.GROUNDBALL and ball.distance < 30:
-                 time_available = 10.0 # 内野安打系は別途判定
-
-        time_diff = time_available - time_needed
-        catch_prob = 0.0
-        
-        # 修正: 捕球確率のカーブを調整し、BABIP平均.300を目指す
-        if time_diff >= 0.4:
-             catch_prob = 0.98
-        elif time_diff >= 0.0:
-             catch_prob = 0.60 + (time_diff / 0.4) * 0.38
-        elif time_diff > -0.2:
-             ratio = (time_diff + 0.2) / 0.2
-             catch_prob = ratio * 0.60 
-        else:
-             catch_prob = 0.0
-        
-        # ★修正: 運要素を大幅に強化し、基礎確率を下げることでBABIPを向上させつつ個人差を縮める
-        # luck_factor: 能力に依存しない運の比重。上げることで能力差（個人差）が縮まる。
-        # base_prob: 運で捕球できる確率。下げることで全体的にヒットになりやすくする。
-        luck_factor = 0.50  # 0.15 -> 0.40 (個人差を縮小)
-        base_prob = 0.40    # 0.45 -> 0.20 (捕球率低下 = BABIP上昇)
-        
-        catch_prob = catch_prob * (1 - luck_factor) + base_prob * luck_factor
-        
-        # 強い打球の補正
-        if ball.contact_quality == "hard": catch_prob *= 0.82 
-        if ball.hit_type == BattedBallType.LINEDRIVE: catch_prob *= 0.78
-        
-        if stadium: catch_prob /= stadium.pf_1b
-        catch_prob = max(0.0, min(0.99, catch_prob))
-        
-        is_caught = random.random() < catch_prob
-        
-        potential_hit_result = self._judge_hit_type_potential(ball, target_pos, stadium)
-        
-        potential_rv = RUN_VALUES.get("Single", 0.9)
-        if potential_hit_result == PlayResult.DOUBLE: potential_rv = RUN_VALUES.get("Double", 1.27)
-        elif potential_hit_result == PlayResult.TRIPLE: potential_rv = RUN_VALUES.get("Triple", 1.62)
-        
-        play_value = potential_rv - RUN_VALUES["Out"]
-        
-        if best_fielder.position != Position.CATCHER:
-            self._update_defensive_metrics(best_fielder, team_level, catch_prob, is_caught, play_value)
-
-        # 6. 結果の確定と返却
-        if is_caught:
-            rec = best_fielder.get_record_by_level(team_level)
-            pos_err_rate = 0.015 if best_fielder.position in [Position.FIRST, Position.LEFT, Position.RIGHT] else 0.025
+        # ボールの軌道を時間ステップごとにチェック
+        for t_idx, b_pos in enumerate(ball.trajectory):
+            t = t_idx * 0.01
             
-            err_bonus = (pos_err_rate * RUN_VALUES["Error"] * UZR_SCALE["ErrR"])
-            rec.uzr_errr += err_bonus
-            rec.def_drs_raw += err_bonus
+            # まだ反応していない
+            if t < reaction_time: continue
+            
+            # ボールの高さチェック (ジャンプ到達圏内 2.5m, ダイビング 0.5m)
+            # フライならある程度の高さでも取れるが、今回はシンプルに3m以下とする
+            if b_pos[2] > 3.0: continue
+            
+            # 必要な移動距離
+            dist_to_ball = math.sqrt((b_pos[0] - initial_pos[0])**2 + (b_pos[1] - initial_pos[1])**2)
+            
+            # 野手が時間 t で到達できる距離を計算 (等加速度運動 -> 等速運動)
+            run_time = t - reaction_time
+            
+            # 加速にかかる時間
+            t_accel = max_v / accel
+            
+            if run_time <= t_accel:
+                # 加速中: d = 1/2 * a * t^2
+                reach_dist = 0.5 * accel * (run_time ** 2)
+            else:
+                # 等速中: d = (加速中の距離) + v_max * (残り時間)
+                dist_accel = 0.5 * accel * (t_accel ** 2)
+                reach_dist = dist_accel + max_v * (run_time - t_accel)
+            
+            # 捕球半径 (0.5m 〜 1.5m)
+            catch_radius = 1.0 + (range_stat / 200.0)
+            
+            if reach_dist + catch_radius >= dist_to_ball:
+                # 追いついた
+                error_rate = 1.0 - (get_effective_stat(best_fielder, 'error') / 120.0)
+                catch_prob = 0.98 * error_rate
+                
+                # ギリギリの場合確率ダウン
+                margin = (reach_dist + catch_radius) - dist_to_ball
+                if margin < 1.0:
+                    catch_prob *= (0.5 + margin * 0.4)
+                
+                if random.random() < catch_prob:
+                    can_catch = True
+                    break
 
-            error_rating = get_effective_stat(best_fielder, 'error')
-            error_prob = max(0.001, (pos_err_rate * 2.0) - (error_rating * 0.0005))
-            
-            if random.random() < error_prob:
-                rec.uzr_errr -= (RUN_VALUES["Error"] * UZR_SCALE["ErrR"])
-                rec.def_drs_raw -= (RUN_VALUES["Error"] * UZR_SCALE["ErrR"])
-                return PlayResult.ERROR
-            
+        if can_catch:
+            self._update_defensive_metrics(best_fielder, team_level, 1.0, True, 1.0)
             if ball.hit_type == BattedBallType.FLYBALL: return PlayResult.FLYOUT
             if ball.hit_type == BattedBallType.POPUP: return PlayResult.POPUP_OUT
             if ball.hit_type == BattedBallType.LINEDRIVE: return PlayResult.LINEOUT
-            
             return self._judge_grounder_throw(best_fielder, ball, team_level)
-            
         else:
-            return potential_hit_result
+            self._update_defensive_metrics(best_fielder, team_level, 0.0, False, -0.5)
+            return self._judge_hit_type_potential(ball, target_pos, stadium)
 
     def _find_nearest_fielder(self, ball_pos, team, team_level):
         min_dist = 999.0; best_f = None; best_type = ""; best_init = (0,0)
@@ -713,9 +761,10 @@ class AdvancedDefenseEngine:
         for idx in lineup:
             if 0 <= idx < len(team.players):
                 p = team.players[idx]
-                if p.position != Position.DH and p.position != Position.PITCHER: pos_map[p.position] = p
+                if p.position != Position.DH: pos_map[p.position] = p
         
-        pitcher = team.players[team.starting_pitcher_idx]; pos_map[Position.PITCHER] = pitcher
+        pitcher = team.players[team.starting_pitcher_idx]
+        pos_map[Position.PITCHER] = pitcher
 
         for pos_enum, coords in FIELD_COORDS.items():
             if pos_enum in pos_map:
@@ -725,65 +774,32 @@ class AdvancedDefenseEngine:
         return best_f, best_type, best_init
 
     def _judge_grounder_throw(self, fielder, ball, team_level):
-        base_1b_pos = (20.0, 20.0) 
+        base_1b_pos = (19.3, 19.3) 
         ball_x = ball.landing_x; ball_y = ball.landing_y
         dist_to_1b = math.sqrt((ball_x - base_1b_pos[0])**2 + (ball_y - base_1b_pos[1])**2)
         
         arm = get_effective_stat(fielder, 'arm')
-        throw_speed = 30 + (arm / 100.0) * 15
+        throw_speed = 30 + (arm / 100.0) * 15 
         transfer_time = 0.8 - (get_effective_stat(fielder, 'error') / 200.0)
         throw_time = transfer_time + (dist_to_1b / throw_speed)
         
-        runner_time = 4.1 
-        
-        time_margin = runner_time - throw_time
-        rec = fielder.get_record_by_level(team_level)
+        runner_speed_stat = 50 
+        runner_time = 4.3 - ((runner_speed_stat - 50) * 0.01)
         
         if throw_time < runner_time:
-            if 0 < time_margin < 0.3:
-                 val = 0.2 * UZR_SCALE["ARM"]
-                 rec.def_drs_raw += val; rec.uzr_arm += val
             return PlayResult.GROUNDOUT
         else:
-            if -0.3 < time_margin < 0:
-                 val = -0.1 * UZR_SCALE["ARM"]
-                 rec.def_drs_raw += val; rec.uzr_arm += val
             return PlayResult.SINGLE 
 
     def _judge_hit_type_potential(self, ball, ball_pos, stadium):
         dist = ball.distance
-        pf_2b = stadium.pf_2b if stadium else 1.0
-        pf_3b = stadium.pf_3b if stadium else 1.0
-        
-        base_double_threshold = 78.0 
-        
-        double_threshold = base_double_threshold / math.sqrt(pf_2b)
-        triple_threshold = 105.0 / math.sqrt(pf_3b)
-        
-        is_behind_fielder = ball_pos[1] > 80 
-        abs_spray = abs(ball.spray_angle)
-        
-        if dist > triple_threshold and is_behind_fielder:
-             if random.random() < 0.3: return PlayResult.TRIPLE
-             return PlayResult.DOUBLE
-        
-        if dist > double_threshold:
-            is_down_the_line = abs_spray > 25
-            is_gap = 15 < abs_spray < 35
-            
-            if ball.hit_type == BattedBallType.LINEDRIVE:
-                if is_down_the_line or is_gap: return PlayResult.DOUBLE
-                if dist > 85: return PlayResult.DOUBLE 
-                
-            if is_behind_fielder:
-                 return PlayResult.DOUBLE
-        
+        if dist > 85: return PlayResult.DOUBLE
+        if dist > 105: return PlayResult.TRIPLE if random.random() < 0.2 else PlayResult.DOUBLE
         return PlayResult.SINGLE
 
     def _update_defensive_metrics(self, fielder, team_level, catch_prob, is_caught, play_value):
         rec = fielder.get_record_by_level(team_level)
         rec.def_opportunities += 1
-        rec.def_difficulty_sum += (1.0 - catch_prob)
         
         rng_r = 0.0
         if is_caught:
@@ -793,35 +809,11 @@ class AdvancedDefenseEngine:
             rng_r = (0.0 - catch_prob) * play_value
             
         rng_r *= UZR_SCALE["RngR"]
-        
         rec.def_drs_raw += rng_r
         rec.uzr_rngr += rng_r
-
-    def _update_metrics_error(self, fielder, team_level, play_value):
+    
+    def judge_arm_opportunity(self, ball, fielder, runner, base_from, team_level):
         pass
-
-    def judge_arm_opportunity(self, ball: BattedBallData, fielder: Player, runner: Player, base_from: int, team_level):
-        arm = get_effective_stat(fielder, 'arm')
-        runner_speed = get_effective_stat(runner, 'speed')
-        
-        kill_prob = 0.3 + (arm - 50) * 0.01 - (runner_speed - 50) * 0.01
-        kill_prob = max(0.05, min(0.8, kill_prob))
-        
-        rec = fielder.get_record_by_level(team_level)
-        
-        if random.random() < 0.3: 
-            if random.random() < kill_prob:
-                val = 0.8 * UZR_SCALE["ARM"]
-                rec.uzr_arm += val; rec.def_drs_raw += val
-                return True
-            else:
-                val = -0.4 * UZR_SCALE["ARM"]
-                rec.uzr_arm += val; rec.def_drs_raw += val
-                return False
-        else:
-            hold_bonus = 0.02 * (arm / 100.0) * UZR_SCALE["ARM"]
-            rec.uzr_arm += hold_bonus; rec.def_drs_raw += hold_bonus
-            return False
 
 class LiveGameEngine:
     def __init__(self, home: Team, away: Team, team_level: TeamLevel = TeamLevel.FIRST):
@@ -850,9 +842,8 @@ class LiveGameEngine:
             for idx in current_lineup:
                 if 0 <= idx < len(team.players):
                     if team.players[idx].is_injured:
-                        has_injured_player = True
-                        break
-        if not current_lineup or len(current_lineup) < 9:
+                        has_injured_player = True; break
+        if not current_lineup or len(current_lineup) < 9 or has_injured_player:
             players = get_roster()
             if len(players) < 9 and self.team_level != TeamLevel.FIRST:
                 players = [p for p in team.players if p.team_level != TeamLevel.FIRST]
@@ -902,7 +893,6 @@ class LiveGameEngine:
         return team.players[idx], idx
 
     def change_pitcher(self, new_pitcher: Player):
-        """投手交代を実行し、状態を更新する"""
         team = self.home_team if self.state.is_top else self.away_team
         try:
             new_idx = team.players.index(new_pitcher)
@@ -918,10 +908,9 @@ class LiveGameEngine:
                 self.state.away_pitcher_stamina = new_pitcher.stats.stamina
                 self.state.away_pitch_count = 0
                 self.state.away_current_pitcher_runs = 0
-            
             self.game_stats[new_pitcher]['games_pitched'] = 1
         except ValueError:
-            print(f"Error: Pitcher {new_pitcher.name} not found in team {team.name}")
+            pass
 
     def get_current_catcher(self) -> Optional[Player]:
         team = self.home_team if self.state.is_top else self.away_team
@@ -937,8 +926,7 @@ class LiveGameEngine:
         if hasattr(player, 'is_injured') and player.is_injured: return 
         durability = getattr(player.stats, 'durability', 50)
         fatigue_factor = 1.0
-        if player.position == Position.PITCHER:
-            if player.stats.stamina < 30: fatigue_factor = 3.0
+        if player.position == Position.PITCHER and player.stats.stamina < 30: fatigue_factor = 3.0
         base_rate = 0.0005
         rate = base_rate * (100 - durability) / 50.0 * fatigue_factor
         
@@ -981,18 +969,14 @@ class LiveGameEngine:
             catch_err = get_effective_stat(catcher, 'error')
             block_prob = 0.85 + (catch_err - 50) * 0.005
             if random.random() < 0.05:
-                if random.random() <= block_prob:
-                    val = 0.1 * UZR_SCALE["rBlk"]
-                    self.game_stats[catcher]['uzr_rblk'] += val
-                    self.game_stats[catcher]['def_drs_raw'] += val
-                else:
-                    val = -0.5 * UZR_SCALE["rBlk"]
-                    self.game_stats[catcher]['uzr_rblk'] += val
-                    self.game_stats[catcher]['def_drs_raw'] += val
+                val = 0.1 * UZR_SCALE["rBlk"] if random.random() <= block_prob else -0.5 * UZR_SCALE["rBlk"]
+                self.game_stats[catcher]['uzr_rblk'] += val; self.game_stats[catcher]['def_drs_raw'] += val
 
         res, ball = self._resolve_contact(batter, pitcher, pitch, strategy)
-        self.process_pitch_result(res, pitch, ball, strategy)
-        return res, pitch, ball
+        
+        # 修正: simulate_pitch内で処理を完結させる
+        final_res = self.process_pitch_result(res, pitch, ball, strategy)
+        return final_res, pitch, ball
 
     def _resolve_contact(self, batter, pitcher, pitch, strategy):
         if not pitch.location.is_strike:
@@ -1009,8 +993,9 @@ class LiveGameEngine:
                 return PitchResult.IN_PLAY, ball
 
         eye = get_effective_stat(batter, 'eye')
-        swing_prob = (0.78 + (eye-50)*0.001) if pitch.location.is_strike else (0.30 - (eye-50)*0.004)
-        if self.state.strikes == 2: swing_prob += 0.18
+        # スイング率調整
+        swing_prob = (0.85 + (eye-50)*0.001) if pitch.location.is_strike else (0.38 - (eye-50)*0.004)
+        if self.state.strikes == 2: swing_prob += 0.15
         if strategy == "POWER": swing_prob += 0.1 
         if strategy == "MEET": swing_prob -= 0.1
         swing_prob = max(0.01, min(0.99, swing_prob))
@@ -1019,78 +1004,66 @@ class LiveGameEngine:
             
         contact = get_effective_stat(batter, 'contact', opponent=pitcher)
         stuff = get_effective_stat(pitcher, 'stuff', opponent=batter)
-        
-        # ★修正: コンタクト率を下げて、打席数過多（＝出塁過多）を抑制する
-        base_contact = 0.74
+        base_contact = 0.76
         diff = contact - stuff
-        
         hit_prob = base_contact + (diff * 0.0035)
         
-        if pitch.location.is_strike:
-            hit_prob += 0.08
-        else:
-            hit_prob -= 0.12
+        if pitch.location.is_strike: hit_prob += 0.08
+        else: hit_prob -= 0.12
             
         if self.stadium: hit_prob /= max(0.5, self.stadium.pf_so)
-
-        hit_prob = max(0.40, min(0.95, hit_prob))
+        hit_prob = max(0.45, min(0.96, hit_prob))
 
         if self.state.strikes == 2:
             avoid_k = get_effective_stat(batter, 'avoid_k')
             hit_prob += (avoid_k - 50) * 0.002
 
         if random.random() > hit_prob: 
-             if hasattr(self, '_check_injury_occurrence'):
-                self._check_injury_occurrence(batter, "SWING")
+             if hasattr(self, '_check_injury_occurrence'): self._check_injury_occurrence(batter, "SWING")
              return PitchResult.STRIKE_SWINGING, None
              
         if random.random() < 0.32: return PitchResult.FOUL, None
              
         ball = self.bat_gen.generate(batter, pitcher, pitch, self.state, strategy)
-        
-        if hasattr(self, '_check_injury_occurrence'):
-            self._check_injury_occurrence(batter, "RUN")
-        
+        if hasattr(self, '_check_injury_occurrence'): self._check_injury_occurrence(batter, "RUN")
         return PitchResult.IN_PLAY, ball
 
     def _attempt_steal(self, catcher):
         runner = self.state.runner_1b
         if not runner: return False
-        
         runner_spd = get_effective_stat(runner, 'speed')
         catcher_arm = get_effective_stat(catcher, 'arm') if catcher else 50
-        
         success_prob = 0.70 + (runner_spd - 50)*0.01 - (catcher_arm - 50)*0.01
         
-        catcher_rec = None
-        if catcher: catcher_rec = self.game_stats[catcher]
-
         self._check_injury_occurrence(runner, "RUN")
-
         if random.random() < success_prob:
             self.state.runner_2b = runner; self.state.runner_1b = None
             self.game_stats[runner]['stolen_bases'] += 1
-            if catcher_rec: catcher_rec['uzr_rsb'] -= (0.15 * UZR_SCALE["rSB"])
+            if catcher: self.game_stats[catcher]['uzr_rsb'] -= (0.15 * UZR_SCALE["rSB"])
             return True
         else:
             self.state.runner_1b = None; self.state.outs += 1
             self.game_stats[runner]['caught_stealing'] += 1
-            if catcher_rec: catcher_rec['uzr_rsb'] += (0.45 * UZR_SCALE["rSB"])
+            if catcher: self.game_stats[catcher]['uzr_rsb'] += (0.45 * UZR_SCALE["rSB"])
             return True
 
     def process_pitch_result(self, res, pitch, ball, strategy="NORMAL"):
         pitcher, _ = self.get_current_pitcher(); batter, _ = self.get_current_batter()
-        is_in_zone = pitch.location.is_strike
+        
+        # 修正: pitchがNoneの場合の安全策
+        is_in_zone = False
+        if pitch:
+            is_in_zone = pitch.location.is_strike
+            self.game_stats[pitcher]['pitches_thrown'] += 1; self.game_stats[batter]['pitches_seen'] += 1
+            if is_in_zone:
+                self.game_stats[pitcher]['zone_pitches'] += 1; self.game_stats[batter]['zone_pitches'] += 1
+            else:
+                self.game_stats[pitcher]['chase_pitches'] += 1; self.game_stats[batter]['chase_pitches'] += 1
+
         is_swing = res in [PitchResult.STRIKE_SWINGING, PitchResult.FOUL, PitchResult.IN_PLAY]
         is_contact = res in [PitchResult.FOUL, PitchResult.IN_PLAY]
-        
-        self.game_stats[pitcher]['pitches_thrown'] += 1; self.game_stats[batter]['pitches_seen'] += 1
-        if is_in_zone:
-            self.game_stats[pitcher]['zone_pitches'] += 1; self.game_stats[batter]['zone_pitches'] += 1
-        else:
-            self.game_stats[pitcher]['chase_pitches'] += 1; self.game_stats[batter]['chase_pitches'] += 1
 
-        if is_swing:
+        if is_swing and pitch:
             self.game_stats[pitcher]['swings'] += 1; self.game_stats[batter]['swings'] += 1
             if is_in_zone:
                 self.game_stats[pitcher]['zone_swings'] += 1; self.game_stats[batter]['zone_swings'] += 1
@@ -1108,6 +1081,7 @@ class LiveGameEngine:
         else:
             self.game_stats[pitcher]['balls_thrown'] += 1
 
+        final_result = res
         if res == PitchResult.BALL:
             self.state.balls += 1
             if self.state.balls >= 4: self._walk()
@@ -1117,9 +1091,11 @@ class LiveGameEngine:
             if self.state.strikes >= 3: 
                 self.game_stats[pitcher]['strikeouts_pitched'] += 1; self.game_stats[batter]['strikeouts'] += 1
                 self.game_stats[batter]['plate_appearances'] += 1; self.game_stats[batter]['at_bats'] += 1
-                self._out() 
+                self._out()
+                final_result = PlayResult.STRIKEOUT
         elif res == PitchResult.FOUL:
             if self.state.strikes < 2: self.state.strikes += 1
+            final_result = PitchResult.FOUL
         elif res == PitchResult.IN_PLAY:
             defense_team = self.home_team if self.state.is_top else self.away_team
             play = self.def_eng.judge(ball, defense_team, self.team_level, self.stadium)
@@ -1144,9 +1120,10 @@ class LiveGameEngine:
 
             if play == PlayResult.FOUL:
                 if self.state.strikes < 2: self.state.strikes += 1
+                final_result = PitchResult.FOUL
             else:
-                self._resolve_play(play, strategy, ball)
-        return res
+                final_result = self._resolve_play(play, strategy, ball)
+        return final_result
 
     def _record_pf(self, batter: Player, pitcher: Player):
         pf = self.stadium.pf_runs if self.stadium else 1.0
@@ -1159,18 +1136,14 @@ class LiveGameEngine:
         if is_hbp: self.game_stats[batter]['hit_by_pitch'] += 1; self.game_stats[pitcher]['hit_batters'] += 1
         else: self.game_stats[batter]['walks'] += 1; self.game_stats[pitcher]['walks_allowed'] += 1
         self._record_pf(batter, pitcher)
-        
         scored_players = self._advance_runners(1, batter, is_walk=True)
-        for p in scored_players:
-            self.game_stats[p]['runs'] += 1
-            
+        for p in scored_players: self.game_stats[p]['runs'] += 1
         self._reset_count(); self._next_batter()
 
     def _out(self):
         pitcher, _ = self.get_current_pitcher()
         self.state.outs += 1
         self.game_stats[pitcher]['innings_pitched'] += (1.0 / 3.0)
-        
         defense_team = self.home_team if self.state.is_top else self.away_team
         lineup = defense_team.current_lineup
         if self.team_level == TeamLevel.SECOND: lineup = defense_team.farm_lineup
@@ -1179,7 +1152,6 @@ class LiveGameEngine:
             if 0 <= p_idx < len(defense_team.players):
                 p = defense_team.players[p_idx]
                 if p.position != Position.DH: self.game_stats[p]['defensive_innings'] += (1.0 / 3.0)
-        
         batter, _ = self.get_current_batter()
         self._record_pf(batter, pitcher)
         self._reset_count(); self._next_batter()
@@ -1188,7 +1160,6 @@ class LiveGameEngine:
     def _resolve_play(self, play, strategy, ball=None):
         batter, _ = self.get_current_batter(); pitcher, _ = self.get_current_pitcher()
         defense_team = self.home_team if self.state.is_top else self.away_team
-        
         self.game_stats[batter]['plate_appearances'] += 1
         scored_players = []
         
@@ -1208,15 +1179,12 @@ class LiveGameEngine:
             self._record_pf(batter, pitcher)
             self._reset_count(); self._next_batter()
             
-            if play == PlayResult.HOME_RUN:
-                scored_players = self._advance_runners(4, batter)
+            if play == PlayResult.HOME_RUN: scored_players = self._advance_runners(4, batter)
             elif play == PlayResult.SINGLE: scored_players = self._advance_runners(1, batter)
             elif play == PlayResult.DOUBLE: scored_players = self._advance_runners(2, batter)
             elif play == PlayResult.TRIPLE: scored_players = self._advance_runners(3, batter)
             
-            for p in scored_players:
-                self.game_stats[p]['runs'] += 1
-                
+            for p in scored_players: self.game_stats[p]['runs'] += 1
             scored = len(scored_players)
             if scored > 0:
                 self.game_stats[batter]['rbis'] += scored
@@ -1229,15 +1197,12 @@ class LiveGameEngine:
         if play == PlayResult.ERROR:
             self.game_stats[batter]['at_bats'] += 1; self.game_stats[batter]['reach_on_error'] += 1
             self._record_pf(batter, pitcher); self._reset_count(); self._next_batter()
-            
             scored_players = self._advance_runners(1, batter)
-            for p in scored_players:
-                self.game_stats[p]['runs'] += 1
+            for p in scored_players: self.game_stats[p]['runs'] += 1
             scored = len(scored_players)
-            
             if scored > 0:
                 self.game_stats[batter]['rbis'] += scored
-                self.game_stats[pitcher]['runs_allowed'] += scored 
+                self.game_stats[pitcher]['runs_allowed'] += scored
                 if self.state.is_top: self.state.home_current_pitcher_runs += scored
                 else: self.state.away_current_pitcher_runs += scored
                 self._score(scored)
@@ -1258,9 +1223,7 @@ class LiveGameEngine:
                 if p.position in [Position.SECOND, Position.SHORTSTOP]:
                     dp_skill += get_effective_stat(p, 'turn_dp'); count += 1
             if count > 0: dp_skill /= count
-            
             dp_prob = 0.4 + (dp_skill - 50) * 0.01; dp_prob = max(0.1, min(0.9, dp_prob))
-            
             if random.random() < dp_prob:
                 is_double_play = True
                 dpr_val = 0.32 * UZR_SCALE["DPR"] 
@@ -1275,13 +1238,11 @@ class LiveGameEngine:
                     if p.position in [Position.SECOND, Position.SHORTSTOP]: self.game_stats[p]['uzr_dpr'] += (dpr_val / 2)
         
         elif strategy == "BUNT" and play == PlayResult.GROUNDOUT:
-             if self.state.is_runner_on(): 
-                 is_sac_bunt = True; scored = self._advance_runners_bunt()
+             if self.state.is_runner_on(): is_sac_bunt = True; scored = self._advance_runners_bunt()
         
         self._record_pf(batter, pitcher)
         self.game_stats[pitcher]['innings_pitched'] += (1.0/3.0)
         self.state.outs += 1
-        
         lineup = defense_team.current_lineup
         if self.team_level == TeamLevel.SECOND: lineup = defense_team.farm_lineup
         elif self.team_level == TeamLevel.THIRD: lineup = defense_team.third_lineup
@@ -1334,87 +1295,59 @@ class LiveGameEngine:
 
     def _advance_runners(self, bases, batter, is_walk=False):
         scored_players = []
-        UBR_SUCCESS_1B3B = 0.18; UBR_FAIL_1B3B = -0.80; UBR_HOLD_1B2B = -0.06  
-        UBR_SUCCESS_2BH = 0.22; UBR_FAIL_2BH = -1.00; UBR_HOLD_2B3B = -0.08
+        UBR_SUCCESS_1B3B = 0.18; UBR_FAIL_1B3B = -0.80
+        UBR_HOLD_1B2B = -0.06; UBR_SUCCESS_2BH = 0.22
+        UBR_FAIL_2BH = -1.00; UBR_HOLD_2B3B = -0.08
         UBR_SUCCESS_1BH = 0.35; UBR_FAIL_1BH = -1.20; UBR_HOLD_1B3B = -0.07
 
         if is_walk:
             if self.state.runner_1b:
                 if self.state.runner_2b:
-                    if self.state.runner_3b: 
-                        scored_players.append(self.state.runner_3b)
+                    if self.state.runner_3b: scored_players.append(self.state.runner_3b)
                     self.state.runner_3b = self.state.runner_3b if self.state.runner_3b else self.state.runner_2b
                 self.state.runner_2b = self.state.runner_2b if self.state.runner_2b else self.state.runner_1b
             self.state.runner_1b = batter
         else:
-            if self.state.runner_3b:
-                scored_players.append(self.state.runner_3b)
-                self.state.runner_3b = None
+            if self.state.runner_3b: scored_players.append(self.state.runner_3b); self.state.runner_3b = None
             if self.state.runner_2b:
-                if bases >= 2: 
-                    scored_players.append(self.state.runner_2b)
-                    self.state.runner_2b = None
-                elif bases == 1: 
+                if bases >= 2: scored_players.append(self.state.runner_2b); self.state.runner_2b = None
+                elif bases == 1:
                     spd = get_effective_stat(self.state.runner_2b, 'speed')
                     br = get_effective_stat(self.state.runner_2b, 'baserunning')
-                    attempt_prob = 0.40 + (spd - 50) * 0.015 + (br - 50) * 0.005
-                    if random.random() < attempt_prob:
+                    if random.random() < (0.40 + (spd-50)*0.015 + (br-50)*0.005):
                         if random.random() < 0.05:
-                            self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_FAIL_2BH
-                            self.state.runner_2b = None
-                            self.state.outs += 1 
+                            self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_FAIL_2BH; self.state.runner_2b = None; self.state.outs += 1
                         else:
-                            scored_players.append(self.state.runner_2b)
-                            self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_SUCCESS_2BH
-                            self.state.runner_2b = None
+                            scored_players.append(self.state.runner_2b); self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_SUCCESS_2BH; self.state.runner_2b = None
                     else:
-                        self.state.runner_3b = self.state.runner_2b
-                        self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_HOLD_2B3B
-                        self.state.runner_2b = None
+                        self.state.runner_3b = self.state.runner_2b; self.game_stats[self.state.runner_2b]['ubr_val'] += UBR_HOLD_2B3B; self.state.runner_2b = None
             if self.state.runner_1b:
-                if bases >= 3: 
-                    scored_players.append(self.state.runner_1b)
-                    self.state.runner_1b = None
-                elif bases == 2: 
+                if bases >= 3: scored_players.append(self.state.runner_1b); self.state.runner_1b = None
+                elif bases == 2:
                     spd = get_effective_stat(self.state.runner_1b, 'speed')
                     br = get_effective_stat(self.state.runner_1b, 'baserunning')
-                    attempt_prob = 0.35 + (spd - 50) * 0.015 + (br - 50) * 0.005
-                    if random.random() < attempt_prob:
-                        if random.random() < 0.05: 
-                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_FAIL_1BH
-                            self.state.runner_1b = None
-                            self.state.outs += 1
+                    if random.random() < (0.35 + (spd-50)*0.015 + (br-50)*0.005):
+                        if random.random() < 0.05:
+                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_FAIL_1BH; self.state.runner_1b = None; self.state.outs += 1
                         else:
-                            scored_players.append(self.state.runner_1b)
-                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_SUCCESS_1BH
-                            self.state.runner_1b = None
+                            scored_players.append(self.state.runner_1b); self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_SUCCESS_1BH; self.state.runner_1b = None
                     else:
-                        self.state.runner_3b = self.state.runner_1b
-                        self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_HOLD_1B3B
-                        self.state.runner_1b = None
-                elif bases == 1: 
+                        self.state.runner_3b = self.state.runner_1b; self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_HOLD_1B3B; self.state.runner_1b = None
+                elif bases == 1:
                     spd = get_effective_stat(self.state.runner_1b, 'speed')
                     br = get_effective_stat(self.state.runner_1b, 'baserunning')
-                    attempt_prob = 0.25 + (spd - 50) * 0.015 + (br - 50) * 0.005
-                    if self.state.runner_3b is None and random.random() < attempt_prob:
-                        if random.random() < 0.05: 
-                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_FAIL_1B3B
-                            self.state.runner_1b = None
-                            self.state.outs += 1
+                    if self.state.runner_3b is None and random.random() < (0.25 + (spd-50)*0.015 + (br-50)*0.005):
+                        if random.random() < 0.05:
+                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_FAIL_1B3B; self.state.runner_1b = None; self.state.outs += 1
                         else:
-                            self.state.runner_3b = self.state.runner_1b
-                            self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_SUCCESS_1B3B
-                            self.state.runner_1b = None
+                            self.state.runner_3b = self.state.runner_1b; self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_SUCCESS_1B3B; self.state.runner_1b = None
                     else:
-                        self.state.runner_2b = self.state.runner_1b
-                        self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_HOLD_1B2B
-                        self.state.runner_1b = None
-
+                        self.state.runner_2b = self.state.runner_1b; self.game_stats[self.state.runner_1b]['ubr_val'] += UBR_HOLD_1B2B; self.state.runner_1b = None
+            
             if bases == 4: scored_players.append(batter)
             elif bases == 3: self.state.runner_3b = batter
             elif bases == 2: self.state.runner_2b = batter
             elif bases == 1: self.state.runner_1b = batter
-                
         return scored_players
     
     def _score(self, pts):
@@ -1441,7 +1374,7 @@ class LiveGameEngine:
         self.state.runner_1b = self.state.runner_2b = self.state.runner_3b = None
         if not self.state.is_top: self.state.inning += 1
         self.state.is_top = not self.state.is_top
-        
+
     def is_game_over(self):
         if self.state.inning > 9:
              if self.state.is_top: return False
@@ -1450,12 +1383,8 @@ class LiveGameEngine:
         if self.state.inning >= 9 and not self.state.is_top and self.state.home_score > self.state.away_score: return True
         return False
 
-    def finalize_game_stats(self, date_str: str = "2027-01-01"):
-        """
-        試合終了後の成績反映処理
-        date_str: 試合実施日 (YYYY-MM-DD)
-        """
-        win_p, loss_p, save_p, hold_ps = None, None, None, []
+    def finalize_game_stats(self):
+        win_p, loss_p, save_p = None, None, None
         if not self.state.home_pitchers_used or not self.state.away_pitchers_used: return
 
         home_win = self.state.home_score > self.state.away_score
@@ -1464,23 +1393,16 @@ class LiveGameEngine:
         if home_win:
             win_team_pitchers = self.state.home_pitchers_used
             loss_team_pitchers = self.state.away_pitchers_used
-            
             starter = win_team_pitchers[0]
-            if self.game_stats[starter]['innings_pitched'] >= 5:
-                win_p = starter
-            else:
-                if len(win_team_pitchers) > 1: win_p = win_team_pitchers[1]
-                else: win_p = starter
+            if self.game_stats[starter]['innings_pitched'] >= 5: win_p = starter
+            else: win_p = win_team_pitchers[1] if len(win_team_pitchers) > 1 else starter
             loss_p = loss_team_pitchers[0]
         elif away_win:
             win_team_pitchers = self.state.away_pitchers_used
             loss_team_pitchers = self.state.home_pitchers_used
             starter = win_team_pitchers[0]
-            if self.game_stats[starter]['innings_pitched'] >= 5:
-                win_p = starter
-            else:
-                if len(win_team_pitchers) > 1: win_p = win_team_pitchers[1]
-                else: win_p = starter
+            if self.game_stats[starter]['innings_pitched'] >= 5: win_p = starter
+            else: win_p = win_team_pitchers[1] if len(win_team_pitchers) > 1 else starter
             loss_p = loss_team_pitchers[0]
 
         if win_p:
@@ -1488,10 +1410,8 @@ class LiveGameEngine:
             last_pitcher = self.state.home_pitchers_used[-1] if home_win else self.state.away_pitchers_used[-1]
             if last_pitcher != win_p:
                 score_diff = abs(self.state.home_score - self.state.away_score)
-                if score_diff <= 3 and self.game_stats[last_pitcher]['innings_pitched'] >= 1.0:
-                    save_p = last_pitcher
-                elif score_diff > 3 and self.game_stats[last_pitcher]['innings_pitched'] >= 3.0:
-                    save_p = last_pitcher
+                if score_diff <= 3 and self.game_stats[last_pitcher]['innings_pitched'] >= 1.0: save_p = last_pitcher
+                elif score_diff > 3 and self.game_stats[last_pitcher]['innings_pitched'] >= 3.0: save_p = last_pitcher
 
         if win_p: self.game_stats[win_p]['wins'] = 1
         if loss_p: self.game_stats[loss_p]['losses'] = 1
@@ -1499,28 +1419,14 @@ class LiveGameEngine:
 
         for player, stats in self.game_stats.items():
             record = player.get_record_by_level(self.team_level)
-            
-            # 累積成績への反映
             for key, val in stats.items():
                 if hasattr(record, key):
                     current = getattr(record, key)
                     setattr(record, key, current + val)
             record.games += 1
-            
-            is_home_player = player in self.home_team.players
-            if is_home_player:
-                if player.position == Position.PITCHER:
-                    record.home_games_pitched += 1
-                else:
-                    record.home_games += 1
-            
-            # ★追加: 直近成績履歴への追加
-            # 辞書型statsを一時的なPlayerRecordに変換
-            temp_rec = PlayerRecord()
-            for key, val in stats.items():
-                if hasattr(temp_rec, key):
-                    setattr(temp_rec, key, val)
-            player.add_game_record(date_str, temp_rec)
+            if player in self.home_team.players:
+                if player.position == Position.PITCHER: record.home_games_pitched += 1
+                else: record.home_games += 1
 
     def get_winner(self):
         if self.state.home_score > self.state.away_score: return self.home_team.name

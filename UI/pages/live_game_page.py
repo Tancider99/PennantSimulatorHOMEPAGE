@@ -657,12 +657,14 @@ class LiveGamePage(QWidget):
         else: # CPU batting
              strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
 
-        res, pitch, ball = self.live_engine.simulate_pitch(strat)
-        play_res = self.live_engine.process_pitch_result(res, pitch, ball)
+        # 修正: process_pitch_result は engine 内で呼ばれるので、ここでは呼び出さない
+        play_res, pitch, ball = self.live_engine.simulate_pitch(strat)
+        # play_res = self.live_engine.process_pitch_result(res, pitch, ball) <-- 削除
         
         # Logic for visual feedback
         is_hit, is_out = False, False
         is_strikeout = (play_res == PlayResult.STRIKEOUT)
+        
         if play_res:
             name = play_res.name
             if "HIT" in name or play_res in [PlayResult.SINGLE, PlayResult.DOUBLE, PlayResult.TRIPLE, PlayResult.HOME_RUN]: is_hit = True
@@ -672,18 +674,24 @@ class LiveGamePage(QWidget):
         hand = getattr(pitcher, 'throw_hand', 'Right')
         
         if pitch:
-            r_str = play_res.value if play_res else res.value
+            # play_res がある場合はそちらを使用、なければ PitchResult の value
+            r_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
+            
             self.zone.add_pitch(pitch, r_str, is_hit, is_out, is_strikeout, hand)
             
             info = f"{pitch.pitch_type} {int(pitch.velocity)}km"
             if play_res:
-                self._log(f"{info} -> {play_res.value}", True)
+                # PlayResult (Hit/Out etc)
+                val_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
+                self._log(f"{info} -> {val_str}", True)
                 if is_hit or is_out:
-                    # Longer delay for hit/out (6s)
                     QTimer.singleShot(6000, self.zone.clear_pitches)
                     QTimer.singleShot(6000, self.field_widget.clear)
             else:
-                self._log(f"{info} -> {res.value}")
+                # PitchResult (Ball/Strike/Foul)
+                # play_res が PitchResult 型で返ってくる場合もある
+                val_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
+                self._log(f"{info} -> {val_str}")
 
         if ball:
             self.field_widget.set_batted_ball(ball)
@@ -702,10 +710,13 @@ class LiveGamePage(QWidget):
         # AI vs AI simulation loop
         while not self.live_engine.is_game_over():
             batter, _ = self.live_engine.get_current_batter()
-            # AI decisions
             strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
-            r, p, b = self.live_engine.simulate_pitch(strat)
-            self.live_engine.process_pitch_result(r, p, b)
+            
+            # 修正: process_pitch_result の重複呼び出しを削除
+            self.live_engine.simulate_pitch(strat)
+            # r, p, b = ...
+            # self.live_engine.process_pitch_result(r, p, b) <-- 削除
+            
         self._finish()
 
     def _update_display(self):
@@ -745,7 +756,7 @@ class LiveGamePage(QWidget):
     def _finish(self):
         self.sim_timer.stop()
         
-        # 【重要】試合終了時に成績を確定・反映させる
+        # 試合終了時に成績を確定
         if self.live_engine:
             self.live_engine.finalize_game_stats()
             
