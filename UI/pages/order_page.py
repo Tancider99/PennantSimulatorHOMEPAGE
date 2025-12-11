@@ -299,16 +299,10 @@ class OrderPage(QWidget):
         toolbar = ToolbarPanel()
         toolbar.setFixedHeight(50)
 
-        label = QLabel("チーム:")
-        label.setStyleSheet(f"color: {self.theme.text_secondary}; margin-left: 12px;")
-        toolbar.add_widget(label)
-
-        self.team_selector = QComboBox()
-        self.team_selector.setMinimumWidth(200)
-        self.team_selector.setFixedHeight(32)
-        self.team_selector.currentIndexChanged.connect(self._on_team_changed)
-        self.team_selector.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; border-radius: 4px;")
-        toolbar.add_widget(self.team_selector)
+        # --- 変更: チーム選択コンボボックスを削除し、チーム名ラベルを追加 ---
+        self.team_name_label = QLabel("チーム名")
+        self.team_name_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 16px; margin-left: 12px;")
+        toolbar.add_widget(self.team_name_label)
         
         self.status_label = QLabel("一軍登録: --/--")
         self.status_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; margin-left: 20px;")
@@ -316,14 +310,8 @@ class OrderPage(QWidget):
 
         toolbar.add_stretch()
         
-        detail_btn = QPushButton("選手詳細")
-        detail_btn.setCursor(Qt.PointingHandCursor)
-        detail_btn.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary}; padding: 6px 12px; border: 1px solid {self.theme.border}; border-radius: 4px;")
-        detail_btn.clicked.connect(self._on_player_detail_clicked)
-        toolbar.add_widget(detail_btn)
+        # 詳細ボタンは削除済み
         
-        toolbar.add_spacing(8)
-
         auto_btn = QPushButton("自動編成")
         auto_btn.setCursor(Qt.PointingHandCursor)
         auto_btn.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary}; padding: 6px 12px; border: 1px solid {self.theme.border}; border-radius: 4px;")
@@ -507,6 +495,10 @@ class OrderPage(QWidget):
         table = DraggableTableWidget(mode)
         table.items_changed.connect(lambda: self._on_table_changed(table))
         
+        # --- 追加: ダブルクリックイベントの接続 ---
+        table.itemDoubleClicked.connect(self._on_player_double_clicked)
+        # --------------------------------------
+
         if mode == "lineup":
             cols = ["順", "守", "調", "選手名", "ミ", "パ", "走", "肩", "守", "適正", "総合"]
             widths = [30, 40, 30, 130, 35, 35, 35, 35, 35, 80, 45]
@@ -609,36 +601,18 @@ class OrderPage(QWidget):
         self.game_state = game_state
         if not game_state: return
         
-        self.team_selector.blockSignals(True)
-        self.team_selector.clear()
-        for team in game_state.teams:
-            self.team_selector.addItem(team.name, team)
-        
+        # --- 変更: コンボボックス設定を削除し、直接自チームをセット ---
         if game_state.player_team:
-            idx = game_state.teams.index(game_state.player_team)
-            self.team_selector.setCurrentIndex(idx)
-        elif self.team_selector.count() > 0:
-            self.team_selector.setCurrentIndex(0)
+            self.current_team = game_state.player_team
+            self.team_name_label.setText(self.current_team.name)
             
-        self.team_selector.blockSignals(False)
-        self._on_team_changed(self.team_selector.currentIndex())
-
-    def _on_team_changed(self, index):
-        if self.has_unsaved_changes:
-            reply = QMessageBox.question(
-                self, '保存されていない変更',
-                '変更内容が保存されていません。破棄して別のチームを表示しますか？',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply == QMessageBox.No:
-                return
-
-        if index >= 0:
-            self.current_team = self.team_selector.itemData(index)
-            # 初期リスト生成とコピー
+            # 初期化と表示更新
             self._ensure_lists_initialized()
             self._load_team_data()
             self._refresh_all()
+        else:
+            self.current_team = None
+            self.team_name_label.setText("チーム選択なし")
 
     def _ensure_lists_initialized(self):
         team = self.current_team
@@ -1360,3 +1334,12 @@ class OrderPage(QWidget):
         state['bench_batters'] = remaining_bench[:bench_limit]
         
         self._refresh_all()
+    
+    # --- 追加: ダブルクリック時の詳細画面遷移 ---
+    def _on_player_double_clicked(self, item):
+        p_idx = item.data(ROLE_PLAYER_IDX)
+        if p_idx is not None and isinstance(p_idx, int) and p_idx >= 0:
+            if p_idx < len(self.current_team.players):
+                player = self.current_team.players[p_idx]
+                # メインウィンドウ側で接続されたシグナルを発火
+                self.player_detail_requested.emit(player)

@@ -288,7 +288,7 @@ class RosterPage(QWidget):
         # Player card - compact version
         self.detail_card = PlayerCard(show_stats=True)
         self.detail_card.set_clickable(False)
-        self.detail_card.setFixedHeight(100)
+        self.detail_card.setFixedHeight(110)
         layout.addWidget(self.detail_card)
 
         # Radar chart - in a fixed-size container
@@ -304,7 +304,7 @@ class RosterPage(QWidget):
         chart_layout.setContentsMargins(4, 4, 4, 4)
 
         self.radar_chart = RadarChart()
-        self.radar_chart.setFixedSize(200, 200)
+        self.radar_chart.setFixedSize(220, 220)
         chart_layout.addWidget(self.radar_chart, 0, Qt.AlignCenter)
 
         layout.addWidget(chart_container)
@@ -319,33 +319,22 @@ class RosterPage(QWidget):
 
         layout.addStretch()
 
+        # --- 変更点: 詳細ボタンを削除 ---
         # Action buttons - fixed at bottom
-        btn_container = QWidget()
-        btn_container.setStyleSheet("background: transparent;")
-        btn_layout = QHBoxLayout(btn_container)
-        btn_layout.setContentsMargins(0, 4, 0, 0)
-
-        detail_btn = QPushButton("詳細")
-        detail_btn.setFixedHeight(34)
-        detail_btn.setCursor(Qt.PointingHandCursor)
-        # 【修正】文字色をwhiteからtext_highlightに変更（背景がprimary=白のため）
-        detail_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme.primary};
-                color: {self.theme.text_highlight};
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme.primary_hover};
-            }}
-        """)
-        detail_btn.clicked.connect(self._show_player_detail)
-        btn_layout.addWidget(detail_btn)
-
-        layout.addWidget(btn_container)
+        # btn_container = QWidget()
+        # btn_container.setStyleSheet("background: transparent;")
+        # btn_layout = QHBoxLayout(btn_container)
+        # btn_layout.setContentsMargins(0, 4, 0, 0)
+        # 
+        # detail_btn = QPushButton("詳細")
+        # detail_btn.setFixedHeight(34)
+        # detail_btn.setCursor(Qt.PointingHandCursor)
+        # ... (style) ...
+        # detail_btn.clicked.connect(self._show_player_detail)
+        # btn_layout.addWidget(detail_btn)
+        # 
+        # layout.addWidget(btn_container)
+        # -----------------------------
 
         scroll.setWidget(panel)
         return scroll
