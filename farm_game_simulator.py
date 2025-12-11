@@ -34,8 +34,8 @@ class FarmGameSimulator:
         while not self.engine.is_game_over():
             self.engine.simulate_pitch()
             
-        # 成績反映
-        self.engine.finalize_game_stats()
+        # 成績反映 (★日付を渡す)
+        self.engine.finalize_game_stats(date)
         
         return FarmGameResult(
             team_level=self.team_level,
@@ -100,19 +100,23 @@ class FarmLeagueManager:
             # 基本能力 (0-100 scale * factor)
             ability = p.stats.overall_batting()
             
+            # ★追加: 直近の成績が良い選手は起用されやすいようにする
+            # ただし FarmGameManager で日付を持っていないため、ここでは簡易的に累積成績のWARを使う
+            # または単純に能力と年齢重視
+            record = p.get_record_by_level(level)
+            war_bonus = getattr(record, 'war', 0.0) * 10.0
+            
             # 年齢補正: 若いほど高スコア (28歳以下に強いボーナス)
-            # 22歳以下はさらに優遇
             age_bonus = max(0, 28 - p.age) * 4.0
             if p.age <= 22: age_bonus += 10
             
             # ランダム性: 毎回大きく変動させることで固定化を防ぐ (0-40)
-            # これにより能力が低くてもチャンスが回ってくる
             rand = random.uniform(0, 40)
             
             # 調子補正: 調子が良い選手を使う
             cond = (p.condition - 5) * 4.0
             
-            return ability * 0.4 + age_bonus + rand + cond
+            return ability * 0.4 + age_bonus + rand + cond + war_bonus
 
         # 評価値付きリスト作成
         scored_players = []
@@ -128,13 +132,11 @@ class FarmLeagueManager:
         scored_players.sort(key=lambda x: x[2], reverse=True)
         
         # 上位の選手を「本日のスタメン候補」としてピックアップ
-        # 少し多めに候補を選び、その中からポジション最適化を行う
         candidate_count = min(len(scored_players), 13)
         if candidate_count < 9: candidate_count = len(scored_players)
         
         top_candidates = [x[1] for x in scored_players[:candidate_count]]
         
-        # 万が一9人に満たない場合は全員リストに戻す
         if len(top_candidates) < 9:
             top_candidates = [x[1] for x in scored_players]
             
@@ -156,4 +158,4 @@ class FarmLeagueManager:
 def simulate_farm_games_for_day(teams: List[Team], date: str, player_team_name: str = None):
     """その日の二軍・三軍戦をまとめてシミュレート"""
     manager = FarmLeagueManager(teams)
-    manager.simulate_farm_games(date, exclude_team=None)
+    manager.simulate_farm_games(date, exclude_team=player_team_name)

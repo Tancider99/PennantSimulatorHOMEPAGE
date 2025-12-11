@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-データモデル定義 (修正版: 総合力計算をWAR準拠に変更・平均250化・不足プロパティ追加)
+データモデル定義 (修正版: 直近成績管理機能追加・WAR準拠総合力)
 """
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
 import datetime
 import random
-
+from datetime import datetime, timedelta # 日付計算用にインポート
 
 class Position(Enum):
     PITCHER = "投手"
@@ -900,6 +900,9 @@ class Player:
     
     bats: str = "右"
     throws: str = "右"
+    
+    # ★追加: 直近成績履歴（日付文字列, PlayerRecord）
+    recent_records: List[Tuple[str, PlayerRecord]] = field(default_factory=list)
 
     def __post_init__(self):
         if self.team_level is None:
@@ -922,6 +925,7 @@ class Player:
         self.record = PlayerRecord()
         self.record_farm = PlayerRecord()
         self.record_third = PlayerRecord()
+        self.recent_records = [] # 履歴もリセット
 
     def archive_season(self, year: int):
         if self.record.games > 0 or self.record.games_pitched > 0:
@@ -988,6 +992,35 @@ class Player:
         if random.random() < 0.2: # 20%の確率で変動
             change = random.choice([-1, 1])
             self.condition = max(1, min(9, self.condition + change))
+
+    # ★追加: 直近成績記録用のメソッド
+    def add_game_record(self, date_str: str, record: PlayerRecord):
+        """試合ごとの成績を追加する"""
+        new_rec = PlayerRecord()
+        new_rec.merge_from(record) # コピー
+        self.recent_records.append((date_str, new_rec))
+        # 履歴が多すぎたら削除（直近60試合程度あれば十分）
+        if len(self.recent_records) > 60:
+            self.recent_records.pop(0)
+
+    # ★追加: 直近成績取得メソッド
+    def get_recent_stats(self, current_date_str: str, days: int = 30) -> PlayerRecord:
+        """指定された期間（直近N日）の成績を集計して返す"""
+        total = PlayerRecord()
+        try:
+            curr = datetime.strptime(current_date_str, "%Y-%m-%d")
+            limit = curr - timedelta(days=days)
+            
+            # 履歴を後ろから遡る
+            for d_str, rec in reversed(self.recent_records):
+                game_date = datetime.strptime(d_str, "%Y-%m-%d")
+                if game_date < limit:
+                    break
+                total.merge_from(rec)
+        except Exception:
+            # 日付フォーマットエラーなどは無視して空レコードを返すか、全件返すか
+            pass
+        return total
 
     @property
     def is_injured(self) -> bool:
