@@ -281,7 +281,11 @@ class FarmSwapPage(QWidget):
 
         self.current_team = game_state.player_team
         self.team_label.setText(self.current_team.name)
-        
+
+        # ファーム・三軍ロスターが空なら自動分配
+        if not self.current_team.farm_roster and not self.current_team.third_roster:
+            self.current_team.auto_assign_rosters()
+
         self._refresh_tables()
 
     def _set_filter(self, mode):
@@ -308,30 +312,28 @@ class FarmSwapPage(QWidget):
         self._setup_table_columns(self.farm_table, is_pitcher)
         self._setup_table_columns(self.third_table, is_pitcher)
 
-        # 選手データの取得と振り分け
+        # ファーム・三軍ロスターから直接選手を取得し、フィルタ条件に合う場合のみ表示
         farm_players = []
         third_players = []
-        
-        # チームリストから走査
-        for i, p in enumerate(self.current_team.players):
-            # 安全なPosition取得
+
+        for i in self.current_team.farm_roster:
+            p = self.current_team.players[i]
             try:
-                # p.position.value を安全に取得
-                if hasattr(p.position, 'value'):
-                    pos_val = p.position.value
-                else:
-                    pos_val = str(p.position)
+                pos_val = p.position.value if hasattr(p.position, 'value') else str(p.position)
             except:
                 pos_val = ""
-            
             p_is_pitcher = (pos_val == "投手")
-            if p_is_pitcher != is_pitcher:
-                continue
-
-            # 所属軍判定
-            if i in self.current_team.farm_roster:
+            if p_is_pitcher == is_pitcher:
                 farm_players.append((i, p))
-            elif i in self.current_team.third_roster:
+
+        for i in self.current_team.third_roster:
+            p = self.current_team.players[i]
+            try:
+                pos_val = p.position.value if hasattr(p.position, 'value') else str(p.position)
+            except:
+                pos_val = ""
+            p_is_pitcher = (pos_val == "投手")
+            if p_is_pitcher == is_pitcher:
                 third_players.append((i, p))
 
         # ソート（背番号順）
@@ -345,9 +347,8 @@ class FarmSwapPage(QWidget):
         # 人数表示更新 (人数制限の撤廃)
         # farm_limit = getattr(self.current_team, 'FARM_ROSTER_LIMIT', 40)
         
-        farm_total = len(self.current_team.farm_roster)
-        third_total = len(self.current_team.third_roster)
-        
+        farm_total = len(farm_players)
+        third_total = len(third_players)
         self.farm_count_lbl.setText(f"{farm_total}人")
         self.third_count_lbl.setText(f"{third_total}人")
         self.farm_count_lbl.setStyleSheet(f"color: {self.theme.text_secondary};")
