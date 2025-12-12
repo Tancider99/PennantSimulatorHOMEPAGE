@@ -314,6 +314,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Farm Simulation Error: {e}")
 
+            if hasattr(self, 'contracts_page') and self.contracts_page:
+                self.contracts_page.advance_day()
+
             self.game_state.finish_day_and_advance()
             
             # 画面更新 (Refresh current page)
@@ -364,6 +367,10 @@ class MainWindow(QMainWindow):
                 simulate_farm_games_for_day(self.game_state.teams, self.game_state.current_date)
             except Exception as e:
                 print(f"Farm Simulation Error: {e}")
+
+            # ★追加: 契約関連（スカウト）の日付進行処理
+            if hasattr(self, 'contracts_page') and self.contracts_page:
+                self.contracts_page.advance_day()
 
             # 【重要】他球場試合を消化し、日付を進める
             self.game_state.finish_day_and_advance()
