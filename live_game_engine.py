@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ライブ試合エンジン (修正版: BABIP個人差抑制・平均.300調整・打席数適正化・直近成績記録対応・引き分け対応・不正オーダー排除)
+さらに修正: 回転数(Spin Rate)の本格計算ロジック実装
 """
 import random
 import math
@@ -392,17 +393,20 @@ class AIManager:
         return "NORMAL"
 
 class PitchGenerator:
+    # spin_ratio: ストレート(2200-2400rpm想定)に対する回転数倍率
+    # 1.0 = 標準, >1.0 = 高回転(曲がる), <1.0 = 低回転(落ちる/不規則)
     PITCH_DATA = {
-        "ストレート": {"base_speed": 148, "h_break": 0, "v_break": 10},
-        "ツーシーム": {"base_speed": 145, "h_break": 12, "v_break": 2},
-        "カットボール": {"base_speed": 140, "h_break": -8, "v_break": 3},
-        "スライダー": {"base_speed": 132, "h_break": -20, "v_break": -3},
-        "カーブ":     {"base_speed": 115, "h_break": -12, "v_break": -25},
-        "フォーク":   {"base_speed": 136, "h_break": 0, "v_break": -30},
-        "チェンジアップ": {"base_speed": 128, "h_break": 8, "v_break": -15},
-        "シュート":   {"base_speed": 140, "h_break": 18, "v_break": -6},
-        "シンカー":   {"base_speed": 142, "h_break": 15, "v_break": -10},
-        "スプリット": {"base_speed": 140, "h_break": 3, "v_break": -28}
+        "ストレート":     {"base_speed": 148, "h_break": 0,   "v_break": 10,  "spin_ratio": 1.0},
+        "ツーシーム":     {"base_speed": 145, "h_break": 12,  "v_break": 2,   "spin_ratio": 0.95},
+        "カットボール":   {"base_speed": 140, "h_break": -8,  "v_break": 3,   "spin_ratio": 1.05},
+        "スライダー":     {"base_speed": 132, "h_break": -20, "v_break": -3,  "spin_ratio": 1.15},
+        "カーブ":         {"base_speed": 115, "h_break": -12, "v_break": -25, "spin_ratio": 1.20},
+        "フォーク":       {"base_speed": 136, "h_break": 0,   "v_break": -30, "spin_ratio": 0.60},
+        "チェンジアップ": {"base_speed": 128, "h_break": 8,   "v_break": -15, "spin_ratio": 0.85},
+        "シュート":       {"base_speed": 140, "h_break": 18,  "v_break": -6,  "spin_ratio": 0.98},
+        "シンカー":       {"base_speed": 142, "h_break": 15,  "v_break": -10, "spin_ratio": 0.90},
+        "スプリット":     {"base_speed": 140, "h_break": 3,   "v_break": -28, "spin_ratio": 0.55},
+        "ナックル":       {"base_speed": 105, "h_break": 0,   "v_break": -20, "spin_ratio": 0.10}
     }
 
     def generate_pitch(self, pitcher: Player, batter: Player, catcher: Player, state: GameState, strategy="NORMAL", stadium: Stadium = None) -> PitchData:
@@ -412,6 +416,7 @@ class PitchGenerator:
         velocity = get_effective_stat(pitcher, 'velocity', batter, is_risp, is_close)
         control = get_effective_stat(pitcher, 'control', batter, is_risp, is_close)
         movement = get_effective_stat(pitcher, 'movement', batter, is_risp, is_close)
+        stuff = get_effective_stat(pitcher, 'stuff', batter, is_risp, is_close) # 球威を回転数計算に使用
         
         if stadium: control = control / max(0.5, stadium.pf_bb)
         if catcher:
@@ -448,19 +453,62 @@ class PitchGenerator:
                 else: pitch_type = breaking_balls[0]
             
         base = self.PITCH_DATA.get(pitch_type, self.PITCH_DATA["ストレート"])
+        
+        # --- 球速計算 ---
         base_velo = velocity * fatigue
         if pitch_type != "ストレート":
             speed_ratio = base["base_speed"] / 148.0
             base_velo *= speed_ratio
-            
         velo = random.gauss(base_velo, 1.5); velo = max(80, min(170, velo))
-        move_factor = 1.0 + (movement - 50) * 0.01
-        h_brk = base["h_break"] * move_factor + random.gauss(0, 2)
-        v_brk = base["v_break"] * move_factor + random.gauss(0, 2)
-        loc = self._calc_location(control * fatigue, state, strategy)
-        traj = self._calc_traj(velo, h_brk, v_brk, loc)
+
+        # --- 本格的回転数計算ロジック ---
+        # 1. 基礎回転数 (球速に比例, MLB平均で約 15.5 * km/h 程度)
+        base_spin = velo * 15.5
+        spin_ratio = base.get("spin_ratio", 1.0)
         
-        return PitchData(pitch_type, round(velo,1), 2200, h_brk, v_brk, loc, (0,18.44,1.8), traj)
+        # 2. 球種別倍率適用
+        calculated_spin = base_spin * spin_ratio
+        
+        # 3. 投手能力(Stuff/Movement)による補正
+        # 高回転系(ストレート, スライダー等)はStuffが高いほど回転数UP(キレる)
+        # 低回転系(フォーク, スプリット, ナックル)はStuffが高いほど回転数DOWN(落ちる/揺れる)
+        is_low_spin_pitch = spin_ratio < 0.8
+        
+        stuff_mod = (stuff - 50) * 8.0 # 球威の影響
+        movement_mod = (movement - 50) * 4.0 # 変化球能力の影響
+        
+        if is_low_spin_pitch:
+            # 良いフォークは回転が少ない -> Stuffが高いほど減算
+            calculated_spin -= (stuff_mod + movement_mod)
+        else:
+            # 良いスライダーは回転が多い -> Stuffが高いほど加算
+            calculated_spin += (stuff_mod + movement_mod)
+            
+        # 4. ランダムな揺らぎ
+        calculated_spin += random.gauss(0, 50)
+        spin_rate = int(max(100, calculated_spin)) # 最低100rpm
+
+        # --- 変化量計算 (回転数依存) ---
+        move_factor = 1.0 + (movement - 50) * 0.01
+        
+        # 回転数による変化係数
+        # 基準(2200rpm)より多いか少ないかで変化幅を変える
+        if is_low_spin_pitch:
+            # 低回転ピッチ(フォーク等): 回転が少ないほど「重力で落ちる」= v_break(負の値)が大きくなる
+            # 1500rpm以下になると落差が急激に増すイメージ
+            low_spin_bonus = max(0, (1500 - spin_rate) / 1000.0)
+            spin_move_factor = 1.0 + low_spin_bonus
+        else:
+            # 通常変化球: 回転が多いほど変化する(マグヌス効果)
+            spin_move_factor = spin_rate / 2200.0
+        
+        h_brk = base["h_break"] * move_factor * spin_move_factor + random.gauss(0, 2)
+        v_brk = base["v_break"] * move_factor * spin_move_factor + random.gauss(0, 2)
+
+        loc = self._calc_location(control * fatigue, state, strategy)
+        traj = self._calc_traj(velo, h_brk, v_brk, loc, spin_rate, pitch_type)
+        
+        return PitchData(pitch_type, round(velo,1), spin_rate, h_brk, v_brk, loc, (0,18.44,1.8), traj)
 
     def _calc_location(self, control, state, strategy):
         if strategy == "WALK": return PitchLocation(1.0, 1.5, False)
@@ -488,14 +536,23 @@ class PitchGenerator:
         is_strike = (abs(ax) <= STRIKE_ZONE['half_width'] + 0.036 and abs(az - STRIKE_ZONE['center_z']) <= STRIKE_ZONE['half_height'] + 0.036)
         return PitchLocation(ax, az, is_strike)
 
-    def _calc_traj(self, velo, hb, vb, loc):
+    def _calc_traj(self, velo, hb, vb, loc, spin_rate, pitch_type):
         path = []; start = (random.uniform(-0.05, 0.05), 18.44, 1.8); end = (loc.x, 0, loc.z)
         steps = 15
+        
+        # wobble(揺れ)の計算を削除
+
         for i in range(steps + 1):
             t = i/steps
-            x = start[0] + (end[0]-start[0])*t + (hb/100 * 0.3)*math.sin(t*math.pi)
+            
+            # 変化カーブを少し緩やかにして自然な放物線にする (1.8 -> 1.5)
+            break_t = t ** 1.5
+            
+            # wobble_x, wobble_z を削除
+            
+            x = start[0] + (end[0]-start[0])*t + (hb/100 * 0.3) * math.sin(break_t * math.pi)
             y = start[1] * (1-t)
-            z = start[2] + (end[2]-start[2])*t + (vb/100 * 0.3)*(t**2)
+            z = start[2] + (end[2]-start[2])*t + (vb/100 * 0.3) * (t**2) # 重力成分はそのまま
             path.append((x,y,z))
         return path
 
