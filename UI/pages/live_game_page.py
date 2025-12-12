@@ -1,636 +1,652 @@
 # -*- coding: utf-8 -*-
 """
-Baseball Team Architect 2027 - Live Game Page
-Premium Digital Stadium UI with AI & Management
+Baseball Team Architect 2027 - Live Game Page (Savant Style)
+High-End Data Visualization & Broadcast UI
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QScrollArea, QGridLayout, QGraphicsDropShadowEffect,
-    QDialog, QSizePolicy, QGraphicsOpacityEffect, QProgressBar
+    QDialog, QSizePolicy, QProgressBar, QSplitter
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QPointF, QRectF, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QTimer, QPointF, QRectF, QSize
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QBrush, QFont, QPainterPath, 
-    QLinearGradient, QPolygonF
+    QLinearGradient, QPolygonF, QRadialGradient
 )
 
 import sys
 import os
 import math
+import random
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from UI.theme import get_theme
-from live_game_engine import PitchType, PlayResult, PitchResult, BattedBallType, get_rank
+from live_game_engine import PitchType, PlayResult, PitchResult, BattedBallType, get_rank, PitchData, BattedBallData
 
 # ========================================
-# デザイン定数
+# ユーティリティ & デザイン定数
 # ========================================
-COLORS = {
-    "bg": QColor("#121212"),
-    "field_fair": QColor("#1e1e1e"),
-    "field_foul": QColor("#181818"),
-    "line": QColor("#444444"),
-    "text_main": QColor("#ffffff"),
-    "text_sub": QColor("#888888"),
-    "accent": QColor("#00e5ff"),   # Cyan
-    "accent2": QColor("#ffd700"),  # Gold
-    "btn_bg": QColor("#263238"),
+THEME = get_theme()
+
+class VisualStyle:
+    # Colors derived from theme but specialized for data viz
+    BG_MAIN = QColor("#0b0c10")
+    BG_PANEL = QColor("#1e2126")
+    ACCENT_CYAN = QColor("#00e5ff")
+    ACCENT_MAGENTA = QColor("#d500f9")
+    ACCENT_GOLD = QColor("#ffd700")
+    ACCENT_RED = QColor("#ff1744")
+    ACCENT_GREEN = QColor("#00e676")
     
-    # Result Colors
-    "strike": QColor("#ffd700"),   # Yellow
-    "ball":   QColor("#00e676"),   # Green
-    "hit":    QColor("#2979ff"),   # Blue
-    "out":    QColor("#ff1744"),   # Red
-}
+    # Fonts
+    FONT_NUM = "Roboto Mono"
+    FONT_UI = "Segoe UI"
 
-FONTS = {
-    "main": "Segoe UI",
-    "digit": "Roboto Mono", 
-    "impact": "Impact"
-}
-
-# ========================================
-# 試合モード選択ダイアログ
-# ========================================
-class GameModeDialog(QDialog):
-    mode_selected = Signal(str)
-
-    def __init__(self, home_team, away_team, parent=None):
-        super().__init__(parent)
-        self.selected_mode = None
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(500, 320)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        frame = QFrame()
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(30)
-        shadow.setColor(QColor(0, 0, 0, 150))
-        frame.setGraphicsEffect(shadow)
-        
-        fl = QVBoxLayout(frame)
-        fl.setContentsMargins(40, 30, 40, 30)
-        fl.setSpacing(20)
-        
-        # Title
-        title = QLabel("GAME START")
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: white; letter-spacing: 4px;")
-        fl.addWidget(title)
-        
-        # Matchup
-        m_layout = QHBoxLayout()
-        def t_lbl(t): return QLabel(t, styleSheet="font-size: 16px; color: #ccc; font-weight: bold;")
-        m_layout.addWidget(t_lbl(away_team.name), alignment=Qt.AlignCenter)
-        m_layout.addWidget(QLabel("vs", styleSheet="color: #666; margin: 0 15px; font-style: italic;"), alignment=Qt.AlignCenter)
-        m_layout.addWidget(t_lbl(home_team.name), alignment=Qt.AlignCenter)
-        fl.addLayout(m_layout)
-        
-        fl.addSpacing(10)
-        
-        # Buttons
-        b_layout = QHBoxLayout()
-        b_layout.setSpacing(15)
-        
-        def mkbtn(txt, mode, col):
-            b = QPushButton(txt)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setFixedHeight(45)
-            b.setStyleSheet(f"""
-                QPushButton {{
-                    background: transparent; border: 1px solid #555; color: #eee; font-weight: bold; font-size: 12px;
-                }}
-                QPushButton:hover {{
-                    background: {col}; border-color: {col}; color: #111;
-                }}
-            """)
-            b.clicked.connect(lambda: self._sel(mode))
-            return b
-            
-        b_layout.addWidget(mkbtn("RESULT ONLY", "skip", "#90caf9"))
-        b_layout.addWidget(mkbtn("MANAGE MODE", "manage", "#ffd700"))
-        fl.addLayout(b_layout)
-        
-        layout.addWidget(frame)
-
-    def _sel(self, m):
-        self.selected_mode = m
-        self.mode_selected.emit(m)
-        self.accept()
-
+    @staticmethod
+    def get_pitch_color(pitch_type: str):
+        mapping = {
+            "ストレート": QColor("#ff4081"),    # Pink (4-Seam)
+            "ツーシーム": QColor("#e040fb"),    # Purple
+            "カットボール": QColor("#7c4dff"),  # Deep Purple
+            "スライダー": QColor("#ffd740"),    # Amber
+            "カーブ": QColor("#00e5ff"),        # Cyan
+            "フォーク": QColor("#69f0ae"),      # Green
+            "チェンジアップ": QColor("#1de9b6"),# Teal
+            "シュート": QColor("#ff6e40"),      # Deep Orange
+            "シンカー": QColor("#40c4ff"),      # Light Blue
+            "スプリット": QColor("#00b0ff"),    # Blue
+        }
+        return mapping.get(pitch_type, QColor("#999999"))
 
 # ========================================
-# ストライクゾーン
+# 3D 投球軌道 & ストライクゾーン (Gameday Style)
 # ========================================
-class StrikeZoneWidget(QWidget):
+class GamedayStrikeZone(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.pitches = [] 
-        self.current_pitch = None
+        self.setMinimumSize(300, 350)
+        self.pitches = []  # (PitchData, result_str, color)
+        self.last_pitch = None
 
-    def add_pitch(self, pitch_data, result_type: str, is_hit: bool, is_out: bool, is_strikeout: bool, pitcher_hand: str = "Right"):
-        if not pitch_data: return
-        
-        # 色決定
-        if is_hit: color = COLORS["hit"]
-        elif is_strikeout: color = COLORS["strike"] 
-        elif is_out: color = COLORS["out"]    
-        elif pitch_data.location.is_strike: color = COLORS["strike"]
-        else: color = COLORS["ball"]
-            
-        self.pitches.append((pitch_data, color, pitcher_hand))
-        if len(self.pitches) > 15: self.pitches.pop(0)
-        self.current_pitch = (pitch_data, color, pitcher_hand)
+    def add_pitch(self, pitch: PitchData, result: str):
+        color = VisualStyle.get_pitch_color(pitch.pitch_type)
+        self.pitches.append((pitch, result, color))
+        if len(self.pitches) > 10:  # 最新10球のみ表示
+            self.pitches.pop(0)
+        self.last_pitch = pitch
         self.update()
 
-    def clear_pitches(self):
-        self.pitches.clear()
-        self.current_pitch = None
+    def clear(self):
+        self.pitches = []
+        self.last_pitch = None
         self.update()
 
-    def _get_shape_type(self, ptype, hand):
-        straight = ["ストレート", "ツーシーム", "カットボール"]
-        breaking = ["スライダー", "カーブ"]
-        reverse = ["シュート", "シンカー"]
-        drop = ["フォーク", "スプリット", "チェンジアップ"]
+    def project_3d(self, x, y, z, width, height):
+        """
+        簡易パースペクティブ投影
+        x: 横 (Home plate center=0)
+        y: 奥行き (Home plate=0, Pitcher mound=18.44)
+        z: 高さ (Ground=0)
+        """
+        scale = min(width, height) * 0.85
         
-        if ptype in straight: return 0
-        if ptype in drop: return 3
+        # 視点設定 (捕手後方上空からの視点)
+        cam_dist = 4.0  # カメラ距離
         
-        is_lefty = (hand == "Left")
-        if ptype in breaking: return 2 if is_lefty else 1
-        if ptype in reverse: return 1 if is_lefty else 2
-        return 0
+        # 奥行きによるスケール補正
+        # y=0 (ホームベース) が最大、y=18.44 (マウンド) が最小
+        depth_factor = cam_dist / (cam_dist + y/12.0) 
+        
+        screen_x = width/2 + (x * scale * 0.6 * depth_factor)
+        # z=0が画面下部に来るように調整
+        screen_y = height * 0.90 - (z * scale * 0.6 * depth_factor)
+        
+        return QPointF(screen_x, screen_y), depth_factor
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
+
+        # 背景 (ダーク)
+        painter.fillRect(self.rect(), VisualStyle.BG_PANEL)
         
-        zone_w = min(w * 0.8, h * 0.6)
-        zone_h = zone_w * 1.35
-        cx, cy = w / 2, h / 2
-        zone_rect = QRectF(cx - zone_w/2, cy - zone_h/2, zone_w, zone_h)
+        # --- ホームベース周辺 ---
+        hb_center, _ = self.project_3d(0, 0, 0, w, h)
         
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
-        cw, ch = zone_w/3, zone_h/3
-        for i in range(1, 3):
-            painter.drawLine(zone_rect.left()+cw*i, zone_rect.top(), zone_rect.left()+cw*i, zone_rect.bottom())
-            painter.drawLine(zone_rect.left(), zone_rect.top()+ch*i, zone_rect.right(), zone_rect.top()+ch*i)
-            
-        painter.setPen(QPen(QColor(255, 255, 255, 150), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(zone_rect)
+        # ホームプレート (五角形)
+        hp_scale = 0.43 # 幅43cm
+        hp_pts = [
+            self.project_3d(0, 0, 0, w, h)[0], # 先端
+            self.project_3d(hp_scale/2, 0.2, 0, w, h)[0],
+            self.project_3d(hp_scale/2, 0.4, 0, w, h)[0],
+            self.project_3d(-hp_scale/2, 0.4, 0, w, h)[0],
+            self.project_3d(-hp_scale/2, 0.2, 0, w, h)[0],
+        ]
+        painter.setBrush(QColor(220, 220, 220))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPolygonF(hp_pts))
+
+        # バッターボックス (簡易ライン)
+        painter.setPen(QPen(QColor(255, 255, 255, 50), 2))
+        l_box_tl, _ = self.project_3d(-1.2, 0, 0, w, h)
+        l_box_bl, _ = self.project_3d(-1.2, 1.5, 0, w, h)
+        painter.drawLine(l_box_tl, l_box_bl)
         
-        def draw_mark(data_tuple, is_latest):
-            pitch, color, hand = data_tuple
-            if not pitch or not pitch.location: return
+        r_box_tl, _ = self.project_3d(1.2, 0, 0, w, h)
+        r_box_bl, _ = self.project_3d(1.2, 1.5, 0, w, h)
+        painter.drawLine(r_box_tl, r_box_bl)
+
+        # --- 3D ストライクゾーン枠 (透明ボックス) ---
+        zone_top = 1.05  # 一般的な上限 (m)
+        zone_btm = 0.45  # 一般的な下限 (m)
+        zone_w = 0.216   # 幅の半分 (m)
+        
+        # 前面 (ホームベース上)
+        tl_f, _ = self.project_3d(-zone_w, 0, zone_top, w, h)
+        tr_f, _ = self.project_3d(zone_w, 0, zone_top, w, h)
+        bl_f, _ = self.project_3d(-zone_w, 0, zone_btm, w, h)
+        br_f, _ = self.project_3d(zone_w, 0, zone_btm, w, h)
+        
+        # 背面 (少し奥) - 立体感を出すためのダミー深度
+        back_depth = 0.5
+        tl_b, _ = self.project_3d(-zone_w, back_depth, zone_top, w, h)
+        tr_b, _ = self.project_3d(zone_w, back_depth, zone_top, w, h)
+        bl_b, _ = self.project_3d(-zone_w, back_depth, zone_btm, w, h)
+        br_b, _ = self.project_3d(zone_w, back_depth, zone_btm, w, h)
+        
+        # ワイヤーフレーム
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 1, Qt.DotLine))
+        painter.drawLine(tl_f, tl_b); painter.drawLine(tr_f, tr_b)
+        painter.drawLine(bl_f, bl_b); painter.drawLine(br_f, br_b)
+        painter.drawLine(tl_b, tr_b); painter.drawLine(tr_b, br_b)
+        painter.drawLine(br_b, bl_b); painter.drawLine(bl_b, tl_b)
+
+        # 前面枠 (実線・強調・ストライクゾーン本体)
+        painter.setPen(QPen(QColor(255, 255, 255, 180), 2))
+        painter.drawRect(QRectF(tl_f, br_f))
+
+        # --- 投球の描画 ---
+        # 過去の投球 (薄く、点のみ)
+        for i, (pitch, result, color) in enumerate(self.pitches):
+            if pitch == self.last_pitch: continue
             
-            nx = pitch.location.x / 0.216
-            ny = (pitch.location.z - 0.75) / 0.28
-            px = cx + nx * (zone_w / 2)
-            py = cy - ny * (zone_h / 2)
+            # 通過点
+            pt, _ = self.project_3d(pitch.location.x, 0, pitch.location.z, w, h)
             
-            px = max(zone_rect.left()-30, min(zone_rect.right()+30, px))
-            py = max(zone_rect.top()-30, min(zone_rect.bottom()+30, py))
-            
-            shape_id = self._get_shape_type(pitch.pitch_type, hand)
-            size = 14 if is_latest else 10
-            h_sz = size / 2
-            
+            # 透過円
             painter.setPen(Qt.NoPen)
-            painter.setBrush(color)
-            center = QPointF(px, py)
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 100))
+            painter.drawEllipse(pt, 6, 6)
             
-            if shape_id == 0: painter.drawEllipse(center, h_sz, h_sz)
-            elif shape_id == 1: # Left Tri
-                painter.drawPolygon(QPolygonF([QPointF(px-h_sz, py), QPointF(px+h_sz, py-h_sz), QPointF(px+h_sz, py+h_sz)]))
-            elif shape_id == 2: # Right Tri
-                painter.drawPolygon(QPolygonF([QPointF(px+h_sz, py), QPointF(px-h_sz, py-h_sz), QPointF(px-h_sz, py+h_sz)]))
-            elif shape_id == 3: # Down Tri
-                painter.drawPolygon(QPolygonF([QPointF(px, py+h_sz), QPointF(px-h_sz, py-h_sz), QPointF(px+h_sz, py-h_sz)]))
+            # 球順番号
+            painter.setPen(QColor(255,255,255,180))
+            painter.setFont(QFont(VisualStyle.FONT_NUM, 8))
+            painter.drawText(QRectF(pt.x()-10, pt.y()-10, 20, 20), Qt.AlignCenter, str(i+1))
+
+        # 最新の投球 (軌道付きで強調)
+        if self.last_pitch:
+            pitch = self.last_pitch
+            color = VisualStyle.get_pitch_color(pitch.pitch_type)
             
-            if is_latest:
-                painter.setBrush(Qt.NoBrush)
-                painter.setPen(QPen(Qt.white, 2))
-                painter.drawEllipse(center, h_sz+4, h_sz+4)
+            # 軌道 (Trajectory)
+            path = QPainterPath()
+            if pitch.trajectory:
+                # 始点
+                start_pt, _ = self.project_3d(pitch.trajectory[0][0], pitch.trajectory[0][1], pitch.trajectory[0][2], w, h)
+                path.moveTo(start_pt)
                 
-                painter.setPen(Qt.white)
-                painter.setFont(QFont(FONTS["digit"], 11, QFont.Bold))
-                painter.drawText(QRectF(px+15, py-10, 60, 20), Qt.AlignLeft|Qt.AlignVCenter, f"{int(pitch.velocity)}")
-
-        painter.setOpacity(0.6)
-        for d in self.pitches:
-            if d == self.current_pitch: continue
-            draw_mark(d, False)
+                # パス生成
+                for pos in pitch.trajectory[1:]:
+                     # マウンド(y=18.44)からホーム(y=0)へ
+                     pt, df = self.project_3d(pos[0], pos[1], pos[2], w, h)
+                     path.lineTo(pt)
             
-        painter.setOpacity(1.0)
-        if self.current_pitch:
-            draw_mark(self.current_pitch, True)
+            # 軌道の影 (床面投影) - 深さを感じる要素
+            shadow_path = QPainterPath()
+            if pitch.trajectory:
+                s_start, _ = self.project_3d(pitch.trajectory[0][0], pitch.trajectory[0][1], 0, w, h)
+                shadow_path.moveTo(s_start)
+                for pos in pitch.trajectory[1:]:
+                     pt, _ = self.project_3d(pos[0], pos[1], 0, w, h)
+                     shadow_path.lineTo(pt)
+            
+            # 影の描画
+            painter.setPen(QPen(QColor(0,0,0,80), 3))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(shadow_path)
 
+            # 軌道の描画 (グラデーションをつけるとより良いが、単色で視認性重視)
+            painter.setPen(QPen(color, 4))
+            painter.drawPath(path)
+            
+            # 到達点 (ボール)
+            final_pt, _ = self.project_3d(pitch.location.x, 0, pitch.location.z, w, h)
+            
+            # ボール本体
+            painter.setPen(QPen(Qt.white, 1))
+            painter.setBrush(color)
+            painter.drawEllipse(final_pt, 10, 10)
+            
+            # 詳細テキスト (球速・球種)
+            info_rect = QRectF(final_pt.x() + 15, final_pt.y() - 25, 120, 50)
+            
+            # 背景ボックス
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 150))
+            painter.drawRoundedRect(info_rect, 4, 4)
+            
+            painter.setPen(Qt.white)
+            painter.setFont(QFont(VisualStyle.FONT_NUM, 10, QFont.Bold))
+            painter.drawText(info_rect.adjusted(5,0,0,0), Qt.AlignLeft|Qt.AlignVCenter, f"{int(pitch.velocity)}km\n{pitch.pitch_type}")
 
 # ========================================
-# フィールド (スタイリッシュ・全体表示)
+# フィールドビュー (打球・守備)
 # ========================================
-class StylishFieldWidget(QWidget):
+class BroadcastField(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(300, 300)
         self.batted_ball = None
-        self.runners = [False, False, False]
+        self.runners = [False, False, False] # 1B, 2B, 3B
 
-    def set_batted_ball(self, ball_data):
-        self.batted_ball = ball_data
-        self.update()
-
-    def set_runners(self, runners):
+    def set_data(self, ball: BattedBallData, runners):
+        self.batted_ball = ball
         self.runners = runners
         self.update()
 
     def clear(self):
         self.batted_ball = None
         self.update()
-
-    def project(self, x, y, z=0, width=100, height=100):
-        cam_h = 90.0
-        cam_d = -80.0
-        scale = min(width, height) * 2.8
-        depth = (y - cam_d)
-        if depth < 1: depth = 1
-        persp = 150.0 / (depth + 100.0)
-        cx = width / 2
-        cy = height * 0.9
-        sx = cx + (x * persp * scale * 0.005)
-        gy = cy - (y * persp * scale * 0.004)
-        sy = gy - (z * persp * scale * 0.01)
-        return QPointF(sx, sy)
-
+        
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
+        cx, cy = w / 2, h * 0.85 # ホームベース位置
         
-        painter.fillRect(self.rect(), COLORS["bg"])
+        # 背景
+        painter.fillRect(self.rect(), VisualStyle.BG_PANEL)
         
-        radius = 122.0
-        poly = QPolygonF()
-        steps = 40
-        for i in range(steps + 1):
-            deg = -45 + (90 * i / steps)
-            rad = math.radians(deg)
-            poly.append(self.project(radius * math.sin(rad), radius * math.cos(rad), 0, w, h))
-        poly.append(self.project(0, 0, 0, w, h))
+        # --- フィールド描画 (スケーリング) ---
+        scale = min(w, h) / 130.0 # 130mスケール
+        
+        # フェアグラウンド (扇形)
+        field_path = QPainterPath()
+        field_path.moveTo(cx, cy)
+        field_path.arcTo(cx - 122*scale, cy - 122*scale, 244*scale, 244*scale, 45, 90) # センター122m
+        field_path.closeSubpath()
         
         painter.setPen(Qt.NoPen)
-        painter.setBrush(COLORS["field_fair"])
-        painter.drawPolygon(poly)
+        painter.setBrush(QColor("#263238")) # 芝生色 (ダーク)
+        painter.drawPath(field_path)
         
-        painter.setPen(QPen(COLORS["line"], 2))
-        home = self.project(0, 0, 0, w, h)
-        pole_l = self.project(-86, 86, 0, w, h)
-        pole_r = self.project(86, 86, 0, w, h)
-        painter.drawLine(home, pole_l)
-        painter.drawLine(home, pole_r)
+        # 内野 (ダイヤモンド)
+        base_dist = 27.43 * scale # 約30m
+        diamond = QPolygonF()
+        diamond.append(QPointF(cx, cy)) # 本塁
+        diamond.append(QPointF(cx + base_dist, cy - base_dist)) # 1塁
+        diamond.append(QPointF(cx, cy - base_dist*2)) # 2塁
+        diamond.append(QPointF(cx - base_dist, cy - base_dist)) # 3塁
         
-        wall_h = 3.5
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#263238"))
-        for i in range(steps):
-            deg1 = -45 + (90 * i / steps)
-            deg2 = -45 + (90 * (i+1) / steps)
-            r1, r2 = math.radians(deg1), math.radians(deg2)
-            p1 = self.project(radius*math.sin(r1), radius*math.cos(r1), 0, w, h)
-            p2 = self.project(radius*math.sin(r2), radius*math.cos(r2), 0, w, h)
-            p3 = self.project(radius*math.sin(r2), radius*math.cos(r2), wall_h, w, h)
-            p4 = self.project(radius*math.sin(r1), radius*math.cos(r1), wall_h, w, h)
-            painter.drawPolygon(QPolygonF([p1, p2, p3, p4]))
-
-        painter.setPen(QPen(COLORS["line"], 1))
-        first = self.project(19.3, 19.3, 0, w, h)
-        second = self.project(0, 38.7, 0, w, h)
-        third = self.project(-19.3, 19.3, 0, w, h)
-        painter.drawLine(home, first)
-        painter.drawLine(first, second)
-        painter.drawLine(second, third)
-        painter.drawLine(third, home)
+        painter.setBrush(QColor("#3e2723")) # 土色
+        painter.setPen(QPen(QColor(255,255,255,50), 1))
+        painter.drawPolygon(diamond)
         
-        mound = self.project(0, 18.44, 0, w, h)
-        painter.setBrush(COLORS["line"])
-        painter.setPen(Qt.NoPen)
-        mw = w * 0.04
-        painter.drawEllipse(mound, mw/2, mw*0.3)
-
-        def draw_base(pt, occ):
-            col = COLORS["accent2"] if occ else QColor("#666")
+        # ベース & ランナー
+        base_size = 7
+        bases = [
+            (cx + base_dist, cy - base_dist), # 1st
+            (cx, cy - base_dist*2),           # 2nd
+            (cx - base_dist, cy - base_dist)  # 3rd
+        ]
+        
+        for i, (bx, by) in enumerate(bases):
+            is_occ = self.runners[i]
+            col = VisualStyle.ACCENT_GOLD if is_occ else QColor("#555")
             painter.setBrush(col)
-            sz = w * 0.008
+            painter.setPen(Qt.white if is_occ else Qt.NoPen)
             painter.drawPolygon(QPolygonF([
-                QPointF(pt.x(), pt.y()-sz*0.6),
-                QPointF(pt.x()+sz, pt.y()),
-                QPointF(pt.x(), pt.y()+sz*0.6),
-                QPointF(pt.x()-sz, pt.y())
+                QPointF(bx, by-base_size), QPointF(bx+base_size, by),
+                QPointF(bx, by+base_size), QPointF(bx-base_size, by)
             ]))
-            
-        draw_base(first, self.runners[0])
-        draw_base(second, self.runners[1])
-        draw_base(third, self.runners[2])
 
-        if self.batted_ball and self.batted_ball.trajectory:
-            traj = self.batted_ball.trajectory
-            path = QPainterPath()
-            start = self.project(traj[0][0], traj[0][1], traj[0][2], w, h)
-            path.moveTo(start)
-            shadow_path = QPainterPath()
-            shadow_path.moveTo(self.project(traj[0][0], traj[0][1], 0, w, h))
+        # --- 打球描画 ---
+        if self.batted_ball:
+            # 極座標 -> 直交座標
+            dist_px = self.batted_ball.distance * scale
+            angle_rad = math.radians(self.batted_ball.spray_angle)
             
-            for p in traj:
-                pt = self.project(p[0], p[1], p[2], w, h)
-                path.lineTo(pt)
-                spt = self.project(p[0], p[1], 0, w, h)
-                shadow_path.lineTo(spt)
+            # 画面上の座標 (y軸は上向き負、x軸は右向き正)
+            # spray_angle: 0=Center, Positive=Right, Negative=Left
+            lx = cx + dist_px * math.sin(angle_rad)
+            ly = cy - dist_px * math.cos(angle_rad)
             
-            painter.setPen(QPen(QColor(0,0,0,100), 2))
+            # 軌道線 (放物線の射影)
+            traj_path = QPainterPath()
+            traj_path.moveTo(cx, cy)
+            
+            # 制御点 (頂点) を簡易計算してベジェ曲線にする
+            mid_x = (cx + lx) / 2
+            mid_y = (cy + ly) / 2
+            # 滞空時間が長いほど頂点を高くする
+            h_factor = self.batted_ball.hang_time * 20 * scale
+            ctrl_pt = QPointF(mid_x, mid_y - h_factor)
+            
+            traj_path.quadTo(ctrl_pt, QPointF(lx, ly))
+            
+            # 描画
+            color = VisualStyle.ACCENT_CYAN
+            if "HOME_RUN" in str(self.batted_ball.hit_type): color = VisualStyle.ACCENT_MAGENTA
+            elif "OUT" in str(self.batted_ball.hit_type): color = VisualStyle.ACCENT_RED
+            
+            painter.setPen(QPen(color, 2, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
-            painter.drawPath(shadow_path)
+            painter.drawPath(traj_path)
             
-            lc = COLORS["accent"]
-            if "HOME_RUN" in str(self.batted_ball.hit_type): lc = COLORS["out"]
-            painter.setPen(QPen(lc, 3))
-            painter.drawPath(path)
+            # 落下点
+            painter.setBrush(color)
+            painter.setPen(Qt.white)
+            painter.drawEllipse(QPointF(lx, ly), 5, 5)
             
-            last = traj[-1]
-            ball_pt = self.project(last[0], last[1], last[2], w, h)
-            painter.setBrush(Qt.white)
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(ball_pt, 3, 3)
+            # テキスト表示 (飛距離)
+            painter.setFont(QFont(VisualStyle.FONT_NUM, 9))
+            painter.setPen(Qt.white)
+            label = f"{int(self.batted_ball.distance)}m"
+            painter.drawText(lx + 8, ly, label)
+
+# ========================================
+# データカード (各種スタッツ表示用)
+# ========================================
+class DataCard(QFrame):
+    def __init__(self, title, value="-", parent=None, color=VisualStyle.ACCENT_CYAN):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(30, 33, 38, 200);
+                border-left: 3px solid {color.name()};
+                border-radius: 2px;
+            }}
+        """)
+        l = QVBoxLayout(self)
+        l.setContentsMargins(8, 5, 8, 5)
+        l.setSpacing(2)
+        
+        self.lbl_title = QLabel(title)
+        self.lbl_title.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        
+        self.lbl_value = QLabel(str(value))
+        self.lbl_value.setStyleSheet(f"color: white; font-family: '{VisualStyle.FONT_NUM}'; font-size: 16px; font-weight: bold;")
+        
+        l.addWidget(self.lbl_title)
+        l.addWidget(self.lbl_value)
+
+    def set_value(self, val):
+        self.lbl_value.setText(str(val))
 
 
 # ========================================
-# メイン画面 (HUDレイアウト)
+# メイン画面クラス
 # ========================================
-
 class LiveGamePage(QWidget):
     game_finished = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.theme = get_theme()
         self.live_engine = None
         self.is_simulating = False
-        self.selected_strategy = "SWING"
-        self.date_str = "2027-01-01" # デフォルト
-        
+        self.date_str = "2027-01-01"
         self._setup_ui()
         self._setup_timer()
 
     def _setup_ui(self):
-        layout = QGridLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 1. 3D Field (Background)
-        self.field_widget = StylishFieldWidget()
-        layout.addWidget(self.field_widget, 0, 0)
-        
-        # 2. UI Overlay
-        ui_container = QWidget()
-        ui_container.setAttribute(Qt.WA_TranslucentBackground)
-        ui_container.setStyleSheet("background: transparent;")
-        
-        ui_grid = QGridLayout(ui_container)
-        ui_grid.setContentsMargins(20, 20, 20, 20)
-        ui_grid.setSpacing(15)
-        
-        # Top: Scoreboard
-        self.scoreboard = self._create_scoreboard()
-        ui_grid.addWidget(self.scoreboard, 0, 0, 1, 3, Qt.AlignTop | Qt.AlignHCenter)
-        
-        # Spacer
-        ui_grid.setRowStretch(1, 1)
-        
-        # Bottom Left: Controls & Logs
-        control_panel = self._create_controls_panel()
-        ui_grid.addWidget(control_panel, 2, 0, Qt.AlignBottom | Qt.AlignLeft)
-        
-        # Bottom Right: Info & Zone
-        right_area = QWidget()
-        r_layout = QVBoxLayout(right_area)
-        r_layout.setContentsMargins(0,0,0,0)
-        r_layout.setSpacing(10)
-        
-        # Tracking Info (Top of Right Area)
-        self.track_info = self._create_track_info()
-        r_layout.addWidget(self.track_info)
-        
-        # Player Info & Zone
-        player_zone = QHBoxLayout()
-        self.matchup_panel = self._create_matchup()
-        self.zone_panel = self._create_zone_panel()
-        player_zone.addWidget(self.matchup_panel)
-        player_zone.addWidget(self.zone_panel)
-        r_layout.addLayout(player_zone)
-        
-        ui_grid.addWidget(right_area, 2, 2, Qt.AlignBottom | Qt.AlignRight)
-        
-        layout.addWidget(ui_container, 0, 0)
+        # メインレイアウト
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-    def _hud_style(self):
-        return """
-            background-color: rgba(10, 10, 12, 240);
-            border: 1px solid #333;
-            border-radius: 0px;
-        """
+        # 1. ヘッダー (スコアボード)
+        self.scoreboard_widget = self._create_scoreboard()
+        main_layout.addWidget(self.scoreboard_widget)
+
+        # 2. メインコンテンツ (左右分割)
+        content_area = QWidget()
+        content_layout = QHBoxLayout(content_area)
+        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setSpacing(10)
+        
+        # --- LEFT: Matchup & Strike Zone ---
+        left_panel = QWidget()
+        lp_layout = QVBoxLayout(left_panel)
+        lp_layout.setContentsMargins(0,0,0,0)
+        lp_layout.setSpacing(10)
+        
+        # Matchup Card (Batter vs Pitcher)
+        self.matchup_card = self._create_matchup_card()
+        lp_layout.addWidget(self.matchup_card)
+        
+        # 3D Strike Zone
+        self.zone_widget = GamedayStrikeZone()
+        lp_layout.addWidget(self.zone_widget, stretch=1)
+        
+        # Pitch Stats Grid
+        self.pitch_stats_grid = self._create_pitch_stats_grid()
+        lp_layout.addWidget(self.pitch_stats_grid)
+        
+        content_layout.addWidget(left_panel, stretch=5)
+        
+        # --- RIGHT: Field & Log ---
+        right_panel = QWidget()
+        rp_layout = QVBoxLayout(right_panel)
+        rp_layout.setContentsMargins(0,0,0,0)
+        rp_layout.setSpacing(10)
+        
+        # Field View
+        self.field_widget = BroadcastField()
+        rp_layout.addWidget(self.field_widget, stretch=4)
+        
+        # Hit Stats Grid
+        self.hit_stats_grid = self._create_hit_stats_grid()
+        rp_layout.addWidget(self.hit_stats_grid)
+        
+        # Game Log
+        self.log_widget = self._create_log_area()
+        rp_layout.addWidget(self.log_widget, stretch=3)
+
+        # Controls
+        self.controls_widget = self._create_controls()
+        rp_layout.addWidget(self.controls_widget)
+        
+        content_layout.addWidget(right_panel, stretch=4)
+        
+        main_layout.addWidget(content_area)
 
     def _create_scoreboard(self):
-        f = QFrame()
-        f.setFixedSize(800, 70)
-        f.setStyleSheet(self._hud_style())
-        l = QHBoxLayout(f)
+        w = QFrame()
+        w.setFixedHeight(70)
+        w.setStyleSheet(f"background-color: {VisualStyle.BG_MAIN.name()}; border-bottom: 1px solid #333;")
+        
+        l = QHBoxLayout(w)
         l.setContentsMargins(20, 0, 20, 0)
         
-        l.addWidget(QLabel("AWAY", styleSheet="color:#888; font-weight:bold; font-size:14px;"))
-        self.lbl_away = QLabel("TEAM A", styleSheet="color:white; font-weight:bold; font-size:20px;")
+        # Away Team
+        self.lbl_away = QLabel("AWAY")
+        self.lbl_away.setStyleSheet("font-size: 20px; font-weight: 900; color: #ccc;")
+        self.lbl_away_score = QLabel("0")
+        self.lbl_away_score.setStyleSheet(f"font-size: 36px; font-weight: 900; color: {VisualStyle.ACCENT_GOLD.name()};")
+        
+        # Inning Info
+        self.lbl_inning = QLabel("1st TOP")
+        self.lbl_inning.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {VisualStyle.ACCENT_CYAN.name()}; margin: 0 20px;")
+        
+        # BSO
+        bso_frame = QFrame()
+        bl = QVBoxLayout(bso_frame)
+        bl.setSpacing(2); bl.setContentsMargins(0,15,0,15)
+        
+        def mk_dots(label, col):
+            r = QHBoxLayout()
+            r.setSpacing(4)
+            r.addWidget(QLabel(label, styleSheet="font-weight:bold; font-size:10px; color:#666; width:10px;"))
+            dots = []
+            for _ in range(3 if label=="B" else 2):
+                d = QLabel("●")
+                d.setStyleSheet("color: #333; font-size: 8px;")
+                r.addWidget(d)
+                dots.append(d)
+            r.addStretch()
+            bl.addLayout(r)
+            return dots
+
+        self.dots_b = mk_dots("B", VisualStyle.ACCENT_GREEN)
+        self.dots_s = mk_dots("S", VisualStyle.ACCENT_GOLD)
+        self.dots_o = mk_dots("O", VisualStyle.ACCENT_RED)
+        
+        # Home Team
+        self.lbl_home_score = QLabel("0")
+        self.lbl_home_score.setStyleSheet(f"font-size: 36px; font-weight: 900; color: {VisualStyle.ACCENT_GOLD.name()};")
+        self.lbl_home = QLabel("HOME")
+        self.lbl_home.setStyleSheet("font-size: 20px; font-weight: 900; color: white;")
+        
         l.addWidget(self.lbl_away)
-        self.lbl_away_score = QLabel("0", styleSheet=f"color:{COLORS['accent2'].name()}; font-weight:900; font-size:36px;")
         l.addWidget(self.lbl_away_score)
-        
         l.addStretch()
-        
-        self.lbl_inning = QLabel("1st TOP", styleSheet="color:#00e5ff; font-weight:bold; font-size:16px;")
         l.addWidget(self.lbl_inning)
-        
-        # 修正: アウトカウントをリストで保持
-        self.lbl_outs = [QLabel("●"), QLabel("●")]
-        for lbl in self.lbl_outs:
-            lbl.setStyleSheet("color:#444; font-size:14px; margin-left:5px;")
-            l.addWidget(lbl)
-        
+        l.addWidget(bso_frame)
         l.addStretch()
-        
-        self.lbl_home_score = QLabel("0", styleSheet=f"color:{COLORS['accent2'].name()}; font-weight:900; font-size:36px;")
         l.addWidget(self.lbl_home_score)
-        self.lbl_home = QLabel("TEAM B", styleSheet="color:white; font-weight:bold; font-size:20px;")
         l.addWidget(self.lbl_home)
-        l.addWidget(QLabel("HOME", styleSheet="color:#888; font-weight:bold; font-size:14px;"))
-        
-        return f
-
-    def _create_track_info(self):
-        f = QFrame()
-        f.setFixedSize(280, 60)
-        f.setStyleSheet("background: rgba(0,0,0,0.5); border: 1px solid #00e5ff;")
-        l = QGridLayout(f)
-        l.setContentsMargins(10,5,10,5)
-        
-        def lbl(t, v):
-            return QLabel(f"{t}: {v}", styleSheet="color:white; font-family:Roboto Mono; font-size:12px;")
-            
-        self.lbl_tv = lbl("VELO", "-")
-        self.lbl_ta = lbl("ANG", "-")
-        self.lbl_td = lbl("DIST", "-")
-        
-        l.addWidget(self.lbl_tv, 0, 0)
-        l.addWidget(self.lbl_ta, 0, 1)
-        l.addWidget(self.lbl_td, 1, 0, 1, 2)
-        return f
-
-    def _create_matchup(self):
-        f = QFrame()
-        f.setFixedSize(280, 180)
-        f.setStyleSheet(self._hud_style())
-        l = QVBoxLayout(f)
-        l.setContentsMargins(15, 10, 15, 10)
-        
-        # Batter
-        l.addWidget(QLabel("AT BAT", styleSheet="color:#00e5ff; font-size:10px; font-weight:bold;"))
-        self.lbl_batter = QLabel("---", styleSheet="color:white; font-size:20px; font-weight:bold;")
-        l.addWidget(self.lbl_batter)
-        self.lbl_b_stat = QLabel("Pow: - Con: -", styleSheet="color:#aaa; font-size:12px;")
-        l.addWidget(self.lbl_b_stat)
-        
-        l.addSpacing(5)
-        l.addWidget(QFrame(styleSheet="background:#333; max-height:1px;"))
-        l.addSpacing(5)
-        
-        # Pitcher
-        l.addWidget(QLabel("PITCHER", styleSheet="color:#ffd700; font-size:10px; font-weight:bold;"))
-        self.lbl_pitcher = QLabel("---", styleSheet="color:#ddd; font-size:16px; font-weight:bold;")
-        l.addWidget(self.lbl_pitcher)
-        self.lbl_p_stat = QLabel("Stamina", styleSheet="color:#aaa; font-size:12px;")
-        l.addWidget(self.lbl_p_stat)
-        self.p_stamina = QProgressBar()
-        self.p_stamina.setFixedHeight(6)
-        self.p_stamina.setStyleSheet("QProgressBar{background:#333; border:none;} QProgressBar::chunk{background:#ffd700;}")
-        l.addWidget(self.p_stamina)
-        
-        l.addStretch()
-        return f
-
-    def _create_zone_panel(self):
-        f = QFrame()
-        f.setFixedSize(200, 250)
-        f.setStyleSheet(self._hud_style())
-        l = QVBoxLayout(f)
-        l.setContentsMargins(0,0,0,0)
-        
-        cbox = QFrame()
-        cbox.setStyleSheet("border-bottom: 1px solid #333; padding: 5px;")
-        cl = QHBoxLayout(cbox)
-        self.lbl_count = QLabel("0 - 0")
-        self.lbl_count.setStyleSheet("font-size: 28px; font-weight: 900; color: white;")
-        cl.addWidget(self.lbl_count, alignment=Qt.AlignCenter)
-        l.addWidget(cbox)
-        
-        self.zone = StrikeZoneWidget()
-        l.addWidget(self.zone)
-        return f
-
-    def _create_controls_panel(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
-        l.setSpacing(10)
-        
-        # Log
-        scroll = QScrollArea()
-        scroll.setFixedSize(350, 120)
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("background: rgba(0,0,0,0.6); border: 1px solid #333;")
-        self.log_con = QWidget()
-        self.log_con.setStyleSheet("background: transparent;")
-        self.log_layout = QVBoxLayout(self.log_con)
-        self.log_layout.setAlignment(Qt.AlignTop)
-        self.log_layout.setContentsMargins(10, 5, 10, 5)
-        scroll.setWidget(self.log_con)
-        l.addWidget(scroll)
-        
-        # Strategy Buttons
-        strat_layout = QGridLayout()
-        strategies = ["SWING", "MEET", "POWER", "BUNT", "WAIT", "STEAL"]
-        self.strat_btns = {}
-        for i, s in enumerate(strategies):
-            b = QPushButton(s)
-            b.setCheckable(True)
-            b.setFixedSize(80, 30)
-            b.setStyleSheet("""
-                QPushButton { background: #333; color: #ccc; border: 1px solid #555; font-weight: bold; }
-                QPushButton:checked { background: #00e5ff; color: black; border-color: #00e5ff; }
-            """)
-            b.clicked.connect(lambda c, x=s: self._set_strategy(x))
-            strat_layout.addWidget(b, i//3, i%3)
-            self.strat_btns[s] = b
-        self.strat_btns["SWING"].setChecked(True)
-        l.addLayout(strat_layout)
-        
-        # Main Actions
-        act_layout = QHBoxLayout()
-        
-        self.btn_pitch = QPushButton("PITCH")
-        self.btn_pitch.setFixedSize(100, 40)
-        self.btn_pitch.setStyleSheet("background:#0091ea; color:white; border:none; font-weight:bold; font-size:14px;")
-        self.btn_pitch.clicked.connect(self._on_pitch)
-        
-        self.btn_skip = QPushButton("SKIP TO END")
-        self.btn_skip.setFixedSize(120, 40)
-        self.btn_skip.setStyleSheet("background:#ff1744; color:white; border:none; font-weight:bold;")
-        self.btn_skip.clicked.connect(self._on_skip)
-        
-        act_layout.addWidget(self.btn_pitch)
-        act_layout.addWidget(self.btn_skip)
-        l.addLayout(act_layout)
         
         return w
 
-    def _set_strategy(self, s):
-        for k, b in self.strat_btns.items():
-            if k != s: b.setChecked(False)
-        self.strat_btns[s].setChecked(True)
-        self.selected_strategy = s
+    def _create_matchup_card(self):
+        f = QFrame()
+        f.setStyleSheet("background: transparent;")
+        l = QHBoxLayout(f)
+        l.setContentsMargins(0,0,0,0)
+        
+        # Pitcher Info
+        p_box = QFrame()
+        p_box.setStyleSheet(f"background: {VisualStyle.BG_PANEL.name()}; border-radius: 2px; border-left: 4px solid {VisualStyle.ACCENT_RED.name()};")
+        pl = QGridLayout(p_box)
+        pl.addWidget(QLabel("PITCHER", styleSheet="color:#888; font-size:9px; letter-spacing:1px;"), 0, 0)
+        self.lbl_p_name = QLabel("---", styleSheet="color:white; font-weight:bold; font-size:14px;")
+        pl.addWidget(self.lbl_p_name, 1, 0)
+        self.pb_stamina = QProgressBar()
+        self.pb_stamina.setFixedHeight(4)
+        self.pb_stamina.setStyleSheet(f"QProgressBar{{background:#333; border:none;}} QProgressBar::chunk{{background:{VisualStyle.ACCENT_RED.name()};}}")
+        pl.addWidget(self.pb_stamina, 2, 0)
+        self.lbl_p_stats = QLabel("ERA: -.--", styleSheet=f"color:#aaa; font-size:10px; font-family:'{VisualStyle.FONT_NUM}';")
+        pl.addWidget(self.lbl_p_stats, 3, 0)
+        l.addWidget(p_box, stretch=1)
+        
+        # VS
+        l.addWidget(QLabel("VS", styleSheet="color:#555; font-style:italic; font-weight:bold;"), alignment=Qt.AlignCenter)
+        
+        # Batter Info
+        b_box = QFrame()
+        b_box.setStyleSheet(f"background: {VisualStyle.BG_PANEL.name()}; border-radius: 2px; border-left: 4px solid {VisualStyle.ACCENT_CYAN.name()};")
+        bl = QGridLayout(b_box)
+        bl.addWidget(QLabel("BATTER", styleSheet="color:#888; font-size:9px; letter-spacing:1px;"), 0, 0)
+        self.lbl_b_name = QLabel("---", styleSheet="color:white; font-weight:bold; font-size:14px;")
+        bl.addWidget(self.lbl_b_name, 1, 0)
+        self.lbl_b_detail = QLabel("L / R", styleSheet="color:#aaa; font-size:10px;")
+        bl.addWidget(self.lbl_b_detail, 2, 0)
+        self.lbl_b_stats = QLabel("AVG: .--- HR: -", styleSheet=f"color:#aaa; font-size:10px; font-family:'{VisualStyle.FONT_NUM}';")
+        bl.addWidget(self.lbl_b_stats, 3, 0)
+        l.addWidget(b_box, stretch=1)
+        
+        return f
+
+    def _create_pitch_stats_grid(self):
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(0,5,0,5)
+        self.card_type = DataCard("PITCH TYPE", "-", color=VisualStyle.ACCENT_GOLD)
+        self.card_velo = DataCard("VELOCITY", "-", color=VisualStyle.ACCENT_RED)
+        self.card_spin = DataCard("SPIN RATE", "-", color=VisualStyle.ACCENT_MAGENTA)
+        l.addWidget(self.card_type)
+        l.addWidget(self.card_velo)
+        l.addWidget(self.card_spin)
+        return w
+
+    def _create_hit_stats_grid(self):
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(0,5,0,5)
+        self.card_exit = DataCard("EXIT VELO", "-", color=VisualStyle.ACCENT_CYAN)
+        self.card_angle = DataCard("ANGLE", "-", color=VisualStyle.ACCENT_GREEN)
+        self.card_dist = DataCard("DISTANCE", "-", color=VisualStyle.ACCENT_GOLD)
+        l.addWidget(self.card_exit)
+        l.addWidget(self.card_angle)
+        l.addWidget(self.card_dist)
+        return w
+        
+    def _create_log_area(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: 1px solid #333; background: {VisualStyle.BG_PANEL.name()}; }}
+            QScrollBar:vertical {{ width: 8px; background: #111; }}
+            QScrollBar::handle:vertical {{ background: #444; border-radius: 4px; }}
+        """)
+        self.log_container = QWidget()
+        self.log_container.setStyleSheet("background: transparent;")
+        self.log_layout = QVBoxLayout(self.log_container)
+        self.log_layout.setAlignment(Qt.AlignTop)
+        self.log_layout.setContentsMargins(10,5,10,5)
+        scroll.setWidget(self.log_container)
+        return scroll
+
+    def _create_controls(self):
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(0,5,0,0)
+        
+        self.btn_pitch = QPushButton("NEXT PITCH")
+        self.btn_pitch.setFixedHeight(45)
+        self.btn_pitch.setStyleSheet(f"""
+            QPushButton {{
+                background: {VisualStyle.ACCENT_CYAN.name()};
+                color: #000;
+                font-weight: bold;
+                font-size: 14px;
+                border: none;
+                border-radius: 2px;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{ background: #4dd0e1; }}
+        """)
+        self.btn_pitch.clicked.connect(self._on_pitch)
+        
+        self.btn_skip = QPushButton("SKIP")
+        self.btn_skip.setFixedHeight(45)
+        self.btn_skip.setStyleSheet("""
+            QPushButton {
+                background: #333; color: #fff; font-weight: bold; border: 1px solid #555;
+            }
+            QPushButton:hover { background: #444; }
+        """)
+        self.btn_skip.clicked.connect(self._on_skip)
+        
+        l.addWidget(self.btn_pitch, stretch=2)
+        l.addWidget(self.btn_skip, stretch=1)
+        
+        return w
 
     def _setup_timer(self):
         self.sim_timer = QTimer(self)
         self.sim_timer.timeout.connect(self._on_pitch)
 
-    # --- Logic ---
+    # --- Logic Methods ---
 
     def start_game(self, home, away, date_str="2027-01-01"):
-        self.date_str = date_str # 日付を保存
-        dlg = GameModeDialog(home, away, self)
-        if dlg.exec() == QDialog.Accepted:
-            self._init_engine(home, away)
-            if dlg.selected_mode == "skip":
-                self._run_full_simulation()
-            else:
-                self._update_display()
-                self._log("=== PLAY BALL ===", True)
+        self.date_str = date_str
+        self._init_engine(home, away)
+        self._update_display()
+        self._log("=== PLAY BALL ===", True)
 
     def _init_engine(self, home, away):
         from live_game_engine import LiveGameEngine
@@ -638,82 +654,66 @@ class LiveGamePage(QWidget):
         
         self.lbl_home.setText(home.name[:3].upper())
         self.lbl_away.setText(away.name[:3].upper())
-        self.zone.clear_pitches()
+        self.zone_widget.clear()
         self.field_widget.clear()
         
-        # Reset logs
+        # Clear logs
         while self.log_layout.count():
             item = self.log_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
 
     def _on_pitch(self):
-        if self.live_engine.is_game_over(): return
-        
-        # Determine batter for strategy
-        batter, _ = self.live_engine.get_current_batter()
-        
-        # Decide strategy via AI if CPU turn (simplified for demo)
-        strat = self.selected_strategy
-        if not self.live_engine.state.is_top: # Home (Player) is batting
-             pass 
-        else: # CPU batting
-             strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
+        if not self.live_engine or self.live_engine.is_game_over(): return
 
-        play_res, pitch, ball = self.live_engine.simulate_pitch(strat)
+        # Simulation
+        play_res, pitch, ball = self.live_engine.simulate_pitch()
         
-        # Logic for visual feedback
-        is_hit, is_out = False, False
-        is_strikeout = (play_res == PlayResult.STRIKEOUT)
-        
-        if play_res:
-            name = play_res.name
-            if "HIT" in name or play_res in [PlayResult.SINGLE, PlayResult.DOUBLE, PlayResult.TRIPLE, PlayResult.HOME_RUN]: is_hit = True
-            elif "OUT" in name or play_res in [PlayResult.STRIKEOUT, PlayResult.GROUNDOUT, PlayResult.FLYOUT, PlayResult.LINEOUT, PlayResult.POPUP_OUT]: is_out = True
-        
-        pitcher, _ = self.live_engine.get_current_pitcher()
-        hand = getattr(pitcher, 'throw_hand', 'Right')
-        
+        # 1. Update Strike Zone
         if pitch:
-            # play_res がある場合はそちらを使用、なければ PitchResult の value
-            r_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
+            res_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
+            self.zone_widget.add_pitch(pitch, res_str)
             
-            self.zone.add_pitch(pitch, r_str, is_hit, is_out, is_strikeout, hand)
+            # Update Pitch Stats
+            self.card_velo.set_value(f"{int(pitch.velocity)} km/h")
+            self.card_spin.set_value(f"{pitch.spin_rate} rpm")
+            self.card_type.set_value(pitch.pitch_type)
             
-            info = f"{pitch.pitch_type} {int(pitch.velocity)}km"
-            if play_res:
-                # PlayResult (Hit/Out etc)
-                val_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
-                self._log(f"{info} -> {val_str}", True)
-                if is_hit or is_out:
-                    QTimer.singleShot(6000, self.zone.clear_pitches)
-                    QTimer.singleShot(6000, self.field_widget.clear)
-            else:
-                # PitchResult (Ball/Strike/Foul)
-                # play_res が PitchResult 型で返ってくる場合もある
-                val_str = play_res.value if hasattr(play_res, 'value') else str(play_res)
-                self._log(f"{info} -> {val_str}")
+            self._log(f"{pitch.pitch_type} ({int(pitch.velocity)}km) -> {res_str}")
 
+        # 2. Update Field & Hit Stats
         if ball:
-            self.field_widget.set_batted_ball(ball)
-            # Update Tracking Info
-            self.lbl_tv.setText(f"VELO: {int(ball.exit_velocity)}km")
-            self.lbl_ta.setText(f"ANG: {int(ball.launch_angle)}dg")
-            self.lbl_td.setText(f"DIST: {int(ball.distance)}m")
+            runners = [
+                self.live_engine.state.runner_1b is not None,
+                self.live_engine.state.runner_2b is not None,
+                self.live_engine.state.runner_3b is not None
+            ]
+            self.field_widget.set_data(ball, runners)
+            
+            self.card_exit.set_value(f"{int(ball.exit_velocity)} km/h")
+            self.card_angle.set_value(f"{int(ball.launch_angle)}°")
+            self.card_dist.set_value(f"{int(ball.distance)} m")
+            
+            # ヒットやアウトなら少し待ってクリア
+            if "安打" in str(play_res) or "本塁打" in str(play_res):
+                 self._log(f"!!! {play_res.value} !!!", True)
+        else:
+            # 打球がない場合はヒットスタッツをリセット
+            self.card_exit.set_value("-")
+            self.card_angle.set_value("-")
+            self.card_dist.set_value("-")
 
+        # 3. Update Scoreboard & Matchup
         self._update_display()
-        if self.live_engine.is_game_over(): self._finish()
+
+        if self.live_engine.is_game_over():
+            self._finish()
 
     def _on_skip(self):
-        self._run_full_simulation()
-
-    def _run_full_simulation(self):
-        # AI vs AI simulation loop
+        # 高速進行
+        if not self.live_engine: return
         while not self.live_engine.is_game_over():
-            batter, _ = self.live_engine.get_current_batter()
-            strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
-            
-            self.live_engine.simulate_pitch(strat)
-            
+            self.live_engine.simulate_pitch()
+        self._update_display()
         self._finish()
 
     def _update_display(self):
@@ -722,38 +722,50 @@ class LiveGamePage(QWidget):
         self.lbl_away_score.setText(str(st.away_score))
         self.lbl_inning.setText(f"{st.inning} {'TOP' if st.is_top else 'BOT'}")
         
-        col_on, col_off = "#ff1744", "#333"
-        self.lbl_outs[0].setStyleSheet(f"color: {col_on if st.outs >= 1 else col_off}; font-size:14px; margin-left:5px;")
-        self.lbl_outs[1].setStyleSheet(f"color: {col_on if st.outs >= 2 else col_off}; font-size:14px; margin-left:5px;")
-        self.lbl_count.setText(f"{st.balls} - {st.strikes}")
-        
+        # Update BSO
+        for i, d in enumerate(self.dots_b):
+            d.setStyleSheet(f"color: {VisualStyle.ACCENT_GREEN.name() if st.balls > i else '#333'}; font-size: 8px;")
+        for i, d in enumerate(self.dots_s):
+            d.setStyleSheet(f"color: {VisualStyle.ACCENT_GOLD.name() if st.strikes > i else '#333'}; font-size: 8px;")
+        for i, d in enumerate(self.dots_o):
+            d.setStyleSheet(f"color: {VisualStyle.ACCENT_RED.name() if st.outs > i else '#333'}; font-size: 8px;")
+
+        # Update Matchup
         b, _ = self.live_engine.get_current_batter()
         p, _ = self.live_engine.get_current_pitcher()
         
         if b:
-            self.lbl_batter.setText(b.name)
-            p_rank = get_rank(getattr(b.stats, 'power', 50))
-            c_rank = get_rank(getattr(b.stats, 'contact', 50))
-            r_rank = get_rank(getattr(b.stats, 'run', 50))
-            self.lbl_b_stat.setText(f"Pow:{p_rank} Con:{c_rank} Run:{r_rank}")
-        if p:
-            self.lbl_pitcher.setText(p.name)
-            stam = st.current_pitcher_stamina()
-            self.p_stamina.setValue(int(stam))
+            self.lbl_b_name.setText(b.name)
+            self.lbl_b_detail.setText(f"{b.bats}投{b.throws}打")
             
-        runners = [st.runner_1b is not None, st.runner_2b is not None, st.runner_3b is not None]
-        self.field_widget.set_runners(runners)
+            rank_p = get_rank(getattr(b.stats, 'power', 50))
+            rank_c = get_rank(getattr(b.stats, 'contact', 50))
+            self.lbl_b_stats.setText(f"Pow:{rank_p} Con:{rank_c}")
+            
+        if p:
+            self.lbl_p_name.setText(p.name)
+            stam = st.current_pitcher_stamina()
+            self.pb_stamina.setValue(int(stam))
+            self.lbl_p_stats.setText(f"Stamina: {int(stam)}%")
 
-    def _log(self, txt, hl=False):
+        # Runners (Update even if no hit, e.g. steal/walk)
+        runners = [
+            st.runner_1b is not None,
+            st.runner_2b is not None,
+            st.runner_3b is not None
+        ]
+        if not self.field_widget.batted_ball: # 打球表示中でなければランナーだけ更新
+            self.field_widget.runners = runners
+            self.field_widget.update()
+
+    def _log(self, txt, highlight=False):
         l = QLabel(txt)
-        c = "#ffd700" if hl else "#ccc"
-        l.setStyleSheet(f"color:{c}; font-family:'{FONTS['digit']}'; font-size:11px;")
+        col = VisualStyle.ACCENT_GOLD.name() if highlight else "#ccc"
+        l.setStyleSheet(f"color: {col}; font-family: '{VisualStyle.FONT_NUM}'; font-size: 11px;")
         self.log_layout.insertWidget(0, l)
 
     def _finish(self):
         self.sim_timer.stop()
-        
-        # 試合終了時に成績を確定（日付を渡す）
         if self.live_engine:
             self.live_engine.finalize_game_stats(self.date_str)
             
