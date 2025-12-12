@@ -427,8 +427,8 @@ class HomePage(ContentPanel):
     def showEvent(self, event):
         """画面表示時にデータを更新"""
         super().showEvent(event)
+        # 確実に最新データを反映させるため少し遅延してset_game_stateを呼ぶ
         if self.game_state:
-            # 描画を確実にするため少し遅延させる
             QTimer.singleShot(0, lambda: self.set_game_state(self.game_state))
 
     def _create_header(self):
@@ -664,6 +664,12 @@ class HomePage(ContentPanel):
 
     def _update_leaders(self, team):
         """Update team leaders"""
+        # ★修正: 最新の成績 (p.record) を使用してリーダーボードを更新
+        # 以前の実装では古いデータを参照している可能性があったため、ここで再取得
+        
+        # ロースターに含まれる全選手（一軍・二軍問わず、あるいは一軍のみにするかは要件次第だが、
+        # ここではチーム全体のリーダーを表示するため全選手から抽出）
+        # ただし育成選手は除外
         batters = [p for p in team.players if p.position.value != "投手" and not p.is_developmental]
         pitchers = [p for p in team.players if p.position.value == "投手" and not p.is_developmental]
 
@@ -681,14 +687,13 @@ class HomePage(ContentPanel):
         ])
 
         # ERA
-        # 規定回以上投げている投手を優先表示するなどのロジックも検討可能だが、ここでは単純に投球回>0でソート
-        pitchers_sorted = sorted(
-            [p for p in pitchers if p.record.innings_pitched > 0],
-            key=lambda p: p.record.era
-        )
+        # 規定回数などのフィルタを入れるとよりリアルだが、まずは投球回0より大きい選手でソート
+        pitchers_with_innings = [p for p in pitchers if p.record.innings_pitched > 0]
+        pitchers_sorted_era = sorted(pitchers_with_innings, key=lambda p: p.record.era)
+        
         self.era_leaders.set_leaders([
             (p.name, f"{p.record.era:.2f}")
-            for p in pitchers_sorted[:3]
+            for p in pitchers_sorted_era[:3]
         ])
 
         # Wins

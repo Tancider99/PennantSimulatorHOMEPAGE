@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ライブ試合エンジン (修正版: BABIP個人差抑制・平均.300調整・打席数適正化・直近成績記録対応)
+ライブ試合エンジン (修正版: BABIP個人差抑制・平均.300調整・打席数適正化・直近成績記録対応・引き分け対応・不正オーダー排除)
 """
 import random
 import math
@@ -847,6 +847,9 @@ class LiveGameEngine:
         self._ensure_valid_lineup(self.away_team)
 
     def _ensure_valid_lineup(self, team: Team):
+        """
+        不正なオーダー（怪我人・一軍登録抹消中の選手など）を排除し、有効なオーダーを再編成する
+        """
         if self.team_level == TeamLevel.SECOND:
             get_lineup = lambda: team.farm_lineup; set_lineup = lambda l: setattr(team, 'farm_lineup', l); get_roster = team.get_farm_roster_players
         elif self.team_level == TeamLevel.THIRD:
@@ -854,36 +857,62 @@ class LiveGameEngine:
         else:
             get_lineup = lambda: team.current_lineup; set_lineup = lambda l: setattr(team, 'current_lineup', l); get_roster = team.get_active_roster_players
 
+        # プレイヤーが試合に出場可能か判定するヘルパー
+        def is_valid_player(p):
+            if p.is_injured: return False
+            if self.team_level == TeamLevel.FIRST and hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
+                return False
+            return True
+
         current_lineup = get_lineup()
-        has_injured_player = False
+        has_invalid = False
+        
+        # 既存オーダーのチェック
         if current_lineup and len(current_lineup) >= 9:
             for idx in current_lineup:
                 if 0 <= idx < len(team.players):
-                    if team.players[idx].is_injured:
-                        has_injured_player = True
+                    p = team.players[idx]
+                    if not is_valid_player(p):
+                        has_invalid = True
                         break
-        if not current_lineup or len(current_lineup) < 9:
-            players = get_roster()
-            if len(players) < 9 and self.team_level != TeamLevel.FIRST:
-                players = [p for p in team.players if p.team_level != TeamLevel.FIRST]
-            if len(players) < 9: players = team.players
-            new_lineup = generate_best_lineup(team, players)
+                else:
+                    has_invalid = True
+                    break
+        
+        # 不正または人数不足の場合、再編成
+        if not current_lineup or len(current_lineup) < 9 or has_invalid:
+            # ロースターから有効な選手のみを抽出
+            candidates = get_roster()
+            valid_candidates = [p for p in candidates if is_valid_player(p)]
+            
+            # もし有効な選手が足りない場合（緊急措置）
+            if len(valid_candidates) < 9:
+                # チーム全体から有効な選手を探す
+                valid_candidates = [p for p in team.players if is_valid_player(p)]
+            
+            new_lineup = generate_best_lineup(team, valid_candidates)
             set_lineup(new_lineup); current_lineup = new_lineup
 
+        # 捕手の確認
         has_valid_catcher = False
         if self.team_level == TeamLevel.FIRST and hasattr(team, 'lineup_positions') and len(team.lineup_positions) == 9:
             for i, pos_str in enumerate(team.lineup_positions):
-                if pos_str in ["捕", "捕手"] and i < len(current_lineup): has_valid_catcher = True; break
+                if pos_str in ["捕", "捕手"] and i < len(current_lineup): 
+                    p_idx = current_lineup[i]
+                    if 0 <= p_idx < len(team.players) and is_valid_player(team.players[p_idx]):
+                        has_valid_catcher = True; break
+        
         if not has_valid_catcher:
             for idx in current_lineup:
                 if 0 <= idx < len(team.players):
                     p = team.players[idx]
-                    if p.position == Position.CATCHER or p.stats.get_defense_range(Position.CATCHER) >= 20: has_valid_catcher = True; break
+                    if (p.position == Position.CATCHER or p.stats.get_defense_range(Position.CATCHER) >= 20) and is_valid_player(p):
+                        has_valid_catcher = True; break
+        
         if not has_valid_catcher:
-            players = get_roster()
-            if len(players) < 9 and self.team_level != TeamLevel.FIRST:
-                players = [p for p in team.players if p.team_level != TeamLevel.FIRST]
-            new_lineup = generate_best_lineup(team, players)
+            candidates = get_roster()
+            valid_candidates = [p for p in candidates if is_valid_player(p)]
+            new_lineup = generate_best_lineup(team, valid_candidates)
             set_lineup(new_lineup)
 
     def _init_starters(self):
@@ -1458,11 +1487,19 @@ class LiveGameEngine:
         self.state.is_top = not self.state.is_top
         
     def is_game_over(self):
-        if self.state.inning > 9:
-             if self.state.is_top: return False
-             if self.state.home_score != self.state.away_score: return True
-             if self.state.inning >= 12 and self.state.outs >= 3: return True
-        if self.state.inning >= 9 and not self.state.is_top and self.state.home_score > self.state.away_score: return True
+        # サヨナラ勝ち判定 (9回裏以降、後攻がリードした瞬間)
+        if self.state.inning >= 9 and not self.state.is_top and self.state.home_score > self.state.away_score:
+            return True
+            
+        # 13回突入 (12回終了) -> 引き分け
+        if self.state.inning >= 13:
+            return True
+            
+        # 延長戦等の決着判定 (10回以降の表開始時点=前の回の裏終了時点で点差あり)
+        if self.state.inning >= 10 and self.state.is_top:
+            if self.state.home_score != self.state.away_score:
+                return True
+                
         return False
 
     def finalize_game_stats(self, date_str: str = "2027-01-01"):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ゲーム状態管理 (拡張版: 全軍日程管理・AI運用・統括シミュレーション・完全版)
+ゲーム状態管理 (修正版: 怪我人のベンチ残留許可・登録抹消期間中の強制降格)
 """
 from enum import Enum
 from typing import Optional, List
@@ -156,7 +156,7 @@ class GameStateManager:
     def _perform_roster_moves(self, team: Team, stats_calc):
         """
         怪我・調子・成績に基づく1軍・2軍入れ替えロジック
-        (修正: WARベースの降格判定・育成選手の昇格禁止)
+        (修正: 怪我人の即降格を廃止、抹消期間中の選手の強制降格を追加)
         """
         active_players = team.get_active_roster_players()
         farm_players = team.get_farm_roster_players()
@@ -171,15 +171,19 @@ class GameStateManager:
         for p in active_players:
             reason = None
             
-            # (A) 怪我人は降格候補
-            if hasattr(p, 'is_injured') and p.is_injured:
-                reason = "injury"
+            # (A) 再登録待機期間中（抹消中）の選手は問答無用で降格
+            if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
+                reason = "penalty"
+                
+            # (B) 怪我人 -> 自動降格させない（ベンチに残す）
+            # if hasattr(p, 'is_injured') and p.is_injured:
+            #     reason = "injury"
             
-            # (B) 超絶不調 (調子1) かつ 実績不足
+            # (C) 超絶不調 (調子1) かつ 実績不足
             elif p.condition <= 1 and p.salary < 50000000: 
                 reason = "condition"
             
-            # (C) 成績不振 (WARベース)
+            # (D) 成績不振 (WARベース)
             # 直近20日間のWARが-0.3以下なら降格
             else:
                 # 直近成績の取得
@@ -234,8 +238,10 @@ class GameStateManager:
         for demote_p, reason in demote_candidates:
             target_pos_type = "PITCHER" if demote_p.position == Position.PITCHER else "FIELDER"
             
-            # 交代相手を探す
+            # ペナルティによる強制降格の場合は無条件で実行（交代相手がいなくても）
             replacement = None
+            
+            # 交代相手を探す
             for cand_p, score in promote_candidates:
                 cand_pos_type = "PITCHER" if cand_p.position == Position.PITCHER else "FIELDER"
                 
@@ -244,13 +250,14 @@ class GameStateManager:
                     replacement = cand_p
                     break
             
-            # 投手不足回避
-            if target_pos_type == "PITCHER" and pitchers_in_active <= 10 and not replacement:
+            # 投手不足回避（ただし強制降格の場合は除く）
+            if reason != "penalty" and target_pos_type == "PITCHER" and pitchers_in_active <= 10 and not replacement:
                 continue 
             
             # 入れ替え実行
             try:
                 p_idx = team.players.index(demote_p)
+                # ここでは明示的なペナルティ付与（days_until_promotion）は行わない（既に持っているか、WAR降格なら不要）
                 team.remove_from_active_roster(p_idx, TeamLevel.SECOND)
                 
                 if replacement:

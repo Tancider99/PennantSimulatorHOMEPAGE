@@ -82,7 +82,7 @@ class RosterPage(QWidget):
         self.team_selector.setMinimumWidth(180)
         self.team_selector.setFixedHeight(32)  # Fixed height
         
-        # コンボボックスのスタイル
+        # コンボボックスのスタイル (修正: transform プロパティを削除し、代替スタイルを適用)
         self.team_selector.setStyleSheet(f"""
             QComboBox {{
                 background-color: {self.theme.bg_input};
@@ -93,15 +93,16 @@ class RosterPage(QWidget):
             }}
             QComboBox::drop-down {{
                 border: none;
+                width: 20px;
             }}
             QComboBox::down-arrow {{
                 image: none;
-                border-left: 2px solid {self.theme.text_secondary};
-                border-bottom: 2px solid {self.theme.text_secondary};
-                width: 8px;
-                height: 8px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {self.theme.text_secondary};
+                width: 0px;
+                height: 0px;
                 margin-right: 8px;
-                transform: rotate(-45deg);
             }}
             QComboBox QAbstractItemView {{
                 background-color: {self.theme.bg_card};
@@ -117,7 +118,7 @@ class RosterPage(QWidget):
 
         toolbar.add_separator()
 
-        # フィルタボタン用のスタイル（チェック時に白背景・黒文字にする）
+        # フィルタボタン用のスタイル
         filter_btn_style = f"""
             QPushButton {{
                 background-color: {self.theme.bg_card};
@@ -128,7 +129,7 @@ class RosterPage(QWidget):
             }}
             QPushButton:checked {{
                 background-color: {self.theme.primary};
-                color: {self.theme.text_highlight}; /* 白背景なので文字は濃色 */
+                color: {self.theme.text_highlight};
                 font-weight: bold;
             }}
             QPushButton:hover {{
@@ -212,8 +213,7 @@ class RosterPage(QWidget):
             }}
         """)
 
-        # 【修正】スタイルシートでホバーエフェクトを無効化
-        # item:hover の背景色を transparent にし、文字色を通常時と同じに設定
+        # Table style
         table_style = f"""
             QTableView {{
                 selection-color: #222222;
@@ -237,14 +237,14 @@ class RosterPage(QWidget):
 
         # Batters tab
         self.batter_table = PlayerTable()
-        self.batter_table.setStyleSheet(table_style) # スタイル適用
+        self.batter_table.setStyleSheet(table_style)
         self.batter_table.player_selected.connect(self._on_player_selected)
         self.batter_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.batter_table, "野手")
 
         # Pitchers tab
         self.pitcher_table = PlayerTable()
-        self.pitcher_table.setStyleSheet(table_style) # スタイル適用
+        self.pitcher_table.setStyleSheet(table_style)
         self.pitcher_table.player_selected.connect(self._on_player_selected)
         self.pitcher_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.pitcher_table, "投手")
@@ -255,7 +255,6 @@ class RosterPage(QWidget):
 
     def _create_player_detail_panel(self) -> QWidget:
         """Create the player detail panel"""
-        # Use scroll area for the panel to handle overflow
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -319,23 +318,6 @@ class RosterPage(QWidget):
 
         layout.addStretch()
 
-        # --- 変更点: 詳細ボタンを削除 ---
-        # Action buttons - fixed at bottom
-        # btn_container = QWidget()
-        # btn_container.setStyleSheet("background: transparent;")
-        # btn_layout = QHBoxLayout(btn_container)
-        # btn_layout.setContentsMargins(0, 4, 0, 0)
-        # 
-        # detail_btn = QPushButton("詳細")
-        # detail_btn.setFixedHeight(34)
-        # detail_btn.setCursor(Qt.PointingHandCursor)
-        # ... (style) ...
-        # detail_btn.clicked.connect(self._show_player_detail)
-        # btn_layout.addWidget(detail_btn)
-        # 
-        # layout.addWidget(btn_container)
-        # -----------------------------
-
         scroll.setWidget(panel)
         return scroll
 
@@ -346,6 +328,7 @@ class RosterPage(QWidget):
             return
 
         # Update team selector
+        self.team_selector.blockSignals(True)
         self.team_selector.clear()
         
         # 自チームを判別しやすくする
@@ -360,13 +343,15 @@ class RosterPage(QWidget):
 
         # Set current team
         if player_team_obj:
-            # 名前が変わったのでインデックス検索はオブジェクトの一致で探す
             for i in range(self.team_selector.count()):
                 if self.team_selector.itemData(i) == player_team_obj:
                     self.team_selector.setCurrentIndex(i)
                     break
         elif game_state.teams:
             self.team_selector.setCurrentIndex(0)
+            
+        self.team_selector.blockSignals(False)
+        self._on_team_changed(self.team_selector.currentIndex())
 
     def _on_team_changed(self, index: int):
         """Handle team selection change"""
@@ -402,8 +387,7 @@ class RosterPage(QWidget):
             batters = list(all_batters)
             pitchers = list(all_pitchers)
 
-        # 【修正】並び順を安定させるためにソートを行う (例: 背番号順)
-        # 操作によってリスト順序が変わることを防ぐ
+        # Sort
         batters.sort(key=lambda p: p.uniform_number if hasattr(p, 'uniform_number') else 0)
         pitchers.sort(key=lambda p: p.uniform_number if hasattr(p, 'uniform_number') else 0)
 
@@ -413,8 +397,6 @@ class RosterPage(QWidget):
 
     def _filter_players(self, filter_type: str):
         """Apply player filter"""
-        # Update button states
-        # 排他的なチェック状態にする（手動で制御）
         self.show_all_btn.setChecked(filter_type == "all")
         self.show_active_btn.setChecked(filter_type == "active")
         self.show_dev_btn.setChecked(filter_type == "developmental")
@@ -461,19 +443,16 @@ class RosterPage(QWidget):
             status += " (外国人)"
         self.info_panel.add_row("ステータス", status)
 
-        # ★追加: 怪我情報の表示
         if player.is_injured:
             self.info_panel.add_row("怪我", f"{player.injury_name} (残{player.injury_days}日)")
 
         # Position info
         pos_text = player.position.value
-        
-        # 修正: defense_rangesからサブポジションを判定
         sub_positions = []
         if hasattr(player.stats, 'defense_ranges'):
             for pos_name, rating in player.stats.defense_ranges.items():
                 if pos_name != player.position.value and rating >= 2:
-                    sub_positions.append(pos_name[:2]) # "二塁手" -> "二塁"
+                    sub_positions.append(pos_name[:2])
         
         if sub_positions:
             pos_text += f" (サブ: {', '.join(sub_positions)})"
@@ -519,7 +498,6 @@ class RosterPage(QWidget):
         """Show player detail page"""
         player = self.batter_table.get_selected_player() or self.pitcher_table.get_selected_player()
         if player:
-            # Use callback if set by MainWindow, otherwise fall back to dialog
             if self.show_player_detail_requested:
                 self.show_player_detail_requested(player)
             else:
@@ -531,11 +509,9 @@ class RosterPage(QWidget):
         if not self.current_team:
             return
 
-        # Navigate to order page via main window
         if self.main_window and hasattr(self.main_window, '_navigate_to'):
             self.main_window._navigate_to("order")
         else:
-            # Fallback to dialog if main_window navigation not available
             dialog = OrderDialog(self.current_team, self)
             if dialog.exec():
                 self._refresh_player_lists()

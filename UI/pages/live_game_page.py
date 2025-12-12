@@ -388,6 +388,7 @@ class LiveGamePage(QWidget):
         self.live_engine = None
         self.is_simulating = False
         self.selected_strategy = "SWING"
+        self.date_str = "2027-01-01" # デフォルト
         
         self._setup_ui()
         self._setup_timer()
@@ -620,7 +621,8 @@ class LiveGamePage(QWidget):
 
     # --- Logic ---
 
-    def start_game(self, home, away):
+    def start_game(self, home, away, date_str="2027-01-01"):
+        self.date_str = date_str # 日付を保存
         dlg = GameModeDialog(home, away, self)
         if dlg.exec() == QDialog.Accepted:
             self._init_engine(home, away)
@@ -657,9 +659,7 @@ class LiveGamePage(QWidget):
         else: # CPU batting
              strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
 
-        # 修正: process_pitch_result は engine 内で呼ばれるので、ここでは呼び出さない
         play_res, pitch, ball = self.live_engine.simulate_pitch(strat)
-        # play_res = self.live_engine.process_pitch_result(res, pitch, ball) <-- 削除
         
         # Logic for visual feedback
         is_hit, is_out = False, False
@@ -712,10 +712,7 @@ class LiveGamePage(QWidget):
             batter, _ = self.live_engine.get_current_batter()
             strat = self.live_engine.ai.decide_strategy(self.live_engine.state, None, None, batter)
             
-            # 修正: process_pitch_result の重複呼び出しを削除
             self.live_engine.simulate_pitch(strat)
-            # r, p, b = ...
-            # self.live_engine.process_pitch_result(r, p, b) <-- 削除
             
         self._finish()
 
@@ -756,9 +753,9 @@ class LiveGamePage(QWidget):
     def _finish(self):
         self.sim_timer.stop()
         
-        # 試合終了時に成績を確定
+        # 試合終了時に成績を確定（日付を渡す）
         if self.live_engine:
-            self.live_engine.finalize_game_stats()
+            self.live_engine.finalize_game_stats(self.date_str)
             
         self._log("=== GAME SET ===", True)
         res = {

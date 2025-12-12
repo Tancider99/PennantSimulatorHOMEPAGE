@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from UI.theme import get_theme
 from UI.widgets.panels import ToolbarPanel
 from UI.widgets.tables import SortableTableWidgetItem, RatingDelegate
-from models import PlayerStats
+from models import PlayerStats, TeamLevel
 
 # MIME Types
 MIME_PLAYER_DATA = "application/x-pennant-player-data"
@@ -294,6 +294,14 @@ class OrderPage(QWidget):
         self.main_tabs.addTab(self.pitcher_page, "投手オーダー")
         
         layout.addWidget(self.main_tabs)
+
+    def showEvent(self, event):
+        """タブが表示されたときにデータを更新する"""
+        super().showEvent(event)
+        # 操作せずとも最新のデータを反映させる
+        if self.current_team:
+            self._load_team_data()
+            self._refresh_all()
 
     def _create_toolbar(self) -> ToolbarPanel:
         toolbar = ToolbarPanel()
@@ -646,19 +654,86 @@ class OrderPage(QWidget):
         if not self.current_team: return
         t = self.current_team
         
-        # 検証 (edit_stateを使用)
+        # --- バリデーションチェック ---
+        
+        # 1. 基礎チェック (人数)
         valid_starters = len([x for x in self.edit_state['current_lineup'] if x != -1])
         valid_rotation = len([x for x in self.edit_state['rotation'] if x != -1])
         
         if valid_starters < 9:
             QMessageBox.warning(self, "エラー", "スタメンが9人未満です。保存できません。")
             return
-            
         if valid_rotation == 0:
             QMessageBox.warning(self, "エラー", "先発投手が設定されていません。保存できません。")
             return
 
-        # 反映
+        # 2. スタメンの怪我人チェック & 再登録待機選手のチェック
+        active_ids = set()
+        active_ids.update([x for x in self.edit_state['current_lineup'] if x != -1])
+        active_ids.update([x for x in self.edit_state['bench_batters'] if x != -1])
+        active_ids.update([x for x in self.edit_state['rotation'] if x != -1])
+        active_ids.update([x for x in self.edit_state['setup_pitchers'] if x != -1])
+        active_ids.update([x for x in self.edit_state['closers'] if x != -1])
+
+        invalid_players = []
+        for p_idx in active_ids:
+            if 0 <= p_idx < len(t.players):
+                p = t.players[p_idx]
+                
+                # スタメンに怪我人がいるかチェック
+                if p_idx in self.edit_state['current_lineup']:
+                    if p.is_injured:
+                        invalid_players.append(f"{p.name} (怪我: スタメン不可)")
+                
+                # 再登録待機チェック (ベンチ・投手含め一軍全体NG)
+                if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
+                    invalid_players.append(f"{p.name} (登録抹消中: 残{p.days_until_promotion}日)")
+
+        if invalid_players:
+            msg = "以下の選手に問題があるため保存できません：\n\n" + "\n".join(invalid_players)
+            QMessageBox.warning(self, "保存不可", msg)
+            return
+
+        # --- ロースター変更処理（登録抹消・昇格） ---
+        
+        # 現在の一軍メンバーセット
+        old_roster_set = set(t.active_roster)
+        
+        # 新しい一軍メンバーセット
+        new_roster_set = active_ids # 上で作成済み
+        
+        # 1. 登録抹消（二軍降格）処理
+        # 元々一軍にいたが、新編成で外れた選手 -> 10日間の再登録不可ペナルティ
+        demoted = old_roster_set - new_roster_set
+        for p_idx in demoted:
+            if 0 <= p_idx < len(t.players):
+                p = t.players[p_idx]
+                p.days_until_promotion = 10  # ★10日間の再登録禁止
+                p.team_level = TeamLevel.SECOND
+                
+                # リスト更新
+                if p_idx in t.active_roster:
+                    t.active_roster.remove(p_idx)
+                if p_idx not in t.farm_roster:
+                    t.farm_roster.append(p_idx)
+                    
+        # 2. 昇格処理
+        # 新編成で追加された選手
+        promoted = new_roster_set - old_roster_set
+        for p_idx in promoted:
+            if 0 <= p_idx < len(t.players):
+                p = t.players[p_idx]
+                p.days_until_promotion = 0 # リセット
+                p.team_level = TeamLevel.FIRST
+                
+                if p_idx not in t.active_roster:
+                    t.active_roster.append(p_idx)
+                if p_idx in t.farm_roster:
+                    t.farm_roster.remove(p_idx)
+                if p_idx in t.third_roster:
+                    t.third_roster.remove(p_idx)
+
+        # 各種オーダーリストの反映
         t.current_lineup = list(self.edit_state['current_lineup'])
         t.lineup_positions = list(self.edit_state['lineup_positions'])
         t.bench_batters = list(self.edit_state['bench_batters'])
@@ -669,7 +744,7 @@ class OrderPage(QWidget):
         self.order_saved.emit()
         self._load_team_data() # 状態リセット
         self._update_status_label()
-        QMessageBox.information(self, "保存完了", "オーダーを保存しました。")
+        QMessageBox.information(self, "保存完了", "オーダーを保存しました。\n一軍から外れた選手は10日間再登録できません。")
 
     def _discard_changes(self):
         if not self.current_team: return
@@ -771,6 +846,14 @@ class OrderPage(QWidget):
     def _create_condition_item(self, player):
         item = SortableTableWidgetItem()
         item.setTextAlignment(Qt.AlignCenter)
+        
+        # ★登録抹消中（再登録待機期間）のチェック
+        if hasattr(player, 'days_until_promotion') and player.days_until_promotion > 0:
+            item.setText(f"抹{player.days_until_promotion}") # "抹消"だと幅をとるので短縮
+            item.setForeground(QColor("#7f8c8d")) # グレー
+            item.setToolTip(f"出場選手登録抹消中: 再登録まであと{player.days_until_promotion}日")
+            item.setData(Qt.UserRole, -99)
+            return item
         
         if hasattr(player, 'is_injured') and player.is_injured:
             item.setText(f"残{player.injury_days}日")
@@ -927,6 +1010,10 @@ class OrderPage(QWidget):
         for i, (p_idx, p) in enumerate(candidates):
             is_injured = hasattr(p, 'is_injured') and p.is_injured
             row_color = QColor("#95a5a6") if is_injured else None
+            
+            # 再登録待機中の選手はグレーアウト
+            if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
+                row_color = QColor("#7f8c8d")
 
             table.setItem(i, 0, self._create_condition_item(p))
             table.setItem(i, 1, self._create_item(p.name, Qt.AlignLeft, text_color=row_color))
@@ -1011,6 +1098,10 @@ class OrderPage(QWidget):
         for i, (p_idx, p) in enumerate(candidates):
             is_injured = hasattr(p, 'is_injured') and p.is_injured
             row_color = QColor("#95a5a6") if is_injured else None
+            
+            # 再登録待機中の選手はグレーアウト
+            if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
+                row_color = QColor("#7f8c8d")
 
             role = p.pitch_type.value[:2]
             table.setItem(i, 0, self._create_item(role, text_color=row_color))
@@ -1074,6 +1165,25 @@ class OrderPage(QWidget):
         p_idx = table.dropped_player_idx
         row = table.dropped_target_row
         
+        # ★ペナルティチェック: 再登録待機中の選手を一軍枠（スタメン・ベンチ・投手陣）へ移動しようとした場合
+        player = self.current_team.players[p_idx]
+        is_target_active = False
+        if table in [self.lineup_table, self.bench_table, self.rotation_table, self.bullpen_table]:
+            is_target_active = True
+        
+        if is_target_active and hasattr(player, 'days_until_promotion') and player.days_until_promotion > 0:
+            QMessageBox.warning(self, "登録不可", f"この選手は登録抹消中のため、一軍登録できません。\n再登録可能まであと {player.days_until_promotion} 日です。")
+            del table.dropped_player_idx
+            self._refresh_all() # 変更を元に戻す
+            return
+        
+        # ★怪我人チェック: 怪我人をスタメンに入れようとした場合のみ禁止（ベンチはOK）
+        if table == self.lineup_table and player.is_injured:
+            QMessageBox.warning(self, "出場不可", f"この選手は怪我のためスタメン起用できません。")
+            del table.dropped_player_idx
+            self._refresh_all()
+            return
+
         # 変更があればフラグを立てる
         self._mark_as_changed()
         
@@ -1129,7 +1239,6 @@ class OrderPage(QWidget):
                 while len(target_list) <= row: target_list.append(-1)
                 target_p_idx = target_list[row]
                 
-        # 変更: target_listがNoneの時(ファームへのドロップ)の処理を追加
         if target_list is not None:
              target_list[row] = p_idx
         
@@ -1204,8 +1313,10 @@ class OrderPage(QWidget):
                 apt_mult = p.middle_aptitude / 50.0
             return base * apt_mult * get_condition_mult(p)
 
+        # ★自動編成でも再登録待機中の選手は除外する
         pitchers = [i for i, p in enumerate(t.players) 
-                   if p.position.value == "投手" and not p.is_developmental]
+                   if p.position.value == "投手" and not p.is_developmental 
+                   and (not hasattr(p, 'days_until_promotion') or p.days_until_promotion == 0)]
         
         pitchers.sort(key=lambda i: get_pitcher_score(t.players[i], 'starter'), reverse=True)
         
@@ -1229,7 +1340,8 @@ class OrderPage(QWidget):
             state['setup_pitchers'][i] = remaining_pitchers[i]
             
         batters = [i for i, p in enumerate(t.players) 
-                  if p.position.value != "投手" and not p.is_developmental]
+                  if p.position.value != "投手" and not p.is_developmental
+                  and (not hasattr(p, 'days_until_promotion') or p.days_until_promotion == 0)]
         
         pos_map = {
             "捕": "捕手", "遊": "遊撃手", "二": "二塁手", "中": "中堅手", 
@@ -1248,6 +1360,10 @@ class OrderPage(QWidget):
             for idx in batters:
                 if idx in used_indices: continue
                 p = t.players[idx]
+                
+                # ★スタメン選出では怪我人を除外
+                if p.is_injured: continue
+
                 apt = p.stats.defense_ranges.get(long_pos, 0)
                 if apt < 20: continue 
                 
@@ -1263,7 +1379,8 @@ class OrderPage(QWidget):
                 selected_starters[short_pos] = best_idx
                 used_indices.add(best_idx)
         
-        dh_candidates = [i for i in batters if i not in used_indices]
+        # DH選出（怪我人除外）
+        dh_candidates = [i for i in batters if i not in used_indices and not t.players[i].is_injured]
         dh_candidates.sort(key=lambda i: get_batting_score(t.players[i]), reverse=True)
         if dh_candidates:
             selected_starters["DH"] = dh_candidates[0]
@@ -1271,7 +1388,7 @@ class OrderPage(QWidget):
             
         missing_positions = [p for p in def_priority + ["DH"] if p not in selected_starters]
         for p in missing_positions:
-            remaining = [i for i in batters if i not in used_indices]
+            remaining = [i for i in batters if i not in used_indices and not t.players[i].is_injured]
             if remaining:
                 remaining.sort(key=lambda i: get_batting_score(t.players[i]), reverse=True)
                 selected_starters[p] = remaining[0]
@@ -1316,8 +1433,10 @@ class OrderPage(QWidget):
                     state['current_lineup'][i] = final_order[i]['idx']
                     state['lineup_positions'][i] = final_order[i]['pos']
 
+        # ★ベンチ選出: 怪我人も含める（優先度は下げる）
         remaining_bench = [i for i in batters if i not in used_indices]
-        remaining_bench.sort(key=lambda i: t.players[i].overall_rating, reverse=True)
+        # 怪我をしていない選手を優先し、その中で能力順
+        remaining_bench.sort(key=lambda i: (not t.players[i].is_injured, t.players[i].overall_rating), reverse=True)
         
         bench_limit = max(0, BATTER_TARGET - 9)
         state['bench_batters'] = remaining_bench[:bench_limit]

@@ -45,7 +45,8 @@ class MainWindow(QMainWindow):
         # ページインスタンスのキャッシュ（永続化が必要なページ用）
         self.persistent_pages = {}
         # ★追加: 自動生成されたページのキャッシュ用セット
-        self.cached_pages = set()
+        # インスタンスを保持するように辞書に変更
+        self.cached_pages = {} 
 
         self._setup_window()
         self._setup_ui()
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         from UI.pages.settings_page import SettingsPage
         from UI.pages.order_page import OrderPage
         from UI.pages.farm_swap_page import FarmSwapPage
+        from UI.pages.live_game_page import LiveGamePage # LiveGamePageをインポート
 
         page = None
         
@@ -214,6 +216,11 @@ class MainWindow(QMainWindow):
             # ★追加: 選手詳細シグナルをメインウィンドウのメソッドに接続
             page.player_detail_requested.connect(self._show_player_detail)
             self.farm_swap_page = page
+            
+        elif section == "game": # ★追加: ゲームページの作成処理
+            page = LiveGamePage(self)
+            page.game_finished.connect(self._on_game_finished)
+            self.game_page = page # 属性として保持
         
         # Unimplemented pages (kept for code reference but not in sidebar)
             
@@ -389,7 +396,7 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, section: str):
         """Navigate to a section, preserving page state where possible"""
         
-        # ページがまだ存在しない場合のみ新規作成するロジックに変更
+        # ページがまだ存在しない場合のみ新規作成するロジック
         is_persistent = section in self.persistent_pages or section == "title"
         is_cached = section in self.cached_pages
         
@@ -399,15 +406,35 @@ class MainWindow(QMainWindow):
         # 2. Page Handling
         if is_persistent:
             self.pages.show_page(section)
+            # ★追加: 永続ページも表示時にデータを最新化
+            page = self.persistent_pages.get(section)
+            if page and self.game_state and hasattr(page, 'set_game_state'):
+                page.set_game_state(self.game_state)
+                
         elif is_cached:
             # 既にキャッシュされている場合は単に表示する
             self.pages.show_page(section)
+            
+            # ★追加: キャッシュページも表示時にデータを最新化
+            page = self.cached_pages.get(section)
+            if page:
+                # set_game_state があれば呼ぶ
+                if self.game_state and hasattr(page, 'set_game_state'):
+                    page.set_game_state(self.game_state)
+                
+                # 手動リフレッシュメソッドがあれば呼ぶ（念のため）
+                if hasattr(page, '_refresh_all'):
+                    try: page._refresh_all()
+                    except: pass
+                if hasattr(page, '_load_team_data'):
+                    try: page._load_team_data()
+                    except: pass
         else:
             # 新規作成
             new_page = self._create_page_instance(section)
             if new_page is not None:
                 self.pages.add_page(section, new_page)
-                self.cached_pages.add(section) # キャッシュに登録
+                self.cached_pages[section] = new_page # キャッシュに登録
                 
                 if self.game_state and hasattr(new_page, 'set_game_state'):
                     new_page.set_game_state(self.game_state)
@@ -545,7 +572,10 @@ class MainWindow(QMainWindow):
         self._navigate_to("game")
         # Hide sidebar during game
         self.set_sidebar_visible(False)
-        self.game_page.start_game(home_team, away_team)
+        if self.game_page:
+            # 日付も渡す
+            current_date = self.game_state.current_date if self.game_state else "2027-01-01"
+            self.game_page.start_game(home_team, away_team, current_date)
 
     def _set_window_size(self, width: int, height: int):
         if self.isFullScreen():
