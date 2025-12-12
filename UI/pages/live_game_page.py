@@ -71,7 +71,47 @@ class VisualStyle:
         if "ボール" in res or "四球" in res or "死球" in res:
             return VisualStyle.COLOR_BALL
             
+        # ★修正: ファウルもストライクとして扱う
+        if "ファウル" in res:
+            return VisualStyle.COLOR_STRIKE
+            
         return VisualStyle.COLOR_STRIKE
+
+# ========================================
+# ユーティリティ: ランク色付け 
+# ========================================
+RANK_COLORS = {
+    'S': QColor("#FFD700"),  # Gold (ThemeのGoldに合わせて修正)
+    'A': QColor("#00BFFF"),  # Deep Sky Blue
+    'B': QColor("#4CAF50"),  # Green (same as COLOR_BALL)
+    'C': QColor("#FFC107"),  # Amber (same as COLOR_STRIKE)
+    'D': QColor("#FF5722"),  # Deep Orange/Red (same as COLOR_OUT)
+    'E': QColor("#9E9E9E"),  # Grey
+    'F': QColor("#607D8B"),  # Blue Grey
+    'G': QColor("#404040"),  # Dark Grey
+    '-': QColor("#A0A0A0"),  # Secondary Info
+}
+
+def get_rank_color(rank: str):
+    """能力ランクに基づいて色を返す"""
+    return RANK_COLORS.get(rank.upper(), VisualStyle.TEXT_TERTIARY)
+
+# ========================================
+# クリッカブルフレーム (★修正: ダブルクリック対応)
+# ========================================
+class ClickableFrame(QFrame):
+    double_clicked = Signal(object) # object は PlayerData または PitcherData
+
+    def __init__(self, player_ref, parent=None):
+        super().__init__(parent)
+        self.player_ref = player_ref # Player object reference
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mouseDoubleClickEvent(self, event):
+        """ダブルクリックでシグナルを発行"""
+        if event.button() == Qt.LeftButton and self.player_ref:
+            self.double_clicked.emit(self.player_ref)
+        super().mouseDoubleClickEvent(event)
 
 # ========================================
 # 3D 投球軌道 & ストライクゾーン (Simple & Clean)
@@ -424,6 +464,9 @@ class BroadcastField(QWidget):
 
         # --- 打球アニメーション ---
         if self.batted_ball:
+            # ★修正: NameError回避のため、traj_pathを最初に初期化
+            traj_path = QPainterPath()
+            
             dist_px = self.batted_ball.distance * scale
             angle_rad = math.radians(self.batted_ball.spray_angle)
             
@@ -443,7 +486,6 @@ class BroadcastField(QWidget):
             draw_y = cy + curr_y
 
             # 軌跡
-            traj_path = QPainterPath()
             traj_path.moveTo(cx, cy)
             
             steps = int(30 * t)
@@ -508,6 +550,7 @@ class DataCard(QFrame):
 # ========================================
 class LiveGamePage(QWidget):
     game_finished = Signal(object)
+    go_to_player_detail = Signal(object) # ★修正: 選手詳細画面遷移シグナルを追加
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -516,6 +559,8 @@ class LiveGamePage(QWidget):
         self.is_animating = False 
         self.need_zone_reset = False 
         self.date_str = "2027-01-01"
+        self.pitcher_card = None # ★修正: カード参照を初期化
+        self.batter_card = None  # ★修正: カード参照を初期化
         self._setup_ui()
         self._setup_timer()
 
@@ -542,6 +587,7 @@ class LiveGamePage(QWidget):
         lp_layout.setSpacing(15)
         
         self.matchup_card = self._create_matchup_card()
+            
         lp_layout.addWidget(self.matchup_card)
         
         # 3D Strike Zone
@@ -655,9 +701,10 @@ class LiveGamePage(QWidget):
         l.setSpacing(15)
         
         def create_box(title, col):
-            b = QFrame()
+            # ★修正: ClickableFrame を使用
+            b = ClickableFrame(None) 
             b.setStyleSheet(f"""
-                QFrame {{
+                ClickableFrame {{
                     background-color: {VisualStyle.BG_ELEVATED.name()};
                     border-radius: 4px;
                     border-top: 3px solid {col.name()};
@@ -671,6 +718,7 @@ class LiveGamePage(QWidget):
 
         # --- Pitcher Box ---
         p_box, pl = create_box("PITCHER", VisualStyle.ACCENT_RED)
+        self.pitcher_card = p_box # ★修正: 参照を保存
         self.lbl_p_name = QLabel("---", styleSheet=f"color:{VisualStyle.TEXT_PRIMARY.name()}; font-weight:bold; font-size:16px; border:none; background:transparent;")
         pl.addWidget(self.lbl_p_name, 1, 0, 1, 2)
         
@@ -688,13 +736,22 @@ class LiveGamePage(QWidget):
         pl.addWidget(self.lbl_p_wl, 3, 1)
         pl.addWidget(self.lbl_p_so, 4, 0)
         
-        self.lbl_p_abil = QLabel("Stf:- Ctl:- Sta:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
-        pl.addWidget(self.lbl_p_abil, 5, 0, 1, 2)
+        # ★修正: 投手の能力表示を分割・QHBoxLayout化
+        self.lbl_p_abil_stf = QLabel("Stf:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+        self.lbl_p_abil_ctl = QLabel("Ctl:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+        self.lbl_p_abil_sta = QLabel("Sta:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+        
+        abil_p_layout = QHBoxLayout()
+        abil_p_layout.addWidget(self.lbl_p_abil_stf)
+        abil_p_layout.addWidget(self.lbl_p_abil_ctl)
+        abil_p_layout.addWidget(self.lbl_p_abil_sta)
+        pl.addLayout(abil_p_layout, 5, 0, 1, 2) # Row 5, Span 2
         
         l.addWidget(p_box, stretch=1)
         
         # --- Batter Box ---
         b_box, bl = create_box("BATTER", VisualStyle.ACCENT_CYAN)
+        self.batter_card = b_box # ★修正: 参照を保存
         self.lbl_b_name = QLabel("---", styleSheet=f"color:{VisualStyle.TEXT_PRIMARY.name()}; font-weight:bold; font-size:16px; border:none; background:transparent;")
         bl.addWidget(self.lbl_b_name, 1, 0, 1, 2)
         
@@ -709,10 +766,22 @@ class LiveGamePage(QWidget):
         bl.addWidget(self.lbl_b_ops, 3, 1)
         bl.addWidget(self.lbl_b_hr_rbi, 4, 0, 1, 2)
 
-        self.lbl_b_abil = QLabel("Con:- Pow:- Spd:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
-        bl.addWidget(self.lbl_b_abil, 5, 0, 1, 2)
+        # ★修正: 打者の能力表示を分割・QHBoxLayout化
+        self.lbl_b_abil_con = QLabel("Con:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+        self.lbl_b_abil_pow = QLabel("Pow:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+        self.lbl_b_abil_spd = QLabel("Spd:-", styleSheet=f"color:{VisualStyle.TEXT_TERTIARY.name()}; font-size:10px; border:none;")
+
+        abil_b_layout = QHBoxLayout()
+        abil_b_layout.addWidget(self.lbl_b_abil_con)
+        abil_b_layout.addWidget(self.lbl_b_abil_pow)
+        abil_b_layout.addWidget(self.lbl_b_abil_spd)
+        bl.addLayout(abil_b_layout, 5, 0, 1, 2) # Row 5, Span 2
         
         l.addWidget(b_box, stretch=1)
+        
+        # ★修正: ダブルクリックシグナル接続を _create_matchup_card の最後で行う
+        self.pitcher_card.double_clicked.connect(self._on_player_card_double_clicked)
+        self.batter_card.double_clicked.connect(self._on_player_card_double_clicked)
         
         return f
 
@@ -821,6 +890,11 @@ class LiveGamePage(QWidget):
             item = self.log_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
 
+    def _on_player_card_double_clicked(self, player):
+        """選手カードがダブルクリックされた時の処理 (★追加)"""
+        if player:
+            self.go_to_player_detail.emit(player)
+
     def _on_pitch(self):
         if self.is_animating or not self.live_engine or self.live_engine.is_game_over(): 
             return
@@ -843,17 +917,34 @@ class LiveGamePage(QWidget):
         self.btn_skip.setEnabled(False)
         
         # 判定用文字列
+        res_val_name = play_res.name if hasattr(play_res, 'name') else str(play_res)
         res_val = play_res.value if hasattr(play_res, 'value') else str(play_res)
         
+        # ★修正: 結果文字列の日本語表示を明確にするためのマップ
+        japanese_result_map = {
+            'BALL': 'ボール',
+            'STRIKE_CALLED': '見逃しストライク',
+            'STRIKE_SWINGING': '空振りストライク',
+            'FOUL': 'ファウル', # ★ファウル表示の修正
+            'HIT_BY_PITCH': '死球',
+            'SINGLE': '安打', 'DOUBLE': '二塁打', 'TRIPLE': '三塁打', 'HOME_RUN': '本塁打',
+            'ERROR': '失策', 'SACRIFICE_FLY': '犠牲フライ', 'SACRIFICE_BUNT': '犠打',
+            'DOUBLE_PLAY': '併殺', 'GROUNDOUT': 'ゴロ', 'FLYOUT': 'フライ', 
+            'LINEOUT': 'ライナー', 'POPUP_OUT': 'ポップアップ', 'FIELDERS_CHOICE': '野選',
+        }
+        
+        # ピッチ結果ラベルに表示する文字列 (優先度: MapのEnum名 > 既存のres_val)
+        display_res = japanese_result_map.get(res_val_name, res_val)
+
         if pitch:
-            self.zone_widget.animate_pitch(pitch, res_val)
+            self.zone_widget.animate_pitch(pitch, display_res) # display_res を渡す
             self.card_velo.set_value(f"{int(pitch.velocity)} km/h")
             self.card_spin.set_value(f"{pitch.spin_rate} rpm")
             self.card_type.set_value(pitch.pitch_type)
 
-            # ★追加: ピッチ結果ラベルを更新
-            color = VisualStyle.get_result_color(res_val)
-            self.lbl_pitch_result.setText(f"PITCH RESULT: {res_val.upper()}")
+            # ★修正: ピッチ結果ラベルを更新 (display_resを使用)
+            color = VisualStyle.get_result_color(display_res)
+            self.lbl_pitch_result.setText(f"PITCH RESULT: {display_res.upper()}")
             self.lbl_pitch_result.setStyleSheet(f"color: {color.name()}; font-size: 14px; font-weight: bold; padding: 5px; background: {VisualStyle.BG_ELEVATED.name()}; border-radius: 4px;")
             
         if ball:
@@ -862,7 +953,7 @@ class LiveGamePage(QWidget):
                 self.live_engine.state.runner_2b is not None,
                 self.live_engine.state.runner_3b is not None
             ]
-            self.field_widget.animate_ball(ball, runners, res_val)
+            self.field_widget.animate_ball(ball, runners, display_res) # display_res を渡す
             self.card_exit.set_value(f"{int(ball.exit_velocity)} km/h")
             self.card_angle.set_value(f"{int(ball.launch_angle)}°")
             self.card_dist.set_value(f"{int(ball.distance)} m")
@@ -884,7 +975,7 @@ class LiveGamePage(QWidget):
 
         # 2. PitchResult であったが、LiveGameEngine側で打席が完了し、カウントがリセットされた場合 (四球、死球、三振)
         if not is_at_bat_end and st.balls == 0 and st.strikes == 0:
-            if hasattr(play_res, 'name') and play_res.name in ['BALL', 'HIT_BY_PITCH', 'STRIKE_CALLED', 'STRIKE_SWINGING']:
+            if hasattr(play_res, 'name') and play_res.name in ['BALL', 'HIT_BY_PITCH', 'STRIKE_CALLED', 'STRIKE_SWINGING', 'FOUL']: # ★修正: FOULを追加 (三振の場合)
                 is_at_bat_end = True
 
         if is_at_bat_end:
@@ -893,12 +984,19 @@ class LiveGamePage(QWidget):
             batter_order = str(order_idx + 1)
             
             # ログ出力用の結果文字列調整
-            if play_res.name == 'BALL' and hasattr(current_batter, 'runner_1b') and current_batter.runner_1b: res_val = "四球" # 四球で出塁
-            elif play_res.name == 'HIT_BY_PITCH': res_val = "死球"
-            elif play_res.name in ['STRIKE_CALLED', 'STRIKE_SWINGING'] and is_at_bat_end: res_val = "三振" # カウントリセットされたストライクは三振
+            final_log_res = display_res # 初期値は表示用の日本語文字列 (安打・アウト系はこちらを使用)
             
+            # Walk / Strikeout / HBP の上書きロジック
+            if st.balls == 0 and st.strikes == 0:
+                 if res_val_name == 'BALL': 
+                    final_log_res = "四球" # ★四球修正
+                 elif res_val_name == 'HIT_BY_PITCH': 
+                    final_log_res = "死球"
+                 elif res_val_name in ['STRIKE_CALLED', 'STRIKE_SWINGING', 'FOUL']: 
+                    final_log_res = "三振" # ★三振修正 (ファウルチップ含む)
+
             log_prefix = f"[{current_inning}回{'表' if is_top else '裏'} | {batter_order}番 {team_abbr} {batter_name}] "
-            self._log(log_prefix + f"【{res_val}】", True)
+            self._log(log_prefix + f"【{final_log_res}】", True)
             self.need_zone_reset = True
 
     def _on_animation_step_finished(self):
@@ -940,6 +1038,15 @@ class LiveGamePage(QWidget):
         b, _ = self.live_engine.get_current_batter()
         p, _ = self.live_engine.get_current_pitcher()
         
+        # ★修正: ClickableFrame の player_ref を更新
+        if self.pitcher_card:
+            self.pitcher_card.player_ref = p
+        if self.batter_card:
+            self.batter_card.player_ref = b
+        
+        # ★修正: ランク表示のスタイル (font-size: 16px に拡大)
+        RANK_LABEL_STYLE_BASE = "font-size: 16px; border:none; font-weight:bold;"
+        
         if b:
             self.lbl_b_name.setText(b.name)
             self.lbl_b_hand.setText(f"{b.bats}投{b.throws}打")
@@ -949,10 +1056,26 @@ class LiveGamePage(QWidget):
             self.lbl_b_ops.setText(f"OPS: {ops:.3f}")
             self.lbl_b_hr_rbi.setText(f"HR: {b.record.home_runs}  RBI: {b.record.rbis}")
             
-            con = get_rank(b.stats.contact)
-            pow_ = get_rank(b.stats.power)
-            spd = get_rank(b.stats.speed)
-            self.lbl_b_abil.setText(f"Con:{con} Pow:{pow_} Spd:{spd}")
+            con_val = b.stats.contact
+            pow_val = b.stats.power
+            spd_val = b.stats.speed
+            
+            con = get_rank(con_val)
+            pow_ = get_rank(pow_val)
+            spd = get_rank(spd_val)
+
+            # ★修正: ランク表示を個別のラベルに分割し、色付けとフォントサイズ拡大
+            con_color = get_rank_color(con)
+            pow_color = get_rank_color(pow_)
+            spd_color = get_rank_color(spd)
+            
+            self.lbl_b_abil_con.setText(f"Con:{con}")
+            self.lbl_b_abil_pow.setText(f"Pow:{pow_}")
+            self.lbl_b_abil_spd.setText(f"Spd:{spd}")
+            
+            self.lbl_b_abil_con.setStyleSheet(f"color: {con_color.name()}; {RANK_LABEL_STYLE_BASE}")
+            self.lbl_b_abil_pow.setStyleSheet(f"color: {pow_color.name()}; {RANK_LABEL_STYLE_BASE}")
+            self.lbl_b_abil_spd.setStyleSheet(f"color: {spd_color.name()}; {RANK_LABEL_STYLE_BASE}")
             
         if p:
             self.lbl_p_name.setText(p.name)
@@ -963,10 +1086,26 @@ class LiveGamePage(QWidget):
             self.lbl_p_wl.setText(f"{p.record.wins}W-{p.record.losses}L")
             self.lbl_p_so.setText(f"SO: {p.record.strikeouts_pitched}")
             
-            stf = get_rank(p.stats.stuff)
-            ctl = get_rank(p.stats.control)
-            sta = get_rank(p.stats.stamina)
-            self.lbl_p_abil.setText(f"Stf:{stf} Ctl:{ctl} Sta:{sta}")
+            stf_val = p.stats.stuff
+            ctl_val = p.stats.control
+            sta_val = p.stats.stamina
+            
+            stf = get_rank(stf_val)
+            ctl = get_rank(ctl_val)
+            sta = get_rank(sta_val)
+
+            # ★修正: ランク表示を個別のラベルに分割し、色付けとフォントサイズ拡大
+            stf_color = get_rank_color(stf)
+            ctl_color = get_rank_color(ctl)
+            sta_color = get_rank_color(sta)
+
+            self.lbl_p_abil_stf.setText(f"Stf:{stf}")
+            self.lbl_p_abil_ctl.setText(f"Ctl:{ctl}")
+            self.lbl_p_abil_sta.setText(f"Sta:{sta}")
+
+            self.lbl_p_abil_stf.setStyleSheet(f"color: {stf_color.name()}; {RANK_LABEL_STYLE_BASE}")
+            self.lbl_p_abil_ctl.setStyleSheet(f"color: {ctl_color.name()}; {RANK_LABEL_STYLE_BASE}")
+            self.lbl_p_abil_sta.setStyleSheet(f"color: {sta_color.name()}; {RANK_LABEL_STYLE_BASE}")
 
         runners = [
             st.runner_1b is not None,

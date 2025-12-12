@@ -179,7 +179,8 @@ class MainWindow(QMainWindow):
         from UI.pages.order_page import OrderPage
         from UI.pages.farm_swap_page import FarmSwapPage
         from UI.pages.live_game_page import LiveGamePage # LiveGamePageをインポート
-
+        from UI.pages.contracts_page import ContractsPage # ContractsPageをインポート
+        
         page = None
         
         if section == "home":
@@ -221,6 +222,13 @@ class MainWindow(QMainWindow):
             page = LiveGamePage(self)
             page.game_finished.connect(self._on_game_finished)
             self.game_page = page # 属性として保持
+            
+        elif section == "contract_changes": # ★追加: 契約ページ
+            page = ContractsPage(self)
+            # 選手詳細画面への遷移シグナルを接続 (ContractsPageから飛べるように)
+            if hasattr(page, 'go_to_player_detail'):
+                page.go_to_player_detail.connect(self._show_player_detail)
+            self.contracts_page = page
         
         # Unimplemented pages (kept for code reference but not in sidebar)
             
