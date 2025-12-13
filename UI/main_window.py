@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         from UI.pages.settings_page import SettingsPage
         from UI.pages.order_page import OrderPage
         from UI.pages.farm_swap_page import FarmSwapPage
-        from UI.pages.live_game_page import LiveGamePage # LiveGamePageをインポート
+        from UI.pages.tv_broadcast_game_page import TVBroadcastGamePage  # TV中継風ゲームページ
         from UI.pages.contracts_page import ContractsPage # ContractsPageをインポート
         
         page = None
@@ -218,8 +218,8 @@ class MainWindow(QMainWindow):
             page.player_detail_requested.connect(self._show_player_detail)
             self.farm_swap_page = page
             
-        elif section == "game": # ★追加: ゲームページの作成処理
-            page = LiveGamePage(self)
+        elif section == "game": # TV中継風ゲームページ
+            page = TVBroadcastGamePage(self)
             page.game_finished.connect(self._on_game_finished)
             self.game_page = page # 属性として保持
             
