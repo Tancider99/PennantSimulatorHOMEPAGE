@@ -1,1510 +1,659 @@
 # -*- coding: utf-8 -*-
 """
-Pennant Simulator 2027 - TV Broadcast Game Page
-MLB The Show風のTV放送スタイル試合画面 - 高品質版
+Baseball Team Architect 2027 - TV Broadcast Game Page
+Updated: Accurate Field Dimensions (Stadium PF), Fixed Trajectory Line
 """
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QFrame, QSizePolicy, QScrollArea, QComboBox, QStackedWidget
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QPushButton, QScrollArea, QGridLayout, QSizePolicy, QTableWidget, 
+    QTableWidgetItem, QHeaderView, QAbstractItemView
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QPointF, QRectF, QSize
+from PySide6.QtCore import Qt, Signal, QTimer, QPointF, QRectF
 from PySide6.QtGui import (
-    QColor, QPainter, QPen, QFont, QPainterPath, QPixmap,
-    QLinearGradient, QRadialGradient, QPolygonF, QBrush, QFontMetrics,
-    QConicalGradient
+    QColor, QPainter, QPen, QBrush, QFont, QPainterPath, QPolygonF
 )
 
 import sys
 import os
 import math
-import random
+import traceback
 
+# パス設定
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from live_game_engine import PitchData, BattedBallData, LiveGameEngine
-from models import Player, Position
-
+try:
+    from UI.theme import get_theme
+    from live_game_engine import PitchData, BattedBallData
+except ImportError:
+    pass
 
 # ========================================
-# Colors & Style Constants (MLB The Show Style)
+# デザイン定数
 # ========================================
-class C:
-    """Color constants for TV broadcast style"""
-    # Main backgrounds
-    BG_DARK = QColor("#050a14")
-    BG_PANEL = QColor("#0a1528")
-    BG_HEADER = QColor("#0f2040")
-    BG_ROW_ODD = QColor("#0a1422")
-    BG_ROW_EVEN = QColor("#0c1830")
-    BG_SELECTED = QColor("#1a4590")
+THEME = get_theme()
 
-    # Team colors
-    TEAM_BLUE = QColor("#003087")
-    TEAM_RED = QColor("#c41e3a")
-    TEAM_NAVY = QColor("#0c2340")
-    TEAM_TEAL = QColor("#005c5c")
-    TEAM_WHITE_SOX = QColor("#27251f")
-    TEAM_MARINERS = QColor("#0c2c56")
-
-    # Text
-    WHITE = QColor("#ffffff")
-    GRAY = QColor("#8899aa")
-    LIGHT_GRAY = QColor("#b0c0d0")
-    GOLD = QColor("#ffd700")
-    YELLOW = QColor("#ffff00")
-    CYAN = QColor("#00ddff")
-
-    # Status colors
-    BALL_GREEN = QColor("#00cc66")
-    STRIKE_YELLOW = QColor("#ffcc00")
-    OUT_RED = QColor("#ff3333")
-
-    # Rating colors
-    RATING_HIGH = QColor("#ff4444")
-    RATING_MID_HIGH = QColor("#ff8800")
-    RATING_MID = QColor("#ffcc00")
-    RATING_LOW = QColor("#4488ff")
-
-    # Scoreboard colors
-    SCORE_BG = QColor("#1a2a4a")
-    SCORE_BORDER = QColor("#3a6090")
+class VisualStyle:
+    BG_MAIN = QColor(THEME.bg_darkest)
+    BG_PANEL = QColor(THEME.bg_card)
+    BG_FIELD = QColor("#16181C") 
+    
+    TEXT_MAIN = QColor(THEME.text_primary)
+    TEXT_SUB = QColor(THEME.text_secondary)
+    
+    COLOR_STRIKE = QColor(THEME.accent_orange)
+    COLOR_BALL = QColor(THEME.success)
+    COLOR_OUT = QColor(THEME.accent_red)
+    COLOR_HIT = QColor(THEME.accent_blue)
+    COLOR_FOUL = QColor("#FFD700")
+    COLOR_RUNNER = QColor(THEME.accent_orange)
+    
+    BORDER = QColor(THEME.border)
+    FONT_NUM = "Consolas"
 
     @staticmethod
-    def rating_color(value: int) -> QColor:
-        if value >= 80:
-            return C.RATING_HIGH
-        elif value >= 65:
-            return C.RATING_MID_HIGH
-        elif value >= 50:
-            return C.RATING_MID
-        else:
-            return C.RATING_LOW
-
+    def get_result_color(result: str):
+        res = str(result)
+        if "本塁打" in res: return QColor("#E040FB")
+        if any(x in res for x in ["安打", "二塁打", "三塁打"]): return VisualStyle.COLOR_HIT
+        if any(x in res for x in ["アウト", "フライ", "ゴロ", "ライナー", "併殺", "失策", "犠", "三振"]): return VisualStyle.COLOR_OUT
+        if "ボール" in res or "四球" in res or "死球" in res: return VisualStyle.COLOR_BALL
+        if "ファウル" in res: return VisualStyle.COLOR_FOUL
+        return VisualStyle.COLOR_STRIKE
 
 # ========================================
-# Top Scoreboard Widget (High Quality)
+# カスタムウィジェット
 # ========================================
-class TopScoreboard(QWidget):
-    """MLB The Show style top scoreboard with full innings display"""
+
+class TacticalField(QWidget):
+    """中央フィールド"""
+    animation_finished = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(115)
-
-        # Data
-        self.stadium_name = "STADIUM"
-        self.away_abbr = "AWAY"
-        self.home_abbr = "HOME"
-        self.away_logo_color = C.TEAM_NAVY
-        self.home_logo_color = C.TEAM_TEAL
-        self.away_runs_by_inning = [None] * 9
-        self.home_runs_by_inning = [None] * 9
-        self.away_total = {"R": 0, "H": 0, "E": 0}
-        self.home_total = {"R": 0, "H": 0, "E": 0}
-        self.current_inning = 1
-        self.is_top = True
-        self.balls = 0
-        self.strikes = 0
-        self.outs = 0
-        self.last_pitch_type = "FB"
-        self.last_pitch_speed = 0
-        self.game_time = "0:00"
-
-    def set_teams(self, away: str, home: str, stadium: str = "STADIUM"):
-        self.away_abbr = away[:3].upper()
-        self.home_abbr = home[:3].upper()
-        self.stadium_name = stadium.upper()
-        self.update()
-
-    def set_inning(self, inning: int, is_top: bool):
-        self.current_inning = inning
-        self.is_top = is_top
-        self.update()
-
-    def set_count(self, balls: int, strikes: int, outs: int):
-        self.balls = balls
-        self.strikes = strikes
-        self.outs = outs
-        self.update()
-
-    def set_score(self, away_r: int, home_r: int, away_h: int = 0, home_h: int = 0, away_e: int = 0, home_e: int = 0):
-        self.away_total = {"R": away_r, "H": away_h, "E": away_e}
-        self.home_total = {"R": home_r, "H": home_h, "E": home_e}
-        self.update()
-
-    def set_pitch_info(self, pitch_type: str, speed: int):
-        self.last_pitch_type = pitch_type
-        self.last_pitch_speed = speed
-        self.update()
-
-    def set_inning_score(self, inning: int, is_away: bool, runs: int):
-        if 1 <= inning <= 9:
-            if is_away:
-                self.away_runs_by_inning[inning - 1] = runs
-            else:
-                self.home_runs_by_inning[inning - 1] = runs
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        w, h = self.width(), self.height()
-
-        # Main background gradient
-        grad = QLinearGradient(0, 0, 0, h)
-        grad.setColorAt(0, QColor("#1a2a4a"))
-        grad.setColorAt(0.5, QColor("#0f1a30"))
-        grad.setColorAt(1, QColor("#0a1220"))
-        p.fillRect(0, 0, w, h, grad)
-
-        # Top highlight line
-        p.setPen(QPen(QColor("#4080c0"), 1))
-        p.drawLine(0, 1, w, 1)
-
-        # Bottom border
-        p.setPen(QPen(QColor("#2a4a6a"), 2))
-        p.drawLine(0, h - 1, w, h - 1)
-
-        # Draw sections
-        self._draw_scoreboard(p, 8, 8, 560, h - 16)
-        self._draw_count_display(p, 578, 8, 160, h - 16)
-        self._draw_controls_hint(p, 748, 8, w - 758, h - 16)
-
-    def _draw_scoreboard(self, p: QPainter, x: int, y: int, w: int, h: int):
-        """Draw main scoreboard with innings"""
-        # Stadium name box
-        p.fillRect(x, y, 70, 18, QColor("#0a1528"))
-        p.setPen(C.LIGHT_GRAY)
-        p.setFont(QFont("Segoe UI", 8))
-        p.drawText(x + 4, y + 13, self.stadium_name[:12])
-
-        # Time display
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Consolas", 8))
-        # p.drawText(x + 150, y + 13, self.game_time)
-
-        # Innings header
-        inn_start_x = x + 75
-        inn_width = 30
-        p.fillRect(inn_start_x - 2, y, 9 * inn_width + 4, 18, QColor("#0f1830"))
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Consolas", 10, QFont.Bold))
-        for i in range(1, 10):
-            ix = inn_start_x + (i - 1) * inn_width
-            # Highlight current inning header
-            if i == self.current_inning:
-                p.fillRect(int(ix), y, inn_width - 2, 18, QColor("#2050a0"))
-            p.drawText(QRectF(ix, y, inn_width, 18), Qt.AlignCenter, str(i))
-
-        # R H E headers
-        rhe_x = inn_start_x + 9 * inn_width + 15
-        p.fillRect(int(rhe_x) - 5, y, 100, 18, QColor("#0f1830"))
-        for i, label in enumerate(["R", "H", "E"]):
-            p.setPen(C.LIGHT_GRAY)
-            p.drawText(QRectF(rhe_x + i * 32, y, 30, 18), Qt.AlignCenter, label)
-
-        # Away team row
-        away_y = y + 22
-        # Team name background with gradient
-        away_grad = QLinearGradient(x, 0, x + 72, 0)
-        away_grad.setColorAt(0, self.away_logo_color)
-        away_grad.setColorAt(1, self.away_logo_color.darker(150))
-        p.fillRect(x, away_y, 72, 32, away_grad)
-
-        # Team logo placeholder (circle with first letter)
-        p.setBrush(QColor(255, 255, 255, 40))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(x + 4, away_y + 4, 24, 24)
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Arial Black", 12))
-        p.drawText(QRectF(x + 4, away_y + 4, 24, 24), Qt.AlignCenter, self.away_abbr[0])
-
-        # Team abbreviation with arrow indicator
-        arrow = "▲" if self.is_top else ""
-        p.setPen(C.WHITE if self.is_top else C.GRAY)
-        p.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        p.drawText(x + 32, away_y + 22, f"{self.away_abbr}")
-        if self.is_top:
-            p.setFont(QFont("Segoe UI", 10))
-            p.drawText(x + 62, away_y + 12, arrow)
-
-        # Away innings scores
-        p.setFont(QFont("Consolas", 12, QFont.Bold))
-        for i in range(9):
-            ix = inn_start_x + i * inn_width
-            # Background
-            is_current = (self.current_inning == i + 1 and self.is_top)
-            bg_col = QColor("#1a4080") if is_current else (QColor("#0c1628") if i % 2 == 0 else QColor("#0a1220"))
-            p.fillRect(int(ix), away_y, inn_width - 2, 32, bg_col)
-
-            # Score
-            score = self.away_runs_by_inning[i]
-            if score is not None:
-                p.setPen(C.WHITE)
-                p.drawText(QRectF(ix, away_y, inn_width - 2, 32), Qt.AlignCenter, str(score))
-
-        # Away R/H/E totals
-        p.fillRect(int(rhe_x) - 5, away_y, 100, 32, QColor("#0a1528"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 14, QFont.Bold))
-        for i, key in enumerate(["R", "H", "E"]):
-            p.drawText(QRectF(rhe_x + i * 32, away_y, 30, 32), Qt.AlignCenter, str(self.away_total[key]))
-
-        # Home team row
-        home_y = away_y + 36
-        home_grad = QLinearGradient(x, 0, x + 72, 0)
-        home_grad.setColorAt(0, self.home_logo_color)
-        home_grad.setColorAt(1, self.home_logo_color.darker(150))
-        p.fillRect(x, home_y, 72, 32, home_grad)
-
-        # Home team logo
-        p.setBrush(QColor(255, 255, 255, 40))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(x + 4, home_y + 4, 24, 24)
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Arial Black", 12))
-        p.drawText(QRectF(x + 4, home_y + 4, 24, 24), Qt.AlignCenter, self.home_abbr[0])
-
-        arrow = "▼" if not self.is_top else ""
-        p.setPen(C.WHITE if not self.is_top else C.GRAY)
-        p.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        p.drawText(x + 32, home_y + 22, f"{self.home_abbr}")
-        if not self.is_top:
-            p.setFont(QFont("Segoe UI", 10))
-            p.drawText(x + 62, home_y + 12, arrow)
-
-        # Home innings scores
-        p.setFont(QFont("Consolas", 12, QFont.Bold))
-        for i in range(9):
-            ix = inn_start_x + i * inn_width
-            is_current = (self.current_inning == i + 1 and not self.is_top)
-            bg_col = QColor("#1a4080") if is_current else (QColor("#0c1628") if i % 2 == 0 else QColor("#0a1220"))
-            p.fillRect(int(ix), home_y, inn_width - 2, 32, bg_col)
-
-            score = self.home_runs_by_inning[i]
-            if score is not None:
-                p.setPen(C.WHITE)
-                p.drawText(QRectF(ix, home_y, inn_width - 2, 32), Qt.AlignCenter, str(score))
-
-        # Home R/H/E totals
-        p.fillRect(int(rhe_x) - 5, home_y, 100, 32, QColor("#0a1528"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 14, QFont.Bold))
-        for i, key in enumerate(["R", "H", "E"]):
-            p.drawText(QRectF(rhe_x + i * 32, home_y, 30, 32), Qt.AlignCenter, str(self.home_total[key]))
-
-    def _draw_count_display(self, p: QPainter, x: int, y: int, w: int, h: int):
-        """Draw Ball-Strike-Out count and pitch info"""
-        # Background panel
-        p.fillRect(x, y, w, h, QColor(0, 0, 0, 180))
-        p.setPen(QPen(QColor("#3060a0"), 1))
-        p.drawRect(x, y, w, h)
-
-        # Inning indicator at top
-        p.fillRect(x + 2, y + 2, w - 4, 22, QColor("#0a2040"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 11, QFont.Bold))
-        inn_arrow = "▲" if self.is_top else "▼"
-        p.drawText(QRectF(x, y + 2, w, 22), Qt.AlignCenter, f"{inn_arrow} {self.current_inning}")
-
-        # BSO indicators with labels
-        bso_y = y + 30
-        indicator_x = x + 12
-
-        # Ball row
-        p.setPen(C.LIGHT_GRAY)
-        p.setFont(QFont("Segoe UI", 8))
-        p.drawText(indicator_x - 2, bso_y + 11, "B")
-        p.setPen(Qt.NoPen)
-        for i in range(4):
-            if i < self.balls:
-                # Lit indicator with glow
-                glow = QRadialGradient(QPointF(indicator_x + 18 + i * 22 + 7, bso_y + 7), 12)
-                glow.setColorAt(0, QColor(0, 255, 100, 100))
-                glow.setColorAt(1, QColor(0, 255, 100, 0))
-                p.setBrush(glow)
-                p.drawEllipse(indicator_x + 18 + i * 22 - 5, bso_y - 5, 24, 24)
-
-                p.setBrush(C.BALL_GREEN)
-            else:
-                p.setBrush(QColor(30, 40, 50))
-            p.drawEllipse(indicator_x + 18 + i * 22, bso_y, 14, 14)
-
-        # Strike row
-        bso_y += 22
-        p.setPen(C.LIGHT_GRAY)
-        p.setFont(QFont("Segoe UI", 8))
-        p.drawText(indicator_x - 2, bso_y + 11, "S")
-        p.setPen(Qt.NoPen)
-        for i in range(3):
-            if i < self.strikes:
-                glow = QRadialGradient(QPointF(indicator_x + 18 + i * 22 + 7, bso_y + 7), 12)
-                glow.setColorAt(0, QColor(255, 200, 0, 100))
-                glow.setColorAt(1, QColor(255, 200, 0, 0))
-                p.setBrush(glow)
-                p.drawEllipse(indicator_x + 18 + i * 22 - 5, bso_y - 5, 24, 24)
-
-                p.setBrush(C.STRIKE_YELLOW)
-            else:
-                p.setBrush(QColor(30, 40, 50))
-            p.drawEllipse(indicator_x + 18 + i * 22, bso_y, 14, 14)
-
-        # Out row
-        bso_y += 22
-        p.setPen(C.LIGHT_GRAY)
-        p.setFont(QFont("Segoe UI", 8))
-        p.drawText(indicator_x - 2, bso_y + 11, "O")
-        p.setPen(Qt.NoPen)
-        for i in range(3):
-            if i < self.outs:
-                glow = QRadialGradient(QPointF(indicator_x + 18 + i * 22 + 7, bso_y + 7), 12)
-                glow.setColorAt(0, QColor(255, 50, 50, 100))
-                glow.setColorAt(1, QColor(255, 50, 50, 0))
-                p.setBrush(glow)
-                p.drawEllipse(indicator_x + 18 + i * 22 - 5, bso_y - 5, 24, 24)
-
-                p.setBrush(C.OUT_RED)
-            else:
-                p.setBrush(QColor(30, 40, 50))
-            p.drawEllipse(indicator_x + 18 + i * 22, bso_y, 14, 14)
-
-        # Pitch info at bottom
-        p.fillRect(x + 2, y + h - 22, w - 4, 20, QColor("#0a2040"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 10, QFont.Bold))
-        if self.last_pitch_speed > 0:
-            pitch_text = f"PITCH: {self.last_pitch_type} {self.last_pitch_speed} MPH"
-        else:
-            pitch_text = "PITCH: --"
-        p.drawText(QRectF(x + 2, y + h - 22, w - 4, 20), Qt.AlignCenter, pitch_text)
-
-    def _draw_controls_hint(self, p: QPainter, x: int, y: int, w: int, h: int):
-        """Draw control hints area"""
-        # Title
-        p.fillRect(x, y, w, 18, QColor("#1a3050"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        p.drawText(x + 8, y + 13, "CONTROLS")
-
-        controls = [
-            ("1", "PITCH TO BATTER!"),
-            ("2", "PITCH AROUND"),
-            ("3", "PITCH TO CONTACT"),
-            ("4", "INTENTIONAL WALK"),
-        ]
-
-        ctrl_y = y + 24
-        p.setFont(QFont("Segoe UI", 7))
-
-        for i, (key, label) in enumerate(controls):
-            if i >= 4:
-                break
-            # Key box
-            p.fillRect(x + 5, ctrl_y + i * 20, 16, 16, QColor("#2a5a9a"))
-            p.setPen(QPen(QColor("#4080c0"), 1))
-            p.drawRect(x + 5, ctrl_y + i * 20, 16, 16)
-            p.setPen(C.WHITE)
-            p.setFont(QFont("Consolas", 9, QFont.Bold))
-            p.drawText(QRectF(x + 5, ctrl_y + i * 20, 16, 16), Qt.AlignCenter, key)
-
-            # Label
-            p.setPen(C.LIGHT_GRAY)
-            p.setFont(QFont("Segoe UI", 7))
-            p.drawText(x + 26, ctrl_y + i * 20 + 12, label[:18])
-
-
-# ========================================
-# Team Lineup Panel (Enhanced)
-# ========================================
-class TeamLineupPanel(QWidget):
-    """Team lineup panel with player stats"""
-
-    player_clicked = Signal(object)
-
-    def __init__(self, is_home: bool = False, parent=None):
-        super().__init__(parent)
-        self.is_home = is_home
-        self.setFixedWidth(265)
-
-        self.team_name = "TEAM"
-        self.team_color = C.TEAM_BLUE
-        self.lineup = []
-        self.bullpen = []
-        self.current_batter_idx = -1
-
-    def set_team(self, name: str, color: QColor = None):
-        self.team_name = name.upper()
-        if color:
-            self.team_color = color
-        self.update()
-
-    def set_lineup(self, lineup: list):
-        self.lineup = lineup
-        self.update()
-
-    def set_current_batter(self, idx: int):
-        self.current_batter_idx = idx
-        self.update()
-
-    def set_bullpen(self, pitchers: list):
-        self.bullpen = pitchers
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        w, h = self.width(), self.height()
-
-        # Background with gradient
-        bg_grad = QLinearGradient(0, 0, 0, h)
-        bg_grad.setColorAt(0, C.BG_DARK)
-        bg_grad.setColorAt(1, QColor("#030810"))
-        p.fillRect(0, 0, w, h, bg_grad)
-
-        # Team header with gradient
-        header_h = 30
-        header_grad = QLinearGradient(0, 0, w, 0)
-        header_grad.setColorAt(0, self.team_color)
-        header_grad.setColorAt(0.7, self.team_color.darker(130))
-        header_grad.setColorAt(1, self.team_color.darker(180))
-        p.fillRect(0, 0, w, header_h, header_grad)
-
-        # Team name with icon placeholder
-        p.setBrush(QColor(255, 255, 255, 50))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(6, 4, 22, 22)
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Arial Black", 10))
-        p.drawText(QRectF(6, 4, 22, 22), Qt.AlignCenter, self.team_name[0] if self.team_name else "T")
-
-        p.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        p.drawText(34, 21, self.team_name)
-
-        # Column headers
-        col_y = header_h + 2
-        p.fillRect(0, col_y, w, 18, C.BG_HEADER)
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-
-        cols = [("#", 18), ("-", 14), ("PLAYER", 78), ("POS", 28), ("AVG", 34), ("HR", 24), ("RBI", 26), ("SB", 24)]
-        col_x = 4
-        for label, cw in cols:
-            p.drawText(QRectF(col_x, col_y, cw, 18), Qt.AlignCenter, label)
-            col_x += cw
-
-        # Player rows
-        row_h = 21
-        row_y = col_y + 20
-
-        for i, (player, pos_str) in enumerate(self.lineup[:9]):
-            is_current = (i == self.current_batter_idx)
-
-            # Row background
-            if is_current:
-                # Highlighted current batter with glow effect
-                glow_grad = QLinearGradient(0, row_y, 0, row_y + row_h)
-                glow_grad.setColorAt(0, QColor("#1a5090"))
-                glow_grad.setColorAt(0.5, QColor("#2060b0"))
-                glow_grad.setColorAt(1, QColor("#1a5090"))
-                p.fillRect(0, row_y, w, row_h, glow_grad)
-                # Yellow left indicator
-                p.fillRect(0, row_y, 3, row_h, C.YELLOW)
-            else:
-                bg = C.BG_ROW_EVEN if i % 2 == 0 else C.BG_ROW_ODD
-                p.fillRect(0, row_y, w, row_h, bg)
-
-            col_x = 4
-            p.setFont(QFont("Consolas", 9))
-
-            # Order number
-            p.setPen(C.WHITE if is_current else C.LIGHT_GRAY)
-            p.drawText(QRectF(col_x, row_y, 18, row_h), Qt.AlignCenter, str(i + 1))
-            col_x += 18
-
-            # Handedness
-            if player:
-                bats = getattr(player, 'bats', '右')
-                bats_str = 'L' if bats == '左' else ('S' if bats == '両' else 'R')
-            else:
-                bats_str = 'R'
-            p.setPen(C.GRAY)
-            p.drawText(QRectF(col_x, row_y, 14, row_h), Qt.AlignCenter, bats_str)
-            col_x += 14
-
-            # Player name
-            p.setPen(C.WHITE if is_current else C.LIGHT_GRAY)
-            name = self._shorten_name(player.name) if player else ""
-            p.drawText(QRectF(col_x + 2, row_y, 76, row_h), Qt.AlignLeft | Qt.AlignVCenter, name)
-            col_x += 78
-
-            # Position
-            p.setPen(C.CYAN if is_current else C.GRAY)
-            p.drawText(QRectF(col_x, row_y, 28, row_h), Qt.AlignCenter, pos_str)
-            col_x += 28
-
-            # Stats
-            if player and hasattr(player, 'record'):
-                avg_val = player.record.batting_average
-                avg = f".{int(avg_val * 1000):03d}"[1:] if avg_val > 0 else ".000"
-                hr = str(player.record.home_runs)
-                rbi = str(player.record.rbi)
-                sb = str(player.record.stolen_bases)
-            else:
-                avg, hr, rbi, sb = ".000", "0", "0", "0"
-
-            p.setPen(C.WHITE)
-            p.setFont(QFont("Consolas", 8))
-            p.drawText(QRectF(col_x, row_y, 34, row_h), Qt.AlignCenter, avg)
-            col_x += 34
-            p.drawText(QRectF(col_x, row_y, 24, row_h), Qt.AlignCenter, hr)
-            col_x += 24
-            p.drawText(QRectF(col_x, row_y, 26, row_h), Qt.AlignCenter, rbi)
-            col_x += 26
-            p.drawText(QRectF(col_x, row_y, 24, row_h), Qt.AlignCenter, sb)
-
-            row_y += row_h
-
-        # Bullpen section
-        bullpen_y = row_y + 8
-        p.fillRect(0, bullpen_y, w, 22, C.BG_HEADER)
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        p.drawText(10, bullpen_y + 16, "BULLPEN")
-
-        # Bullpen ready indicator
-        bp_y = bullpen_y + 26
-        p.setBrush(C.BALL_GREEN)
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(14, bp_y + 4, 10, 10)
-        p.setPen(C.LIGHT_GRAY)
-        p.setFont(QFont("Segoe UI", 8))
-        p.drawText(30, bp_y + 13, "Ready")
-
-    def _shorten_name(self, name: str) -> str:
-        if len(name) <= 9:
-            return name
-        parts = name.split()
-        if len(parts) >= 2:
-            return f"{parts[0][0]}. {parts[-1][:7]}"
-        return name[:9]
-
-
-# ========================================
-# Pitcher Stats Panel (Enhanced)
-# ========================================
-class PitcherStatsPanel(QWidget):
-    """Bottom left pitcher stats panel with full stats"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(145)
-
-        self.pitcher = None
-        self.throws = "R"
-        self.name = "PITCHER"
-        self.season_stats = {"W-L": "0-0", "IP": "0.0", "H": "0", "ER": "0", "BB": "0", "K": "0", "ERA": "0.00"}
-        self.today_stats = {"IP": "0.0", "H": "0", "ER": "0", "BB": "0", "K": "0"}
-        self.ratings = {"Overall": 50, "STU": 50, "MOV": 50, "CON": 50}
-        self.stamina = 100
-        self.pitches = 0
-        self.velo = "90-92"
-        self.pitch_type = "FB"
-
-    def set_pitcher(self, player: Player):
-        self.pitcher = player
-        if player:
-            self.name = player.name
-            self.throws = "L" if getattr(player, 'throws', '右') == "左" else "R"
-
-            if hasattr(player, 'stats'):
-                self.ratings["Overall"] = int(player.stats.overall_pitching())
-                self.ratings["STU"] = int(getattr(player.stats, 'stuff', 50))
-                self.ratings["MOV"] = int(getattr(player.stats, 'movement', 50))
-                self.ratings["CON"] = int(getattr(player.stats, 'control', 50))
-
-            if hasattr(player, 'record'):
-                rec = player.record
-                self.season_stats["W-L"] = f"{rec.wins}-{rec.losses}"
-                self.season_stats["IP"] = f"{rec.innings_pitched:.1f}"
-                self.season_stats["ERA"] = f"{rec.era:.2f}"
-                self.season_stats["K"] = str(rec.strikeouts)
-                self.season_stats["BB"] = str(rec.walks_allowed)
-                self.season_stats["H"] = str(rec.hits_allowed)
-                self.season_stats["ER"] = str(rec.earned_runs)
-
-        self.update()
-
-    def set_game_stats(self, ip: float, h: int, er: int, bb: int, k: int, pitches: int, stamina: float):
-        self.today_stats["IP"] = f"{ip:.1f}"
-        self.today_stats["H"] = str(h)
-        self.today_stats["ER"] = str(er)
-        self.today_stats["BB"] = str(bb)
-        self.today_stats["K"] = str(k)
-        self.pitches = pitches
-        self.stamina = int(stamina)
-        self.update()
-
-    def set_pitch_info(self, velo_range: str, pitch_type: str):
-        self.velo = velo_range
-        self.pitch_type = pitch_type
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        w, h = self.width(), self.height()
-
-        # Background
-        grad = QLinearGradient(0, 0, 0, h)
-        grad.setColorAt(0, QColor("#0c1830"))
-        grad.setColorAt(1, QColor("#050a14"))
-        p.fillRect(0, 0, w, h, grad)
-
-        # Top accent line (red for pitcher)
-        p.fillRect(0, 0, w, 3, QColor("#cc3344"))
-
-        # Header
-        p.fillRect(5, 6, w - 10, 22, QColor("#0a1528"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        header_text = f"PITCHING: {self.throws}HP {self.name.upper()}"
-        p.drawText(12, 22, header_text[:35])
-
-        # Stats table
-        stats_y = 32
-        p.fillRect(5, stats_y, w - 10, 16, QColor("#0f1a30"))
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-
-        stat_cols = ["STATS", "W-L", "IP", "H", "ER", "BB", "K", "ERA", "Stamina"]
-        col_widths = [42, 34, 38, 24, 24, 24, 24, 34, 50]
-        col_x = 8
-        for label, cw in zip(stat_cols, col_widths):
-            p.drawText(QRectF(col_x, stats_y, cw, 16), Qt.AlignCenter, label)
-            col_x += cw
-
-        # Season row
-        stats_y += 18
-        p.fillRect(5, stats_y, w - 10, 16, QColor("#0a1422"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 8))
-
-        col_x = 8
-        p.drawText(QRectF(col_x, stats_y, 42, 16), Qt.AlignLeft | Qt.AlignVCenter, " Season")
-        col_x += 42
-
-        season_vals = [self.season_stats["W-L"], self.season_stats["IP"], self.season_stats["H"],
-                       self.season_stats["ER"], self.season_stats["BB"], self.season_stats["K"],
-                       self.season_stats["ERA"], str(self.stamina)]
-
-        for val, cw in zip(season_vals, col_widths[1:]):
-            p.drawText(QRectF(col_x, stats_y, cw, 16), Qt.AlignCenter, val)
-            col_x += cw
-
-        # Today row
-        stats_y += 18
-        p.fillRect(5, stats_y, w - 10, 16, QColor("#0c1628"))
-        col_x = 8
-        p.drawText(QRectF(col_x, stats_y, 42, 16), Qt.AlignLeft | Qt.AlignVCenter, " Today")
-        col_x += 42
-
-        today_vals = ["", self.today_stats["IP"], self.today_stats["H"],
-                      self.today_stats["ER"], self.today_stats["BB"], self.today_stats["K"], "", ""]
-
-        for val, cw in zip(today_vals, col_widths[1:]):
-            p.drawText(QRectF(col_x, stats_y, cw, 16), Qt.AlignCenter, val)
-            col_x += cw
-
-        # Ratings section
-        ratings_y = stats_y + 22
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Segoe UI", 7, QFont.Bold))
-        p.drawText(8, ratings_y + 12, "RATINGS")
-
-        rating_labels = ["Overall", "STU", "MOV", "CON"]
-        rating_x = 55
-        for label in rating_labels:
-            val = self.ratings.get(label, 50)
-            box_col = C.rating_color(val)
-
-            # Rating box with border
-            p.fillRect(rating_x, ratings_y, 32, 22, box_col)
-            p.setPen(QPen(box_col.lighter(130), 1))
-            p.drawRect(rating_x, ratings_y, 32, 22)
-
-            p.setPen(C.WHITE)
-            p.setFont(QFont("Consolas", 11, QFont.Bold))
-            p.drawText(QRectF(rating_x, ratings_y, 32, 22), Qt.AlignCenter, str(val))
-
-            p.setPen(C.GRAY)
-            p.setFont(QFont("Segoe UI", 6))
-            p.drawText(QRectF(rating_x, ratings_y + 22, 32, 12), Qt.AlignCenter, label)
-
-            rating_x += 40
-
-        # Velo and pitch info
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 9))
-        p.drawText(rating_x + 15, ratings_y + 12, f"VELO")
-        p.setPen(C.CYAN)
-        p.drawText(rating_x + 50, ratings_y + 12, f"{self.velo} Mph")
-
-        p.setPen(C.WHITE)
-        p.drawText(rating_x + 15, ratings_y + 28, f"Pitches")
-        p.setPen(C.GOLD)
-        p.drawText(rating_x + 65, ratings_y + 28, str(self.pitches))
-
-
-# ========================================
-# Batter Stats Panel (Enhanced)
-# ========================================
-class BatterStatsPanel(QWidget):
-    """Bottom right batter stats panel with full stats"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(145)
-
-        self.batter = None
-        self.bats = "R"
-        self.name = "BATTER"
-        self.position = "DH"
-        self.season_stats = {"AB": "0", "H": "0", "HR": "0", "RBI": "0", "AVG": ".000", "OBP": ".000", "OPS": ".000"}
-        self.today_stats = {"AB": "0", "H": "0", "HR": "0", "RBI": "0"}
-        self.ratings = {"Overall": 50, "CON": 50, "POW": 50, "EYE": 50, "SPE": 50}
-        self.bunt_hit = 50
-        self.sac_bunt = 50
-        self.vs_lhp = 50
-
-    def set_batter(self, player: Player, position_str: str = ""):
-        self.batter = player
-        if player:
-            self.name = player.name
-            self.position = position_str or self._get_pos_abbr(player.position)
-            bats = getattr(player, 'bats', '右')
-            self.bats = "L" if bats == "左" else ("S" if bats == "両" else "R")
-
-            if hasattr(player, 'stats'):
-                self.ratings["Overall"] = int(player.stats.overall_batting())
-                self.ratings["CON"] = int(getattr(player.stats, 'contact', 50))
-                self.ratings["POW"] = int(getattr(player.stats, 'power', 50))
-                self.ratings["EYE"] = int(getattr(player.stats, 'eye', 50))
-                self.ratings["SPE"] = int(getattr(player.stats, 'speed', 50))
-                self.bunt_hit = int(getattr(player.stats, 'bunt_hit', 50))
-                self.sac_bunt = int(getattr(player.stats, 'bunt_sac', 50))
-                self.vs_lhp = int(getattr(player.stats, 'vs_left_pitcher', 50))
-
-            if hasattr(player, 'record'):
-                rec = player.record
-                self.season_stats["AB"] = str(rec.at_bats)
-                self.season_stats["H"] = str(rec.hits)
-                self.season_stats["HR"] = str(rec.home_runs)
-                self.season_stats["RBI"] = str(rec.rbi)
-                avg = rec.batting_average
-                self.season_stats["AVG"] = f".{int(avg * 1000):03d}"[1:] if avg > 0 else ".000"
-                obp = rec.on_base_percentage
-                self.season_stats["OBP"] = f".{int(obp * 1000):03d}"[1:] if obp > 0 else ".000"
-                ops = obp + rec.slugging_percentage
-                self.season_stats["OPS"] = f".{int(ops * 1000):03d}"[1:] if ops > 0 else ".000"
-
-        self.update()
-
-    def _get_pos_abbr(self, pos: Position) -> str:
-        pos_map = {
-            Position.PITCHER: "P", Position.CATCHER: "C",
-            Position.FIRST: "1B", Position.SECOND: "2B",
-            Position.THIRD: "3B", Position.SHORTSTOP: "SS",
-            Position.LEFT: "LF", Position.CENTER: "CF",
-            Position.RIGHT: "RF", Position.DH: "DH"
-        }
-        return pos_map.get(pos, "DH")
-
-    def set_game_stats(self, ab: int, h: int, hr: int, rbi: int):
-        self.today_stats["AB"] = str(ab)
-        self.today_stats["H"] = str(h)
-        self.today_stats["HR"] = str(hr)
-        self.today_stats["RBI"] = str(rbi)
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        w, h = self.width(), self.height()
-
-        # Background
-        grad = QLinearGradient(0, 0, 0, h)
-        grad.setColorAt(0, QColor("#0c1830"))
-        grad.setColorAt(1, QColor("#050a14"))
-        p.fillRect(0, 0, w, h, grad)
-
-        # Top accent line (teal for batter)
-        p.fillRect(0, 0, w, 3, QColor("#00aa99"))
-
-        # Header
-        p.fillRect(5, 6, w - 10, 22, QColor("#0a1528"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        header_text = f"AT BAT: {self.bats}HB {self.name.upper()}, {self.position}"
-        p.drawText(12, 22, header_text[:40])
-
-        # Left side: Situational ratings
-        sit_x = 8
-        sit_y = 34
-
-        situational = [("Bunt/Hit", self.bunt_hit), ("Sac Bunt", self.sac_bunt), ("Vs LHP", self.vs_lhp)]
-
-        for label, val in situational:
-            p.setPen(C.GRAY)
-            p.setFont(QFont("Segoe UI", 7))
-            p.drawText(sit_x, sit_y + 10, label)
-
-            box_col = C.rating_color(val)
-            p.fillRect(sit_x + 50, sit_y, 26, 14, box_col)
-            p.setPen(C.WHITE)
-            p.setFont(QFont("Consolas", 9, QFont.Bold))
-            p.drawText(QRectF(sit_x + 50, sit_y, 26, 14), Qt.AlignCenter, str(val))
-
-            sit_y += 18
-
-        # Stats table (right side)
-        stats_x = 95
-        stats_y = 34
-
-        p.fillRect(stats_x, stats_y, w - stats_x - 8, 14, QColor("#0f1a30"))
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Segoe UI", 6, QFont.Bold))
-
-        stat_cols = ["STATS", "AB", "H", "HR", "RBI", "AVG", "OBP", "OPS"]
-        col_widths = [38, 28, 24, 24, 28, 32, 32, 38]
-        col_x = stats_x + 4
-        for label, cw in zip(stat_cols, col_widths):
-            p.drawText(QRectF(col_x, stats_y, cw, 14), Qt.AlignCenter, label)
-            col_x += cw
-
-        # Season row
-        stats_y += 16
-        p.fillRect(stats_x, stats_y, w - stats_x - 8, 14, QColor("#0a1422"))
-        p.setPen(C.WHITE)
-        p.setFont(QFont("Consolas", 8))
-
-        col_x = stats_x + 4
-        p.drawText(QRectF(col_x, stats_y, 38, 14), Qt.AlignLeft | Qt.AlignVCenter, " Season")
-        col_x += 38
-
-        season_vals = [self.season_stats["AB"], self.season_stats["H"], self.season_stats["HR"],
-                       self.season_stats["RBI"], self.season_stats["AVG"], self.season_stats["OBP"],
-                       self.season_stats["OPS"]]
-
-        for val, cw in zip(season_vals, col_widths[1:]):
-            p.drawText(QRectF(col_x, stats_y, cw, 14), Qt.AlignCenter, val)
-            col_x += cw
-
-        # Today row
-        stats_y += 16
-        p.fillRect(stats_x, stats_y, w - stats_x - 8, 14, QColor("#0c1628"))
-        col_x = stats_x + 4
-        p.drawText(QRectF(col_x, stats_y, 38, 14), Qt.AlignLeft | Qt.AlignVCenter, " Today")
-        col_x += 38
-
-        today_vals = [self.today_stats["AB"], self.today_stats["H"], self.today_stats["HR"],
-                      self.today_stats["RBI"], "", "", ""]
-
-        for val, cw in zip(today_vals, col_widths[1:]):
-            p.drawText(QRectF(col_x, stats_y, cw, 14), Qt.AlignCenter, val)
-            col_x += cw
-
-        # Ratings section
-        ratings_y = stats_y + 20
-        p.setPen(C.GRAY)
-        p.setFont(QFont("Segoe UI", 6, QFont.Bold))
-        p.drawText(stats_x + 4, ratings_y + 10, "RATINGS")
-
-        rating_labels = ["Overall", "CON", "POW", "EYE", "SPE"]
-        rating_x = stats_x + 50
-        for label in rating_labels:
-            val = self.ratings.get(label, 50)
-            box_col = C.rating_color(val)
-
-            p.fillRect(rating_x, ratings_y, 28, 18, box_col)
-            p.setPen(QPen(box_col.lighter(130), 1))
-            p.drawRect(rating_x, ratings_y, 28, 18)
-
-            p.setPen(C.WHITE)
-            p.setFont(QFont("Consolas", 10, QFont.Bold))
-            p.drawText(QRectF(rating_x, ratings_y, 28, 18), Qt.AlignCenter, str(val))
-
-            p.setPen(C.GRAY)
-            p.setFont(QFont("Segoe UI", 5))
-            p.drawText(QRectF(rating_x, ratings_y + 18, 28, 10), Qt.AlignCenter, label)
-
-            rating_x += 34
-
-
-# ========================================
-# Field View Widget (3D Stadium - Enhanced)
-# ========================================
-class FieldView(QWidget):
-    """3D stadium field view widget with enhanced graphics - no camera switching"""
-
-    done = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumSize(600, 400)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        self.timer = QTimer(self)
-        self.timer.setInterval(16)
-        self.timer.timeout.connect(self._tick)
-
-        self.phase = "idle"
-        self.t = 0.0
-        self.pitch: PitchData = None
-        self.ball: BattedBallData = None
-        self.result = ""
+        self.setMinimumSize(400, 400)
         self.runners = [False, False, False]
-        self.is_homerun = False
-        self.fireworks = []
-        self.flash_alpha = 0.0
-        self.result_display_time = 0  # Counter for result display duration
+        self.batted_ball = None
+        self.result_str = ""
+        self.stadium = None # スタジアム情報を保持
+        
+        self.anim_timer = QTimer(self)
+        self.anim_timer.interval = 16 
+        self.anim_timer.timeout.connect(self._update_anim)
+        self.anim_progress = 0.0
+        self.is_animating = False
 
-    def start_pitch(self, pitch: PitchData, result: str):
-        self.pitch = pitch
-        self.result = result
-        self.ball = None
-        self.phase = "pitch"
-        self.t = 0.0
-        self.result_display_time = 0
-        self.timer.start()
-
-    def start_hit(self, ball: BattedBallData, result: str):
-        self.ball = ball
-        self.result = result
-        self.phase = "hit"
-        self.t = 0.0
-        self.result_display_time = 0
-        self.is_homerun = "ホームラン" in result or "本塁打" in result
-        if self.is_homerun:
-            self.flash_alpha = 200
-        self.timer.start()
-
-    def set_runners(self, r: list):
-        self.runners = r
+    def set_stadium(self, stadium):
+        """スタジアム情報をセット（パークファクター反映用）"""
+        self.stadium = stadium
         self.update()
 
-    def reset(self):
-        self.timer.stop()
-        self.phase = "idle"
-        self.pitch = None
-        self.ball = None
-        self.is_homerun = False
-        self.fireworks = []
-        self.flash_alpha = 0.0
-        self.result_display_time = 0
+    def animate_ball(self, ball: BattedBallData, runners, result_str: str):
+        self.batted_ball = ball
+        self.runners = runners
+        self.result_str = result_str
+        self.anim_progress = 0.0
+        self.is_animating = True
+        self.anim_timer.start()
+
+    def set_runners_only(self, runners):
+        self.runners = runners
         self.update()
 
-    def _tick(self):
-        if self.flash_alpha > 0:
-            self.flash_alpha = max(0, self.flash_alpha - 12)
-
-        if self.phase == "pitch":
-            spd = 0.025 + (self.pitch.velocity / 5000 if self.pitch else 0)
-            self.t += spd
-            if self.t >= 1.0:
-                self.t = 1.0
-                # Show result for longer time
-                self.result_display_time += 1
-                if self.result_display_time >= 60:  # About 1 second at 60fps
-                    self.timer.stop()
-                    self.phase = "idle"
-                    self.done.emit()
-
-        elif self.phase == "hit":
-            hang = self.ball.hang_time if self.ball else 2.0
-            spd = 1.0 / max(35, hang * 55)  # Slower ball animation
-            self.t += spd
-            if self.t >= 1.0:
-                self.t = 1.0
-                # Show result for longer time
-                self.result_display_time += 1
-                if self.is_homerun:
-                    if self.result_display_time >= 30:  # Start celebration after delay
-                        self.phase = "celebration"
-                        self._spawn_fireworks()
-                        self.result_display_time = 0
-                else:
-                    if self.result_display_time >= 90:  # About 1.5 seconds for result display
-                        self.timer.stop()
-                        self.phase = "idle"
-                        self.done.emit()
-
-        elif self.phase == "celebration":
-            self._update_fireworks()
-            if random.random() < 0.12 and len(self.fireworks) < 60:
-                self._spawn_firework()
-            self.result_display_time += 1
-            # Longer celebration
-            if self.result_display_time >= 150 and len([f for f in self.fireworks if f['alpha'] > 0]) < 10:
-                self.timer.stop()
-                self.phase = "idle"
-                self.done.emit()
-
+    def clear(self):
+        self.batted_ball = None
+        self.result_str = ""
+        self.is_animating = False
+        self.anim_timer.stop()
         self.update()
 
-    def _spawn_firework(self):
-        w, h = self.width(), self.height()
-        self.fireworks.append({
-            'x': random.uniform(w * 0.15, w * 0.85),
-            'y': random.uniform(h * 0.05, h * 0.35),
-            'vx': random.uniform(-2.5, 2.5),
-            'vy': random.uniform(-1.5, 1),
-            'color': random.choice([QColor("#ff6688"), QColor("#ffdd44"), QColor("#ffffff"),
-                                    QColor("#ff44aa"), QColor("#44ffaa")]),
-            'size': random.uniform(4, 9),
-            'alpha': 255
-        })
-
-    def _spawn_fireworks(self):
-        for _ in range(25):
-            self._spawn_firework()
-
-    def _update_fireworks(self):
-        for f in self.fireworks:
-            f['x'] += f['vx']
-            f['y'] += f['vy']
-            f['vy'] += 0.06
-            f['alpha'] = max(0, f['alpha'] - 4)
-            f['size'] = max(1, f['size'] - 0.03)
-        self.fireworks = [f for f in self.fireworks if f['alpha'] > 0]
+    def _update_anim(self):
+        self.anim_progress += 0.008
+        if self.anim_progress >= 1.0:
+            self.anim_progress = 1.0
+            self.is_animating = False
+            self.anim_timer.stop()
+            self.animation_finished.emit()
+        self.update()
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
+        
+        painter.fillRect(self.rect(), VisualStyle.BG_FIELD)
+        self._draw_grid(painter, w, h)
 
-        # Sky gradient (realistic)
-        sky = QLinearGradient(0, 0, 0, h * 0.55)
-        sky.setColorAt(0, QColor("#3a7cb8"))
-        sky.setColorAt(0.3, QColor("#5aa0d0"))
-        sky.setColorAt(0.6, QColor("#8cc8e8"))
-        sky.setColorAt(1, QColor("#c0dce8"))
-        p.fillRect(0, 0, w, int(h * 0.55), sky)
+        cx = w / 2
+        cy = h * 0.92
+        # スケール調整: 広い球場でも入るように少し余裕を持たせる
+        scale = min(w, h) / 165.0
 
-        # Clouds (simple)
-        p.setBrush(QColor(255, 255, 255, 60))
-        p.setPen(Qt.NoPen)
-        for cx, cy, cw in [(w * 0.2, h * 0.1, 80), (w * 0.6, h * 0.15, 100), (w * 0.85, h * 0.08, 70)]:
-            p.drawEllipse(QPointF(cx, cy), cw, cw * 0.4)
-
-        # Stadium
-        self._draw_stadium(p, w, h)
-
-        # Always show field view first (background)
-        self._draw_field_view(p, w, h)
-
-        # Always show batter view (strike zone overlay) - smaller and positioned
-        self._draw_batter_view(p, w, h)
-
-        # Flash effect
-        if self.flash_alpha > 0:
-            p.fillRect(0, 0, w, h, QColor(255, 255, 255, int(self.flash_alpha)))
-
-        # Fireworks with glow
-        for f in self.fireworks:
-            col = QColor(f['color'])
-            col.setAlpha(int(f['alpha']))
-
-            # Glow
-            glow = QRadialGradient(QPointF(f['x'], f['y']), f['size'] * 2.5)
-            glow.setColorAt(0, QColor(col.red(), col.green(), col.blue(), int(f['alpha'] * 0.4)))
-            glow.setColorAt(1, QColor(col.red(), col.green(), col.blue(), 0))
-            p.setBrush(glow)
-            p.setPen(Qt.NoPen)
-            p.drawEllipse(QPointF(f['x'], f['y']), f['size'] * 2.5, f['size'] * 2.5)
-
-            # Core
-            p.setBrush(col)
-            p.drawEllipse(QPointF(f['x'], f['y']), f['size'], f['size'])
-
-        # Celebration text
-        if self.phase == "celebration" or (self.is_homerun and self.t >= 1.0):
-            self._draw_celebration(p, w, h)
-
-    def _draw_stadium(self, p: QPainter, w: int, h: int):
-        """Draw detailed stadium background"""
-        # Upper deck (dark)
-        p.setBrush(QColor("#2a3848"))
-        p.setPen(Qt.NoPen)
-
-        # Left stands
-        pts_left = [QPointF(0, h * 0.28), QPointF(w * 0.28, h * 0.38),
-                    QPointF(w * 0.28, h * 0.52), QPointF(0, h * 0.48)]
-        p.drawPolygon(QPolygonF(pts_left))
-
-        # Right stands
-        pts_right = [QPointF(w, h * 0.28), QPointF(w * 0.72, h * 0.38),
-                     QPointF(w * 0.72, h * 0.52), QPointF(w, h * 0.48)]
-        p.drawPolygon(QPolygonF(pts_right))
-
-        # Center field stands
-        p.setBrush(QColor("#354858"))
-        pts_center = [QPointF(w * 0.25, h * 0.32), QPointF(w * 0.75, h * 0.32),
-                      QPointF(w * 0.72, h * 0.42), QPointF(w * 0.28, h * 0.42)]
-        p.drawPolygon(QPolygonF(pts_center))
-
-        # Scoreboard in center field
-        p.fillRect(int(w * 0.4), int(h * 0.25), int(w * 0.2), int(h * 0.1), QColor("#1a2a3a"))
-        p.setPen(QPen(QColor("#3a5a7a"), 1))
-        p.drawRect(int(w * 0.4), int(h * 0.25), int(w * 0.2), int(h * 0.1))
-
-        # Outfield wall
-        wall_grad = QLinearGradient(0, h * 0.45, 0, h * 0.52)
-        wall_grad.setColorAt(0, QColor("#1a5a3a"))
-        wall_grad.setColorAt(1, QColor("#0a3a2a"))
-        p.fillRect(int(w * 0.12), int(h * 0.45), int(w * 0.76), int(h * 0.07), wall_grad)
-
-        # Wall padding (yellow line)
-        p.fillRect(int(w * 0.12), int(h * 0.45), int(w * 0.76), 3, QColor("#cccc00"))
-
-    def _draw_batter_view(self, p: QPainter, w: int, h: int):
-        """Draw batter's eye view with strike zone as overlay"""
-        # Strike zone positioned in center-upper area
-        zw = min(w, h) * 0.18
-        zh = zw * 1.15
-        zx = (w - zw) / 2
-        zy = h * 0.15
-
-        # Semi-transparent background for strike zone area
-        bg_rect = QRectF(zx - 20, zy - 20, zw + 40, zh + 40)
-        p.fillRect(bg_rect, QColor(0, 0, 0, 80))
-
-        # Zone outline
-        p.setPen(QPen(QColor(255, 255, 255, 200), 2))
-        p.setBrush(Qt.NoBrush)
-        p.drawRect(QRectF(zx, zy, zw, zh))
-
-        # Grid
-        p.setPen(QPen(QColor(255, 255, 255, 60), 1, Qt.DashLine))
-        for i in range(1, 3):
-            p.drawLine(QPointF(zx + i * zw / 3, zy), QPointF(zx + i * zw / 3, zy + zh))
-            p.drawLine(QPointF(zx, zy + i * zh / 3), QPointF(zx + zw, zy + i * zh / 3))
-
-        # Current pitch animation
-        if self.phase == "pitch" and self.pitch:
-            self._draw_pitch_animation(p, w, h, zx, zy, zw, zh, 255)
-
-    def _draw_pitch_animation(self, p: QPainter, w: int, h: int, zx: float, zy: float, zw: float, zh: float, alpha: int):
-        t = self.t
-        pitch = self.pitch
-        et = t ** 0.6
-
-        start_size = 4
-        end_size = 16
-
-        end_x = zx + ((pitch.location.x + 0.3) / 0.6) * zw
-        end_y = zy + (1.0 - (pitch.location.z - 0.3) / 0.9) * zh
-
-        cx = (w / 2) * (1 - et) + end_x * et
-        cy = (zy - zh * 0.5) * (1 - et) + end_y * et
-        size = start_size * (1 - et) + end_size * et
-
-        if et > 0.5:
-            bf = (et - 0.5) / 0.5
-            cx += pitch.horizontal_break * 0.18 * bf
-            cy -= pitch.vertical_break * 0.09 * bf
-
-        # Ball glow
-        ball_glow = QRadialGradient(QPointF(cx, cy), size * 2)
-        ball_glow.setColorAt(0, QColor(255, 255, 255, int(alpha * 0.3)))
-        ball_glow.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(ball_glow)
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QPointF(cx, cy), size * 2, size * 2)
-
-        # Ball
-        grad = QRadialGradient(QPointF(cx - size * 0.25, cy - size * 0.25), size * 1.1)
-        grad.setColorAt(0, QColor(255, 255, 255, alpha))
-        grad.setColorAt(0.7, QColor(230, 230, 230, alpha))
-        grad.setColorAt(1, QColor(180, 180, 180, alpha))
-        p.setBrush(grad)
-        p.drawEllipse(QPointF(cx, cy), size, size)
-
-        # Velocity display
-        if t >= 0.85:
-            p.setPen(QColor(255, 255, 255, alpha))
-            p.setFont(QFont("Impact", 32))
-            p.drawText(int(w / 2 - 45), int(h / 2 + 85), f"{int(pitch.velocity)}")
-            p.setFont(QFont("Segoe UI", 14))
-            p.drawText(int(w / 2 + 25), int(h / 2 + 85), "km/h")
-            p.setFont(QFont("Segoe UI", 12))
-            p.drawText(int(w / 2 - 45), int(h / 2 + 110), pitch.pitch_type)
-
-    def _draw_field_view(self, p: QPainter, w: int, h: int):
-        """Draw overhead field view - always visible"""
-        alpha = 255  # Always fully visible
-
-        def proj(x: float, y: float, z: float) -> QPointF:
-            cam_y = -8
-            cam_z = 3.5
-            ry = y - cam_y
-            rz = z - cam_z
-            if ry < 0.5:
-                ry = 0.5
-            fov = h * 0.95
-            return QPointF(w / 2 + (x / ry) * fov, h * 0.62 - (rz / ry) * fov)
-
-        # Grass with stripes
-        grass_dark = QColor(25, 85, 35, alpha)
-        grass_light = QColor(35, 105, 45, alpha)
-
-        for i in range(16):
-            y1, y2 = i * 7, (i + 1) * 7
-            col = grass_dark if i % 2 == 0 else grass_light
-
-            pts = []
-            for ang in range(-48, 49, 8):
-                rad = math.radians(ang)
-                pts.append(proj(y1 * math.sin(rad) * 0.72, y1 * math.cos(rad), 0))
-            for ang in range(48, -49, -8):
-                rad = math.radians(ang)
-                pts.append(proj(y2 * math.sin(rad) * 0.72, y2 * math.cos(rad), 0))
-
-            if len(pts) > 2:
-                path = QPainterPath()
-                path.moveTo(pts[0])
-                for pt in pts[1:]:
-                    path.lineTo(pt)
-                path.closeSubpath()
-                p.fillPath(path, col)
-
-        # Infield dirt
-        dirt = QColor(110, 75, 55, alpha)
-        p.setBrush(dirt)
-        p.setPen(Qt.NoPen)
-        inf = []
-        for ang in range(0, 361, 12):
-            rad = math.radians(ang)
-            inf.append(proj(22 * math.sin(rad) * 0.42, 22 * math.cos(rad) * 0.36 + 15, 0))
-        if inf:
-            path = QPainterPath()
-            path.moveTo(inf[0])
-            for pt in inf[1:]:
-                path.lineTo(pt)
-            p.drawPath(path)
-
-        # Base paths (white lines)
-        p.setPen(QPen(QColor(255, 255, 255, int(alpha * 0.7)), 2))
-        hp = proj(0, 0, 0)
-        b1 = proj(15, 15, 0)
-        b2 = proj(0, 30, 0)
-        b3 = proj(-15, 15, 0)
-        p.drawLine(hp, b1)
-        p.drawLine(hp, b3)
-
-        # Bases
-        for i, (bx, by) in enumerate([(15, 15), (0, 30), (-15, 15)]):
-            pt = proj(bx, by, 0)
-            sz = 5
-
-            # Glow for occupied base
-            if self.runners[i]:
-                glow = QRadialGradient(pt, sz * 3)
-                glow.setColorAt(0, QColor(255, 215, 0, int(alpha * 0.5)))
-                glow.setColorAt(1, QColor(255, 215, 0, 0))
-                p.setBrush(glow)
-                p.setPen(Qt.NoPen)
-                p.drawEllipse(pt, sz * 3, sz * 3)
-
-            diamond = QPolygonF([
-                QPointF(pt.x(), pt.y() - sz),
-                QPointF(pt.x() + sz, pt.y()),
-                QPointF(pt.x(), pt.y() + sz),
-                QPointF(pt.x() - sz, pt.y()),
-            ])
-            col = QColor(255, 215, 0, alpha) if self.runners[i] else QColor(255, 255, 255, alpha)
-            p.setBrush(col)
-            p.setPen(QPen(QColor(200, 200, 200, alpha), 1))
-            p.drawPolygon(diamond)
-
-        # Home plate
-        p.setBrush(QColor(255, 255, 255, alpha))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(hp, 4, 2)
-
-        # Ball animation
-        if self.ball and self.phase in ["hit", "celebration"]:
-            self._draw_hit_ball(p, w, h, proj, alpha)
-
-    def _draw_hit_ball(self, p: QPainter, w: int, h: int, proj, alpha: int):
-        ball = self.ball
-        t = self.t
-
-        angle = math.radians(ball.spray_angle)
-        dist = ball.distance
-
-        curr_d = dist * t
-        curr_x = curr_d * math.sin(angle)
-        curr_y = curr_d * math.cos(angle)
-
-        peak = (ball.hang_time ** 2) * 2.2
-        curr_z = 4 * peak * t * (1 - t) + 1.2 * (1 - t)
-
-        ball_pt = proj(curr_x, curr_y, curr_z)
-
-        # Shadow
-        shadow_pt = proj(curr_x, curr_y, 0)
-        p.setBrush(QColor(0, 0, 0, 50))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(shadow_pt, max(2, 7 - curr_z * 0.12), max(1, 3.5 - curr_z * 0.06))
-
-        # Trail
-        for i in range(min(12, int(t * 18))):
-            tt = i / 18.0
-            tx = dist * tt * math.sin(angle)
-            ty = dist * tt * math.cos(angle)
-            tz = 4 * peak * tt * (1 - tt) + 1.2 * (1 - tt)
-            tpt = proj(tx, ty, tz)
-            a = int(alpha * 0.55 * tt)
-            p.setBrush(QColor(255, 220, 120, a))
-            p.drawEllipse(tpt, 2.5, 2.5)
-
-        # Ball
-        ball_size = max(4, 11 - curr_y * 0.035)
-        grad = QRadialGradient(QPointF(ball_pt.x() - ball_size * 0.2, ball_pt.y() - ball_size * 0.2), ball_size * 1.15)
-        grad.setColorAt(0, QColor(255, 255, 255, alpha))
-        grad.setColorAt(0.75, QColor(235, 235, 235, alpha))
-        grad.setColorAt(1, QColor(200, 200, 200, alpha))
-        p.setBrush(grad)
-        p.drawEllipse(ball_pt, ball_size, ball_size)
-
-        # Statcast
-        if t > 0.3:
-            self._draw_statcast(p, w, h, ball, alpha)
-
-        # Result
-        if t >= 0.95 and not self.is_homerun:
-            self._draw_result(p, w, h, alpha)
-
-    def _draw_statcast(self, p: QPainter, w: int, h: int, ball: BattedBallData, alpha: int):
-        bx, by = int(w / 2 - 130), h - 55
-        bw, bh = 260, 48
-
-        # Background with border
-        p.fillRect(bx, by, bw, bh, QColor(0, 0, 0, int(200 * alpha / 255)))
-        p.setPen(QPen(QColor(100, 140, 180, alpha), 1))
-        p.drawRect(bx, by, bw, bh)
-
-        items = [
-            (f"{ball.exit_velocity:.0f}", "km/h", "EXIT VELO"),
-            (f"{ball.launch_angle:.0f}", "°", "LAUNCH"),
-            (f"{ball.distance:.0f}", "m", "DISTANCE"),
+        painter.save()
+        painter.translate(cx, cy)
+        
+        # ★修正: スタジアムのPFを反映したフィールド形状を描画
+        pf_hr = self.stadium.pf_hr if self.stadium else 1.0
+        
+        field_poly_points = [QPointF(0, 0)]
+        # 左翼線(-45度)から右翼線(+45度)まで
+        for angle in range(-45, 46):
+            abs_a = abs(angle)
+            # エンジン(AdvancedDefenseEngine)と同じ計算式で距離を算出
+            # 基準: センター122m, 両翼100m
+            base_dist = 122.0 - (abs_a / 45.0) * (122.0 - 100.0)
+            
+            # パークファクター補正: PF>1.0なら狭く(距離が短く), PF<1.0なら広く
+            dist_m = base_dist / math.sqrt(pf_hr)
+            
+            # 座標変換
+            rad = math.radians(angle)
+            px = dist_m * scale * math.sin(rad)
+            py = -dist_m * scale * math.cos(rad)
+            field_poly_points.append(QPointF(px, py))
+            
+        field_poly_points.append(QPointF(0, 0))
+        field_path = QPainterPath()
+        field_path.addPolygon(QPolygonF(field_poly_points))
+        
+        # フェアゾーン描画
+        painter.setPen(QPen(QColor(255, 255, 255, 10), 1))
+        painter.setBrush(QColor(255, 255, 255, 5))
+        painter.drawPath(field_path)
+        
+        # ファウルライン
+        line_pen = QPen(VisualStyle.BORDER, 2)
+        painter.setPen(line_pen)
+        # ポリゴンの頂点を使ってラインを引く
+        p_left = field_poly_points[1] # -45度
+        p_right = field_poly_points[-2] # +45度
+        painter.drawLine(0, 0, p_left.x(), p_left.y())
+        painter.drawLine(0, 0, p_right.x(), p_right.y())
+        
+        # ダイヤモンド
+        base_dist = 27.43 * scale
+        diamond_pts = [QPointF(0,0), QPointF(base_dist, -base_dist), QPointF(0, -base_dist*2), QPointF(-base_dist, -base_dist)]
+        painter.setPen(QPen(QColor(THEME.primary), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPolygon(QPolygonF(diamond_pts))
+        
+        painter.restore()
+        
+        # ベース & ランナー
+        base_coords = [
+            (cx + base_dist, cy - base_dist),
+            (cx, cy - base_dist*2),
+            (cx - base_dist, cy - base_dist)
         ]
+        
+        painter.setBrush(Qt.white); painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPolygonF([QPointF(cx, cy), QPointF(cx+6, cy-6), QPointF(cx+6, cy-12), QPointF(cx-6, cy-12), QPointF(cx-6, cy-6)]))
 
-        for i, (val, unit, label) in enumerate(items):
-            x = bx + 15 + i * 85
-            p.setPen(QColor(180, 190, 200, alpha))
-            p.setFont(QFont("Segoe UI", 7))
-            p.drawText(x, by + 12, label)
+        for i, (bx, by) in enumerate(base_coords):
+            is_occ = self.runners[i]
+            painter.setPen(Qt.NoPen); painter.setBrush(QColor(255,255,255, 80))
+            painter.drawPolygon(QPolygonF([QPointF(bx, by+6), QPointF(bx+6, by), QPointF(bx, by-6), QPointF(bx-6, by)]))
+            if is_occ:
+                painter.setBrush(VisualStyle.COLOR_RUNNER)
+                painter.setPen(QPen(Qt.white, 2))
+                painter.drawEllipse(QPointF(bx, by), 10, 10)
 
-            p.setPen(QColor(255, 215, 0, alpha))
-            p.setFont(QFont("Impact", 18))
-            p.drawText(x, by + 38, val)
+        if self.batted_ball:
+            self._draw_batted_ball(painter, cx, cy, scale)
 
-            p.setPen(QColor(150, 160, 170, alpha))
-            p.setFont(QFont("Segoe UI", 9))
-            p.drawText(x + 42, by + 38, unit)
+    def _draw_grid(self, painter, w, h):
+        painter.setPen(QPen(QColor(255, 255, 255, 10), 1, Qt.DotLine))
+        for x in range(0, w, 50): painter.drawLine(x, 0, x, h)
+        for y in range(0, h, 50): 
+            if y < h: painter.drawLine(0, y, w, y)
 
-    def _draw_result(self, p: QPainter, w: int, h: int, alpha: int):
-        bh = 50
-        p.fillRect(0, int(h / 2 - bh / 2), w, bh, QColor(0, 0, 0, int(210 * alpha / 255)))
+    def _draw_batted_ball(self, painter, cx, cy, scale):
+        ball = self.batted_ball
+        t = self.anim_progress
+        
+        tx = ball.landing_x * scale
+        ty = -ball.landing_y * scale
+        
+        ctrl_x = tx / 2
+        h_factor = ball.hang_time * 40 * scale
+        ctrl_y = (ty / 2) - h_factor
+        
+        # 現在位置
+        curr_x = cx + (2 * (1-t) * t * ctrl_x + t*t * tx)
+        curr_y = cy + (2 * (1-t) * t * ctrl_y + t*t * ty)
+        
+        path = QPainterPath()
+        path.moveTo(cx, cy)
+        
+        # ★修正: 軌跡の線がボールを追い越さないように計算を修正
+        # 全体を50分割したとして、現在のtまでに相当するステップだけ線を描く
+        total_segments = 50
+        current_segments = int(total_segments * t)
+        
+        for i in range(1, current_segments + 1):
+            st = i / total_segments
+            # ベジェ計算
+            sx = cx + (2 * (1-st) * st * ctrl_x + st*st * tx)
+            sy = cy + (2 * (1-st) * st * ctrl_y + st*st * ty)
+            path.lineTo(sx, sy)
+            
+        # 最後に現在地点まで繋ぐ
+        path.lineTo(curr_x, curr_y)
+            
+        col = VisualStyle.get_result_color(self.result_str)
+        painter.setPen(QPen(col, 2)); painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+        painter.setBrush(col); painter.setPen(Qt.white)
+        painter.drawEllipse(QPointF(curr_x, curr_y), 5, 5)
+        
+        if t >= 1.0:
+            painter.setPen(Qt.white)
+            painter.setFont(QFont(VisualStyle.FONT_NUM, 10, QFont.Bold))
+            painter.drawText(int(curr_x) + 10, int(curr_y), f"{self.result_str} ({int(ball.distance)}m)")
 
-        p.setPen(QColor(255, 255, 255, alpha))
-        p.setFont(QFont("Impact", 26))
-        p.drawText(QRectF(0, h / 2 - bh / 2, w, bh), Qt.AlignCenter, self.result)
 
-    def _draw_celebration(self, p: QPainter, w: int, h: int):
-        # Background
-        grad = QLinearGradient(0, h * 0.32, 0, h * 0.62)
-        grad.setColorAt(0, QColor(0, 0, 0, 0))
-        grad.setColorAt(0.2, QColor(0, 0, 0, 200))
-        grad.setColorAt(0.8, QColor(0, 0, 0, 200))
-        grad.setColorAt(1, QColor(0, 0, 0, 0))
-        p.fillRect(0, int(h * 0.32), w, int(h * 0.3), grad)
-
-        # Glow text effect
-        p.setPen(QColor(255, 100, 150, 80))
-        p.setFont(QFont("Impact", 54, QFont.Bold))
-        for dx, dy in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
-            p.drawText(QRectF(dx, h * 0.36 + dy, w, 65), Qt.AlignCenter, "HOME RUN!")
-
-        p.setPen(QColor(255, 255, 255))
-        p.drawText(QRectF(0, h * 0.36, w, 65), Qt.AlignCenter, "HOME RUN!")
-
-        if self.ball:
-            p.setPen(QColor(255, 215, 0))
-            p.setFont(QFont("Impact", 28))
-            p.drawText(QRectF(0, h * 0.52, w, 45), Qt.AlignCenter, f"{self.ball.distance:.0f}m")
-
-
-# ========================================
-# Control Panel
-# ========================================
-class ControlPanel(QWidget):
-    pitch_clicked = Signal()
-    skip_clicked = Signal()
+class StrikeZoneWidget(QWidget):
+    """ストライクゾーン"""
+    animation_finished = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(50)
+        self.setMinimumSize(220, 260)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.pitches = [] 
+        self.last_pitch = None
+        self.last_result = ""
+        self.pitcher_hand = "右"
+        
+        self.anim_timer = QTimer(self)
+        self.anim_timer.interval = 16
+        self.anim_timer.timeout.connect(self.update_anim)
+        self.anim_step = 0
+        self.is_animating = False
 
+    def set_pitcher_hand(self, hand):
+        self.pitcher_hand = hand
+
+    def animate_pitch(self, pitch: PitchData, result: str):
+        self.last_pitch = pitch
+        self.last_result = result
+        self.anim_step = 0
+        self.is_animating = True
+        self.anim_timer.start()
+
+    def clear(self):
+        self.pitches = []
+        self.last_pitch = None
+        self.is_animating = False
+        self.anim_timer.stop()
+        self.update()
+
+    def update_anim(self):
+        self.anim_step += 1
+        if self.anim_step > 100: 
+            self.is_animating = False
+            self.anim_timer.stop()
+            self.pitches.append((self.last_pitch, self.last_result))
+            if len(self.pitches) > 10: self.pitches.pop(0)
+            self.animation_finished.emit()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        
+        painter.fillRect(self.rect(), VisualStyle.BG_PANEL)
+        
+        margin_x = w * 0.30
+        zone_w = w - 2 * margin_x
+        zone_h = zone_w * (0.56 / 0.432)
+        zone_x = (w - zone_w) / 2
+        zone_y = (h - zone_h) / 2
+        
+        painter.setPen(QPen(QColor(255,255,255,30), 2))
+        box_bottom = min(h - 10, zone_y + zone_h + 80)
+        painter.drawLine(int(zone_x - 20), int(zone_y + zone_h), int(zone_x - 20), int(box_bottom))
+        painter.drawLine(int(zone_x + zone_w + 20), int(zone_y + zone_h), int(zone_x + zone_w + 20), int(box_bottom))
+
+        painter.setPen(QPen(QColor(255,255,255,100), 2))
+        painter.setBrush(QColor(255,255,255,5))
+        painter.drawRect(QRectF(zone_x, zone_y, zone_w, zone_h))
+        
+        painter.setPen(QPen(QColor(255,255,255,40), 1, Qt.DotLine))
+        painter.drawLine(QPointF(zone_x + zone_w/3, zone_y), QPointF(zone_x + zone_w/3, zone_y + zone_h))
+        painter.drawLine(QPointF(zone_x + zone_w*2/3, zone_y), QPointF(zone_x + zone_w*2/3, zone_y + zone_h))
+        painter.drawLine(QPointF(zone_x, zone_y + zone_h/3), QPointF(zone_x + zone_w, zone_y + zone_h/3))
+        painter.drawLine(QPointF(zone_x, zone_y + zone_h*2/3), QPointF(zone_x + zone_w, zone_y + zone_h*2/3))
+        
+        hp_y = zone_y + zone_h + 15
+        hp_pts = [QPointF(zone_x, hp_y), QPointF(zone_x+zone_w, hp_y), QPointF(zone_x+zone_w/2, hp_y+15), QPointF(zone_x, hp_y)]
+        painter.setBrush(QColor(220,220,220)); painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPolygonF(hp_pts))
+
+        for idx, (pitch, result) in enumerate(self.pitches):
+            alpha = 120 if idx < len(self.pitches)-1 else 255
+            self._draw_pitch(painter, pitch, result, zone_x, zone_y, zone_w, zone_h, idx+1, alpha)
+
+        if self.is_animating and self.last_pitch:
+            progress = self.anim_step / 100.0
+            self._draw_animated_pitch(painter, self.last_pitch, self.last_result, zone_x, zone_y, zone_w, zone_h, progress)
+
+    def _loc_to_screen(self, lx, lz, zx, zy, zw, zh):
+        sx = zx + (zw / 2) + (lx / 0.432) * zw
+        sz = zy + (zh / 2) - ((lz - 0.75) / 0.56) * zh
+        return sx, sz
+
+    def _draw_pitch(self, painter, pitch, result, zx, zy, zw, zh, num, alpha=255):
+        sx, sy = self._loc_to_screen(pitch.location.x, pitch.location.z, zx, zy, zw, zh)
+        color = VisualStyle.get_result_color(result)
+        color.setAlpha(alpha)
+        self._draw_symbol(painter, sx, sy, pitch.pitch_type, color, str(num))
+
+    def _draw_animated_pitch(self, painter, pitch, result, zx, zy, zw, zh, progress):
+        ex, ey = self._loc_to_screen(pitch.location.x, pitch.location.z, zx, zy, zw, zh)
+        offset_x = -50 if self.pitcher_hand == "左" else 50
+        start_x = (zx + zw/2) + offset_x
+        start_y = -80
+        
+        ctrl_x = (start_x + ex) / 2
+        hb = pitch.horizontal_break
+        ctrl_x += (hb * 2.0) 
+        
+        curr_x = (1-progress)**2 * start_x + 2*(1-progress)*progress * ctrl_x + progress**2 * ex
+        curr_y = (1-progress)**2 * start_y + 2*(1-progress)*progress * ((start_y+ey)/2) + progress**2 * ey
+        
+        path = QPainterPath(); path.moveTo(start_x, start_y)
+        steps = int(20 * progress) + 1
+        for i in range(1, steps+1):
+            t = i / 20.0 * progress if progress > 0 else 0
+            if progress == 1.0: t = i/20.0
+            px = (1-t)**2 * start_x + 2*(1-t)*t * ctrl_x + t**2 * ex
+            py = (1-t)**2 * start_y + 2*(1-t)*t * ((start_y+ey)/2) + t**2 * ey
+            path.lineTo(px, py)
+            
+        painter.setPen(QPen(VisualStyle.get_result_color(result), 3, Qt.SolidLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+        
+        if progress < 1.0:
+            size = 4 + 10 * progress
+            painter.setBrush(Qt.white); painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(curr_x, curr_y), size/2, size/2)
+        else:
+            self._draw_pitch(painter, pitch, result, zx, zy, zw, zh, len(self.pitches)+1)
+
+    def _draw_symbol(self, painter, x, y, p_type, color, text):
+        painter.setBrush(color); painter.setPen(QPen(Qt.white, 1))
+        size = 10
+        
+        if p_type in ["ストレート", "ツーシーム"]:
+            painter.drawEllipse(QPointF(x, y), size, size)
+        elif p_type in ["フォーク", "SFF", "チェンジアップ", "ナックル", "スプリット"]:
+            poly = QPolygonF([QPointF(x-size, y-size), QPointF(x+size, y-size), QPointF(x, y+size)])
+            painter.drawPolygon(poly)
+        else:
+            is_pointing_left = True 
+            sliders = ["スライダー", "カーブ", "カットボール"]
+            shoots = ["シュート", "シンカー"]
+            
+            if self.pitcher_hand == "右":
+                if p_type in sliders: is_pointing_left = True  
+                elif p_type in shoots: is_pointing_left = False 
+            else: 
+                if p_type in sliders: is_pointing_left = False 
+                elif p_type in shoots: is_pointing_left = True  
+            
+            if is_pointing_left:
+                poly = QPolygonF([QPointF(x+size*0.8, y-size), QPointF(x+size*0.8, y+size), QPointF(x-size*0.8, y)])
+            else:
+                poly = QPolygonF([QPointF(x-size*0.8, y-size), QPointF(x-size*0.8, y+size), QPointF(x+size*0.8, y)])
+            painter.drawPolygon(poly)
+            
+        painter.setPen(Qt.black)
+        painter.setFont(QFont(VisualStyle.FONT_NUM, 8, QFont.Bold))
+        painter.drawText(QRectF(x-size, y-size, size*2, size*2), Qt.AlignCenter, text)
+
+
+class LineScoreTable(QTableWidget):
+    """イニングスコア"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(75)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setVisible(True)
+        self.setShowGrid(False)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setFocusPolicy(Qt.NoFocus)
+        
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.setStyleSheet(f"""
+            QTableWidget {{ background-color: transparent; border: none; }}
+            QHeaderView::section {{
+                background-color: transparent;
+                color: {THEME.text_secondary};
+                font-size: 10px; font-weight: bold;
+                border: none; border-bottom: 1px solid {THEME.border};
+            }}
+            QTableWidget::item {{
+                color: {THEME.text_primary};
+                font-family: '{VisualStyle.FONT_NUM}';
+                font-size: 14px; font-weight: bold;
+                border-bottom: 1px solid {THEME.border_muted};
+            }}
+        """)
+        
+        self.cols = ["TEAM"] + [str(i) for i in range(1, 10)] + ["R", "H", "E"]
+        self.setColumnCount(len(self.cols))
+        self.setHorizontalHeaderLabels(self.cols)
+        self.setRowCount(2)
+        
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        h = self.horizontalHeader()
+        h.setSectionResizeMode(QHeaderView.Stretch)
+
+    def update_names(self, home, away):
+        self.setItem(0, 0, QTableWidgetItem(away[:3].upper()))
+        self.setItem(1, 0, QTableWidgetItem(home[:3].upper()))
+
+    def update_score_data(self, inning, is_top, h_runs, a_runs, h_hits, a_hits, h_err, a_err):
+        self.setItem(0, 10, QTableWidgetItem(str(a_runs)))
+        self.setItem(0, 11, QTableWidgetItem(str(a_hits)))
+        self.setItem(0, 12, QTableWidgetItem(str(a_err)))
+        self.setItem(1, 10, QTableWidgetItem(str(h_runs)))
+        self.setItem(1, 11, QTableWidgetItem(str(h_hits)))
+        self.setItem(1, 12, QTableWidgetItem(str(h_err)))
+
+    def set_inning_score(self, inning, is_top, score):
+        if inning < 1 or inning > 9: return
+        row = 0 if is_top else 1
+        self.setItem(row, inning, QTableWidgetItem(str(score)))
+
+
+class ScoreBoardWidget(QFrame):
+    """スコアボードコンテナ"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(110)
+        self.setStyleSheet(f"background-color: {THEME.bg_card_elevated}; border: none; border-radius: 4px;")
+        
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 5, 15, 5)
-        layout.setSpacing(12)
+        layout.setSpacing(20)
+        
+        self.info_box = self._create_info_box()
+        layout.addWidget(self.info_box)
+        
+        self.line_score = LineScoreTable()
+        layout.addWidget(self.line_score)
 
-        self.pitch_btn = QPushButton("⚾ PITCH")
-        self.pitch_btn.setFixedSize(110, 40)
-        self.pitch_btn.clicked.connect(self.pitch_clicked.emit)
-        self.pitch_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3090d0, stop:1 #2070b0);
-                color: white;
-                font: bold 14px 'Segoe UI';
-                border: 1px solid #40a0e0;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #40b0f0, stop:1 #3090d0); }
-            QPushButton:pressed { background: #2070b0; }
-            QPushButton:disabled { background: #405060; color: #708090; border-color: #506070; }
-        """)
-        layout.addWidget(self.pitch_btn)
+    def _create_info_box(self):
+        w = QWidget()
+        w.setFixedWidth(120)
+        vl = QVBoxLayout(w)
+        vl.setContentsMargins(0,5,0,5)
+        
+        self.lbl_inning = QLabel("1st TOP")
+        self.lbl_inning.setAlignment(Qt.AlignCenter)
+        self.lbl_inning.setStyleSheet(f"color: {THEME.primary}; font-size: 18px; font-weight: 900; font-family: 'Segoe UI Black';")
+        vl.addWidget(self.lbl_inning)
+        
+        grid = QGridLayout()
+        grid.setSpacing(2)
+        self.dots_b = self._mk_dots(3, VisualStyle.COLOR_BALL)
+        self.dots_s = self._mk_dots(2, VisualStyle.COLOR_STRIKE)
+        self.dots_o = self._mk_dots(2, VisualStyle.COLOR_OUT)
+        
+        l_style = "font-weight:bold; font-size:12px;"
+        grid.addWidget(QLabel("B", styleSheet=f"color:{VisualStyle.COLOR_BALL.name()};"+l_style), 0, 0)
+        grid.addLayout(self.dots_b[0], 0, 1)
+        grid.addWidget(QLabel("S", styleSheet=f"color:{VisualStyle.COLOR_STRIKE.name()};"+l_style), 1, 0)
+        grid.addLayout(self.dots_s[0], 1, 1)
+        grid.addWidget(QLabel("O", styleSheet=f"color:{VisualStyle.COLOR_OUT.name()};"+l_style), 2, 0)
+        grid.addLayout(self.dots_o[0], 2, 1)
+        
+        vl.addLayout(grid)
+        return w
 
-        self.skip_btn = QPushButton("SKIP GAME")
-        self.skip_btn.setFixedSize(100, 40)
-        self.skip_btn.clicked.connect(self.skip_clicked.emit)
-        self.skip_btn.setStyleSheet("""
-            QPushButton {
-                background: #252535;
-                color: #90a0b0;
-                font: bold 11px 'Segoe UI';
-                border: 1px solid #404050;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background: #353545; color: #b0c0d0; }
-        """)
-        layout.addWidget(self.skip_btn)
+    def _mk_dots(self, n, col):
+        l = QHBoxLayout(); l.setSpacing(2)
+        dots = []
+        for _ in range(n):
+            d = QLabel("●")
+            d.setStyleSheet(f"color: {THEME.bg_card}; font-size: 10px;")
+            l.addWidget(d); dots.append(d)
+        l.addStretch()
+        return l, dots
 
-        layout.addStretch()
+    def update_display(self, st, h_name, a_name, h_stats, a_stats):
+        inn_str = f"{st.inning}{'表' if st.is_top else '裏'}"
+        self.lbl_inning.setText(inn_str)
+        
+        for i, d in enumerate(self.dots_b[1]): d.setStyleSheet(f"color: {VisualStyle.COLOR_BALL.name() if st.balls > i else THEME.bg_card};")
+        for i, d in enumerate(self.dots_s[1]): d.setStyleSheet(f"color: {VisualStyle.COLOR_STRIKE.name() if st.strikes > i else THEME.bg_card};")
+        for i, d in enumerate(self.dots_o[1]): d.setStyleSheet(f"color: {VisualStyle.COLOR_OUT.name() if st.outs > i else THEME.bg_card};")
+        
+        self.line_score.update_names(h_name, a_name)
+        self.line_score.update_score_data(st.inning, st.is_top, st.home_score, st.away_score, 
+                                          h_stats.get('hits',0), a_stats.get('hits',0),
+                                          h_stats.get('errors',0), a_stats.get('errors',0))
 
-    def set_enabled(self, enabled: bool):
-        self.pitch_btn.setEnabled(enabled)
+
+class TrackingDataPanel(QFrame):
+    """詳細トラッキングデータ表示"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {THEME.bg_card}; border: none; border-radius: 4px;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        
+        title = QLabel("TRACKING DATA")
+        title.setStyleSheet(f"color: {THEME.text_secondary}; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        layout.addWidget(title)
+        
+        self.grid = QGridLayout()
+        self.grid.setSpacing(6)
+        layout.addLayout(self.grid)
+        
+        self.labels = {}
+        self.items = [
+            ("P_Speed", "球速"), ("P_Spin", "回転数"), 
+            ("P_HBreak", "変化(H)"), ("P_VBreak", "変化(V)"),
+            ("B_ExitV", "打球速度"), ("B_Angle", "角度"),
+            ("B_Dist", "飛距離"), ("B_Hang", "滞空")
+        ]
+        
+        for i, (key, label_text) in enumerate(self.items):
+            row = i // 2
+            col = (i % 2) * 2
+            
+            lbl_k = QLabel(label_text)
+            lbl_k.setStyleSheet("color: #888; font-size: 9px;")
+            lbl_v = QLabel("-")
+            lbl_v.setStyleSheet(f"color: {THEME.text_primary}; font-size: 12px; font-weight: bold; font-family: 'Consolas';")
+            lbl_v.setAlignment(Qt.AlignRight)
+            
+            self.grid.addWidget(lbl_k, row, col)
+            self.grid.addWidget(lbl_v, row, col+1)
+            self.labels[key] = lbl_v
+
+    def update_pitch(self, p: PitchData):
+        if not p:
+            for k in ["P_Speed", "P_Spin", "P_HBreak", "P_VBreak"]: self.labels[k].setText("-")
+            return
+        self.labels["P_Speed"].setText(f"{int(p.velocity)} km")
+        self.labels["P_Spin"].setText(f"{p.spin_rate} rpm")
+        self.labels["P_HBreak"].setText(f"{p.horizontal_break:+.1f}")
+        self.labels["P_VBreak"].setText(f"{p.vertical_break:+.1f}")
+
+    def update_batted_ball(self, b: BattedBallData):
+        if not b:
+            for k in ["B_ExitV", "B_Angle", "B_Dist", "B_Hang"]: self.labels[k].setText("-")
+            return
+        self.labels["B_ExitV"].setText(f"{int(b.exit_velocity)} km")
+        self.labels["B_Angle"].setText(f"{int(b.launch_angle)} deg")
+        self.labels["B_Dist"].setText(f"{int(b.distance)} m")
+        self.labels["B_Hang"].setText(f"{b.hang_time:.1f} s")
+
+
+class PlayerInfoPanel(QFrame):
+    clicked = Signal(object)
+    def __init__(self, title, align_right=False, parent=None):
+        super().__init__(parent)
+        self.player = None
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(f"background: {THEME.bg_card}; border: none; border-radius: 4px;")
+        
+        l = QVBoxLayout(self)
+        l.setContentsMargins(15,10,15,10); l.setSpacing(2)
+        
+        h = QLabel(title)
+        h.setStyleSheet(f"color:{THEME.text_secondary}; font-size:10px; font-weight:bold; letter-spacing:1px;")
+        h.setAlignment(Qt.AlignRight if align_right else Qt.AlignLeft)
+        l.addWidget(h)
+        
+        self.lbl_name = QLabel("---")
+        self.lbl_name.setStyleSheet(f"color:{THEME.text_primary}; font-size:18px; font-weight:900;")
+        self.lbl_name.setAlignment(Qt.AlignRight if align_right else Qt.AlignLeft)
+        l.addWidget(self.lbl_name)
+        
+        self.lbl_sub = QLabel("---")
+        self.lbl_sub.setStyleSheet(f"color:{THEME.text_secondary}; font-size:11px;")
+        self.lbl_sub.setAlignment(Qt.AlignRight if align_right else Qt.AlignLeft)
+        l.addWidget(self.lbl_sub)
+        
+        self.stats_box = QHBoxLayout()
+        l.addLayout(self.stats_box)
+
+    def mousePressEvent(self, e):
+        if self.player: self.clicked.emit(self.player)
+        super().mousePressEvent(e)
+
+    def update_player(self, p, sub, stats):
+        self.player = p
+        self.lbl_name.setText(p.name)
+        self.lbl_sub.setText(sub)
+        
+        while self.stats_box.count(): 
+            w = self.stats_box.takeAt(0).widget()
+            if w: w.deleteLater()
+            
+        for k, v, c in stats:
+            bx = QVBoxLayout(); bx.setSpacing(0)
+            l = QLabel(k); l.setAlignment(Qt.AlignCenter)
+            l.setStyleSheet("color:#888; font-size:9px;")
+            val = QLabel(str(v)); val.setAlignment(Qt.AlignCenter)
+            val.setStyleSheet(f"color:{c.name()}; font-size:14px; font-weight:bold; font-family:'Consolas';")
+            bx.addWidget(l); bx.addWidget(val)
+            self.stats_box.addLayout(bx)
 
 
 # ========================================
-# Main Page
+# メイン画面クラス
 # ========================================
 class TVBroadcastGamePage(QWidget):
     game_finished = Signal(object)
@@ -1512,239 +661,319 @@ class TVBroadcastGamePage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.engine: LiveGameEngine = None
-        self.animating = False
-        self.pending_ball = None
+        self.live_engine = None
+        self.is_simulating = False
+        self.is_animating = False 
+        self.need_zone_reset = False 
         self.date_str = "2027-01-01"
-        self.new_ab = False
-
+        
+        self.score_history = {"top": [0]*10, "bot": [0]*10}
+        self.prev_state_score = (0, 0)
+        self.prev_state_inning = (1, True)
+        
         self._setup_ui()
+        self._setup_timer()
 
     def _setup_ui(self):
-        self.setStyleSheet("background: #050810;")
-
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.scoreboard = TopScoreboard()
+        self.scoreboard = ScoreBoardWidget()
         main_layout.addWidget(self.scoreboard)
 
-        middle_layout = QHBoxLayout()
-        middle_layout.setContentsMargins(0, 0, 0, 0)
-        middle_layout.setSpacing(0)
+        content = QWidget()
+        content.setStyleSheet(f"background: {VisualStyle.BG_MAIN.name()};")
+        cl = QHBoxLayout(content)
+        cl.setContentsMargins(15, 15, 15, 15)
+        cl.setSpacing(15)
+        
+        left = QVBoxLayout(); left.setSpacing(10)
+        self.pitcher_card = PlayerInfoPanel("PITCHER")
+        self.pitcher_card.clicked.connect(self._on_player_clicked)
+        left.addWidget(self.pitcher_card)
+        
+        self.zone_widget = StrikeZoneWidget()
+        self.zone_widget.animation_finished.connect(self._on_animation_step_finished)
+        left.addWidget(self.zone_widget, stretch=1)
+        
+        self.track_panel = TrackingDataPanel()
+        left.addWidget(self.track_panel)
+        
+        self.lbl_pitch_res = QLabel("---")
+        self.lbl_pitch_res.setAlignment(Qt.AlignCenter)
+        self.lbl_pitch_res.setStyleSheet(f"background:{THEME.bg_card}; color:{THEME.text_primary}; padding:10px; border-radius:4px; font-weight:bold; font-size:14px;")
+        left.addWidget(self.lbl_pitch_res)
+        
+        cl.addLayout(left, stretch=2)
+        
+        self.field_widget = TacticalField()
+        self.field_widget.animation_finished.connect(self._on_animation_step_finished)
+        cl.addWidget(self.field_widget, stretch=4)
+        
+        right = QVBoxLayout(); right.setSpacing(10)
+        self.batter_card = PlayerInfoPanel("BATTER", True)
+        self.batter_card.clicked.connect(self._on_player_clicked)
+        right.addWidget(self.batter_card)
+        
+        self.log_area = QScrollArea()
+        self.log_area.setWidgetResizable(True)
+        self.log_area.setStyleSheet(f"background:{THEME.bg_card}; border:none; border-radius:4px;")
+        self.log_content = QWidget()
+        self.log_layout = QVBoxLayout(self.log_content)
+        self.log_layout.setAlignment(Qt.AlignTop)
+        self.log_area.setWidget(self.log_content)
+        right.addWidget(self.log_area, stretch=1)
+        
+        ctrl = QHBoxLayout()
+        self.btn_pitch = QPushButton("NEXT PITCH")
+        self.btn_pitch.setStyleSheet(f"background:{THEME.primary}; color:black; font-weight:bold; padding:12px; border-radius:4px; border:none;")
+        self.btn_pitch.clicked.connect(self._on_pitch)
+        
+        self.btn_skip = QPushButton("SKIP")
+        self.btn_skip.setStyleSheet(f"background:{THEME.bg_card_elevated}; color:{THEME.text_primary}; padding:12px; border-radius:4px; border:none;")
+        self.btn_skip.clicked.connect(self._on_skip)
+        
+        ctrl.addWidget(self.btn_pitch, 2)
+        ctrl.addWidget(self.btn_skip, 1)
+        right.addLayout(ctrl)
+        
+        cl.addLayout(right, stretch=2)
+        main_layout.addWidget(content)
 
-        self.away_panel = TeamLineupPanel(is_home=False)
-        middle_layout.addWidget(self.away_panel)
+    def _setup_timer(self):
+        self.sim_timer = QTimer(self)
+        self.sim_timer.timeout.connect(self._on_pitch)
 
-        self.field_view = FieldView()
-        self.field_view.done.connect(self._on_animation_done)
-        middle_layout.addWidget(self.field_view, 1)
+    def start_game(self, home, away, date_str="2027-01-01"):
+        self.date_str = date_str
+        from live_game_engine import LiveGameEngine
+        self.live_engine = LiveGameEngine(home, away)
+        
+        # ★修正: 試合開始時にスタジアム情報をUIにセット
+        self.field_widget.set_stadium(self.live_engine.stadium)
+        
+        self.zone_widget.clear()
+        self.field_widget.clear()
+        self.track_panel.update_pitch(None)
+        self.track_panel.update_batted_ball(None)
+        self.need_zone_reset = False
+        
+        self.score_history = {"top": [None]*10, "bot": [None]*10}
+        self.prev_state_score = (0, 0)
+        self.prev_state_inning = (1, True)
+        
+        while self.log_layout.count():
+            w = self.log_layout.takeAt(0).widget()
+            if w: w.deleteLater()
+            
+        self._update_display()
+        self._log("=== PLAY BALL ===", True)
 
-        self.home_panel = TeamLineupPanel(is_home=True)
-        middle_layout.addWidget(self.home_panel)
+    def _on_pitch(self):
+        try:
+            if self.is_animating or not self.live_engine or self.live_engine.is_game_over():
+                return
 
-        main_layout.addLayout(middle_layout, 1)
+            self.field_widget.clear()
+            self.track_panel.update_batted_ball(None)
 
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-        bottom_layout.setSpacing(0)
+            if self.need_zone_reset:
+                self.zone_widget.clear()
+                self.track_panel.update_pitch(None)
+                self.need_zone_reset = False
 
-        self.pitcher_panel = PitcherStatsPanel()
-        bottom_layout.addWidget(self.pitcher_panel)
+            # ★修正: simulate_pitch呼び出し前に状態を保存（イニングチェンジ後に状態が変わるため）
+            batter, order_idx = self.live_engine.get_current_batter()
+            pitcher, _ = self.live_engine.get_current_pitcher()
+            st = self.live_engine.state
+            pre_inning = st.inning
+            pre_is_top = st.is_top
 
-        self.control_panel = ControlPanel()
-        self.control_panel.pitch_clicked.connect(self._pitch)
-        self.control_panel.skip_clicked.connect(self._skip)
-        bottom_layout.addWidget(self.control_panel, 1)
+            play_res, pitch, ball = self.live_engine.simulate_pitch()
 
-        self.batter_panel = BatterStatsPanel()
-        bottom_layout.addWidget(self.batter_panel)
+            res_name = play_res.name if hasattr(play_res, 'name') else str(play_res)
+            display_res = self._get_display_result(res_name, st)
 
-        main_layout.addLayout(bottom_layout)
+            # ★修正: pitchがNoneの場合（盗塁など）はアニメーションをスキップ
+            if pitch is None and ball is None:
+                # アニメーションなし - 直接表示更新
+                self.lbl_pitch_res.setText(f"{display_res}")
+                col = VisualStyle.get_result_color(display_res)
+                self.lbl_pitch_res.setStyleSheet(f"background:{THEME.bg_card}; color:{col.name()}; padding:10px; border-left:4px solid {col.name()}; border-radius:4px; font-weight:bold; font-size:14px;")
+                self._update_display()
 
-    def start_game(self, home, away, date: str = "2027-01-01"):
-        self.date_str = date
-        self.engine = LiveGameEngine(home, away)
+                if self.live_engine.is_game_over():
+                    self._finish()
+                return
 
-        stadium_name = home.stadium.name if hasattr(home, 'stadium') and home.stadium else "STADIUM"
-        self.scoreboard.set_teams(away.name[:3], home.name[:3], stadium_name)
-        self.scoreboard.set_score(0, 0)
-        self.scoreboard.set_inning(1, True)
-        self.scoreboard.set_count(0, 0, 0)
+            self.is_animating = True
+            self.btn_pitch.setEnabled(False)
+            self.btn_skip.setEnabled(False)
 
-        self.away_panel.set_team(away.name, C.TEAM_NAVY)
-        self.home_panel.set_team(home.name, C.TEAM_TEAL)
+            if pitch:
+                self.zone_widget.set_pitcher_hand(getattr(pitcher, 'throws', '右'))
+                self.zone_widget.animate_pitch(pitch, display_res)
+                self.track_panel.update_pitch(pitch)
 
-        self._update_lineups()
-        self.field_view.reset()
-        self._refresh()
+                self.lbl_pitch_res.setText(f"{int(pitch.velocity)}km {pitch.pitch_type}\n{display_res}")
+                col = VisualStyle.get_result_color(display_res)
+                self.lbl_pitch_res.setStyleSheet(f"background:{THEME.bg_card}; color:{col.name()}; padding:10px; border-left:4px solid {col.name()}; border-radius:4px; font-weight:bold; font-size:14px;")
 
-    def _update_lineups(self):
-        if not self.engine:
-            return
+            if ball:
+                runners = [st.runner_1b is not None, st.runner_2b is not None, st.runner_3b is not None]
+                self.field_widget.animate_ball(ball, runners, display_res)
+                self.track_panel.update_batted_ball(ball)
 
-        # Away lineup - use current_lineup instead of batting_order
-        away_lineup = []
-        lineup = getattr(self.engine.away_team, 'current_lineup', [])
-        for i in range(min(9, len(lineup))):
-            player_idx = lineup[i] if i < len(lineup) else -1
-            if 0 <= player_idx < len(self.engine.away_team.players):
-                player = self.engine.away_team.players[player_idx]
-                pos_str = self._get_pos_abbr(player.position)
-                away_lineup.append((player, pos_str))
-            else:
-                away_lineup.append((None, ""))
-        while len(away_lineup) < 9:
-            away_lineup.append((None, ""))
-        self.away_panel.set_lineup(away_lineup)
+            # ★修正: 保存しておいた状態を使用してログ出力
+            if self._is_at_bat_end(res_name, st):
+                team_side = "表" if pre_is_top else "裏"
+                order_num = order_idx + 1
+                self._log(f"[{pre_inning}回{team_side} {order_num}番] {batter.name}: {display_res}", True)
+                self.need_zone_reset = True
 
-        # Home lineup
-        home_lineup = []
-        lineup = getattr(self.engine.home_team, 'current_lineup', [])
-        for i in range(min(9, len(lineup))):
-            player_idx = lineup[i] if i < len(lineup) else -1
-            if 0 <= player_idx < len(self.engine.home_team.players):
-                player = self.engine.home_team.players[player_idx]
-                pos_str = self._get_pos_abbr(player.position)
-                home_lineup.append((player, pos_str))
-            else:
-                home_lineup.append((None, ""))
-        while len(home_lineup) < 9:
-            home_lineup.append((None, ""))
-        self.home_panel.set_lineup(home_lineup)
+        except Exception as e:
+            traceback.print_exc()
+            self._log(f"Error: {str(e)}", True)
+            self.is_animating = False
+            self.btn_pitch.setEnabled(True)
+            self.btn_skip.setEnabled(True)
 
-    def _get_pos_abbr(self, pos: Position) -> str:
-        pos_map = {
-            Position.PITCHER: "P", Position.CATCHER: "C",
-            Position.FIRST: "1B", Position.SECOND: "2B",
-            Position.THIRD: "3B", Position.SHORTSTOP: "SS",
-            Position.LEFT: "LF", Position.CENTER: "CF",
-            Position.RIGHT: "RF", Position.DH: "DH"
+    def _get_display_result(self, res_name, st):
+        if st.balls == 0 and st.strikes == 0:
+            if "STRIKE" in res_name:
+                if "CALLED" in res_name: return "見逃し三振"
+                if "SWINGING" in res_name: return "空振り三振"
+                return "三振"
+            if res_name == "BALL": return "四球"
+            if res_name == "HIT_BY_PITCH": return "死球"
+
+        if res_name == "STRIKE_CALLED": return "見逃し"
+        if res_name == "STRIKE_SWINGING": return "空振り"
+        if res_name == "FOUL": return "ファウル"
+        if res_name == "BALL": return "ボール"
+        
+        m = {
+            'SINGLE': '安打', 'DOUBLE': '二塁打', 'TRIPLE': '三塁打', 'HOME_RUN': '本塁打', 
+            'ERROR': '失策', 'GROUNDOUT': 'ゴロ', 'FLYOUT': 'フライ', 'LINEOUT': 'ライナー',
+            'POPUP_OUT': '飛球', 'DOUBLE_PLAY': '併殺', 'SACRIFICE_FLY': '犠飛',
+            'SACRIFICE_BUNT': '犠打', 'FIELDERS_CHOICE': '野選'
         }
-        return pos_map.get(pos, "DH")
+        
+        if res_name == "IN_PLAY": return "ファウル"
+        
+        return m.get(res_name, res_name)
 
-    def _pitch(self):
-        if self.animating or not self.engine or self.engine.is_game_over():
-            return
+    def _is_at_bat_end(self, res_name, st):
+        end_results = ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME_RUN', 'ERROR', 
+                       'GROUNDOUT', 'FLYOUT', 'LINEOUT', 'POPUP_OUT', 
+                       'DOUBLE_PLAY', 'SACRIFICE_FLY', 'SACRIFICE_BUNT',
+                       'HIT_BY_PITCH', 'WALK', 'STRIKEOUT', 'FIELDERS_CHOICE']
+        if res_name in end_results: return True
+        if st.balls == 0 and st.strikes == 0: return True
+        return False
 
-        if self.new_ab:
-            self.new_ab = False
+    def _on_animation_step_finished(self):
+        if self.zone_widget.is_animating or self.field_widget.is_animating: return
+        self.is_animating = False
+        self.btn_pitch.setEnabled(True)
+        self.btn_skip.setEnabled(True)
+        self._update_display()
+        
+        if self.live_engine.is_game_over(): self._finish()
 
-        result, pitch, ball = self.engine.simulate_pitch()
-        self.animating = True
-        self.control_panel.set_enabled(False)
+    def _update_display(self):
+        st = self.live_engine.state
+        h = self.live_engine.home_team
+        a = self.live_engine.away_team
+        
+        prev_inn, prev_top = self.prev_state_inning
+        
+        diff_h = st.home_score - self.prev_state_score[0]
+        diff_a = st.away_score - self.prev_state_score[1]
+        
+        target_idx = prev_inn - 1
+        if target_idx < 10:
+            if self.score_history["top"][target_idx] is None: self.score_history["top"][target_idx] = 0
+            if self.score_history["bot"][target_idx] is None: self.score_history["bot"][target_idx] = 0
+            
+            if prev_top: self.score_history["top"][target_idx] += diff_a
+            else: self.score_history["bot"][target_idx] += diff_h
+                
+        self.prev_state_score = (st.home_score, st.away_score)
+        self.prev_state_inning = (st.inning, st.is_top)
+        
+        curr_idx = st.inning - 1
+        if curr_idx < 10:
+            if self.score_history["top"][curr_idx] is None: self.score_history["top"][curr_idx] = 0
+            if self.score_history["bot"][curr_idx] is None: self.score_history["bot"][curr_idx] = 0
 
-        res_name = result.name if hasattr(result, 'name') else str(result)
-        res_map = {
-            'BALL': 'ボール', 'STRIKE_CALLED': 'ストライク', 'STRIKE_SWINGING': '空振り',
-            'FOUL': 'ファウル', 'HIT_BY_PITCH': '死球', 'SINGLE': 'ヒット',
-            'DOUBLE': '二塁打', 'TRIPLE': '三塁打', 'HOME_RUN': 'ホームラン',
-            'ERROR': 'エラー', 'SACRIFICE_FLY': '犠飛', 'SACRIFICE_BUNT': '犠打',
-            'DOUBLE_PLAY': 'ゲッツー', 'GROUNDOUT': 'ゴロアウト', 'FLYOUT': 'フライアウト',
-            'LINEOUT': 'ライナー', 'POPUP_OUT': 'ポップ', 'FIELDERS_CHOICE': '野選',
-        }
-        display = res_map.get(res_name, str(result.value) if hasattr(result, 'value') else str(result))
-
-        self.pending_ball = (ball, display) if ball else None
-
-        if pitch:
-            self.field_view.start_pitch(pitch, display)
-            self.scoreboard.set_pitch_info(pitch.pitch_type[:2].upper(), int(pitch.velocity * 0.621371))
-
-            pitcher, _ = self.engine.get_current_pitcher()
-            if pitcher:
-                self.pitcher_panel.set_pitch_info(
-                    f"{int(pitch.velocity - 3)}-{int(pitch.velocity)}",
-                    pitch.pitch_type[:2].upper()
-                )
-
-        st = self.engine.state
-        if res_name in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME_RUN', 'ERROR', 'SACRIFICE_FLY',
-                        'SACRIFICE_BUNT', 'DOUBLE_PLAY', 'GROUNDOUT', 'FLYOUT', 'LINEOUT',
-                        'POPUP_OUT', 'FIELDERS_CHOICE', 'STRIKEOUT']:
-            self.new_ab = True
-        elif st.balls == 0 and st.strikes == 0:
-            self.new_ab = True
-
-    def _on_animation_done(self):
-        if self.pending_ball:
-            ball, display = self.pending_ball
-            self.pending_ball = None
-
-            self.field_view.set_runners([
-                self.engine.state.runner_1b is not None,
-                self.engine.state.runner_2b is not None,
-                self.engine.state.runner_3b is not None
+        for i in range(min(st.inning, 9)):
+            val_top = self.score_history["top"][i]
+            val_bot = self.score_history["bot"][i]
+            if val_top is not None: self.scoreboard.line_score.set_inning_score(i+1, True, val_top)
+            if val_bot is not None: self.scoreboard.line_score.set_inning_score(i+1, False, val_bot)
+            
+        self.scoreboard.update_display(st, h.name, a.name, {}, {})
+        
+        p, _ = self.live_engine.get_current_pitcher()
+        b, _ = self.live_engine.get_current_batter()
+        
+        if p:
+            self.pitcher_card.update_player(p, f"#{p.uniform_number} {p.pitch_type.value[:1]}", [
+                ("ERA", f"{p.record.era:.2f}", VisualStyle.TEXT_MAIN),
+                ("SO", p.record.strikeouts_pitched, VisualStyle.COLOR_HIT),
+                ("STM", int(st.current_pitcher_stamina()), VisualStyle.COLOR_BALL)
             ])
+        if b:
+            self.batter_card.update_player(b, f"#{b.uniform_number} {b.position.value[:2]}", [
+                ("AVG", f"{b.record.batting_average:.3f}", VisualStyle.TEXT_MAIN),
+                ("HR", b.record.home_runs, VisualStyle.COLOR_STRIKE),
+                ("RBI", b.record.rbis, VisualStyle.COLOR_OUT)
+            ])
+            
+        if not self.is_animating:
+            runners = [st.runner_1b is not None, st.runner_2b is not None, st.runner_3b is not None]
+            self.field_widget.set_runners_only(runners)
 
-            QTimer.singleShot(150, lambda: self.field_view.start_hit(ball, display))
-            return
+    def _on_player_clicked(self, p):
+        self.go_to_player_detail.emit(p)
 
-        self.animating = False
-        self.control_panel.set_enabled(True)
-        self._refresh()
-
-        if self.engine.is_game_over():
-            self._finish()
-
-    def _refresh(self):
-        if not self.engine:
-            return
-
-        st = self.engine.state
-
-        self.scoreboard.set_score(st.away_score, st.home_score)
-        self.scoreboard.set_inning(st.inning, st.is_top)
-        self.scoreboard.set_count(st.balls, st.strikes, st.outs)
-
-        # Update current batter indicator
-        if st.is_top:
-            self.away_panel.set_current_batter(st.away_batter_order % 9)
-            self.home_panel.set_current_batter(-1)
-        else:
-            self.away_panel.set_current_batter(-1)
-            self.home_panel.set_current_batter(st.home_batter_order % 9)
-
-        self.field_view.set_runners([
-            st.runner_1b is not None,
-            st.runner_2b is not None,
-            st.runner_3b is not None
-        ])
-
-        # Update pitcher panel
-        pitcher, _ = self.engine.get_current_pitcher()
-        if pitcher:
-            self.pitcher_panel.set_pitcher(pitcher)
-            pitch_count = st.home_pitch_count if st.is_top else st.away_pitch_count
-            stamina = st.home_pitcher_stamina if st.is_top else st.away_pitcher_stamina
-            self.pitcher_panel.set_game_stats(0, 0, 0, 0, 0, pitch_count, stamina)
-
-        # Update batter panel
-        batter, _ = self.engine.get_current_batter()
-        if batter:
-            pos_str = self._get_pos_abbr(batter.position)
-            self.batter_panel.set_batter(batter, pos_str)
-
-    def _skip(self):
-        if not self.engine or self.animating:
-            return
-
-        while not self.engine.is_game_over():
-            self.engine.simulate_pitch()
-
-        self.field_view.reset()
-        self._refresh()
+    def _on_skip(self):
+        if not self.live_engine: return
+        self.is_animating = True
+        self.btn_pitch.setEnabled(False)
+        self.btn_skip.setEnabled(False)
+        
+        try:
+            while not self.live_engine.is_game_over():
+                self.live_engine.simulate_pitch()
+        except Exception:
+            traceback.print_exc()
+            
+        self.zone_widget.clear()
+        self.field_widget.clear()
+        self.is_animating = False
+        self._update_display()
         self._finish()
 
     def _finish(self):
-        if self.engine:
-            self.engine.finalize_game_stats(self.date_str)
+        self.sim_timer.stop()
+        self.btn_pitch.setEnabled(False)
+        self.btn_skip.setEnabled(False)
+        self.live_engine.finalize_game_stats(self.date_str)
+        self._log("=== GAME SET ===", True)
+        res = {
+            "home_team": self.live_engine.home_team,
+            "away_team": self.live_engine.away_team,
+            "home_score": self.live_engine.state.home_score,
+            "away_score": self.live_engine.state.away_score,
+            "winner": self.live_engine.get_winner()
+        }
+        self.game_finished.emit(res)
 
-        self.game_finished.emit({
-            "home_team": self.engine.home_team,
-            "away_team": self.engine.away_team,
-            "home_score": self.engine.state.home_score,
-            "away_score": self.engine.state.away_score,
-            "winner": self.engine.get_winner()
-        })
+    def _log(self, text, highlight=False):
+        l = QLabel(text)
+        col = THEME.primary if highlight else THEME.text_secondary
+        l.setStyleSheet(f"color: {col}; font-size: 11px; margin-bottom: 2px;")
+        self.log_layout.insertWidget(0, l)

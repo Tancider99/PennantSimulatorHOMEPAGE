@@ -39,48 +39,41 @@ class VerticalStatBar(QWidget):
         self.value = value
         self.max_value = max_value
         self.theme = get_theme()
-        # サイズポリシーをExpandingにして横幅いっぱいに広がるようにする
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumWidth(60) # 最小幅
+        self.setMinimumWidth(60)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
         
-        # エリア定義
         label_h = 20
         rank_h = 25
         val_h = 20
         bar_area_h = h - label_h - rank_h - val_h - 10
         bar_bottom_y = h - label_h - 5
         
-        # バーの描画位置（ウィジェットの中央に描画）
         bar_w = 14
         bar_x = (w - bar_w) // 2
         
-        # 背景バー
         painter.setBrush(QColor("#1e2126"))
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(bar_x, rank_h + val_h + 5, bar_w, bar_area_h, 6, 6)
         
-        # 値バー
         ratio = min(1.0, max(0.0, self.value / float(self.max_value)))
         fill_h = int(bar_area_h * ratio)
         fill_y = bar_bottom_y - fill_h
         
         stats = PlayerStats()
         
-        # 色とランクの決定
         is_trajectory = (self.label == "弾道")
         
         if is_trajectory:
-            # 弾道用の特別色 (1:青, 2:緑, 3:橙, 4:赤/金)
             if self.value == 1: color = QColor("#4488FF")
             elif self.value == 2: color = QColor("#88FF44")
             elif self.value == 3: color = QColor("#FF8800")
             else: color = QColor("#FF4444")
-            rank_text = "" # 弾道はランク表示なし
+            rank_text = "" 
         else:
             color = QColor(stats.get_rank_color(self.value))
             rank_text = stats.get_rank(self.value)
@@ -88,27 +81,22 @@ class VerticalStatBar(QWidget):
         painter.setBrush(color)
         painter.drawRoundedRect(bar_x, fill_y, bar_w, fill_h, 6, 6)
         
-        # ラベル
         painter.setPen(QColor(self.theme.text_secondary))
         font_lbl = QFont("Yu Gothic UI", 9)
         painter.setFont(font_lbl)
         painter.drawText(QRect(0, h - label_h, w, label_h), Qt.AlignCenter, self.label)
         
-        # ランク (弾道の場合は表示しない)
         if not is_trajectory:
             painter.setPen(color)
             font_rank = QFont("Segoe UI", 16, QFont.Black)
             painter.setFont(font_rank)
             painter.drawText(QRect(0, 0, w, rank_h), Qt.AlignCenter, rank_text)
         
-        # 数値
         painter.setPen(Qt.white)
-        # 弾道の場合は数値を大きく強調
         font_size = 14 if is_trajectory else 11
         font_val = QFont("Consolas", font_size, QFont.Bold)
         painter.setFont(font_val)
         
-        # 弾道の場合はランクエリアも使って表示位置を調整
         val_rect_y = 0 if is_trajectory else rank_h
         val_rect_h = rank_h + val_h if is_trajectory else val_h
         
@@ -130,7 +118,6 @@ class SeasonStatsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # タブ作成
         tabs = QTabWidget()
         tabs.setStyleSheet(f"""
             QTabWidget::pane {{ border: 1px solid {self.theme.border_muted}; background: transparent; }}
@@ -149,20 +136,16 @@ class SeasonStatsWidget(QWidget):
             }}
         """)
         
-        # 1軍成績
         tabs.addTab(self._create_stats_grid(self.player.record, is_pitcher=(self.player.position.value=="投手")), "一軍")
         
-        # 2軍成績
         rec_farm = getattr(self.player, "record_farm", None)
         tabs.addTab(self._create_stats_grid(rec_farm, is_pitcher=(self.player.position.value=="投手")), "二軍")
         
-        # 3軍成績
         rec_third = getattr(self.player, "record_third", None) 
         tabs.addTab(self._create_stats_grid(rec_third, is_pitcher=(self.player.position.value=="投手")), "三軍")
         
         layout.addWidget(tabs)
         
-        # 詳細ボタン
         btn = QPushButton("詳細統計を見る")
         btn.setCursor(Qt.PointingHandCursor)
         btn.setStyleSheet(f"""
@@ -217,13 +200,6 @@ class SeasonStatsWidget(QWidget):
 # --- Main Page Class ---
 
 class PlayerDetailPage(QWidget):
-    """
-    Refined Layout: 
-    - Global Radar Chart (No vertex dots, No Center OVR)
-    - OVR in Top-Right (with Star)
-    - All Abilities Displayed (Split Tabs)
-    - Trajectory customized
-    """
     back_requested = Signal()
     detail_stats_requested = Signal(object)
 
@@ -239,10 +215,8 @@ class PlayerDetailPage(QWidget):
         layout.setSpacing(0)
         self.setStyleSheet(f"background-color: {self.theme.bg_dark}; color: #ffffff;")
 
-        # Toolbar
         layout.addWidget(self._create_toolbar())
 
-        # Main Content
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(30, 20, 30, 30)
@@ -290,24 +264,20 @@ class PlayerDetailPage(QWidget):
         return toolbar
 
     def _build_dashboard(self, player):
-        # === TOP SECTION (Radar + Info/Stats) ===
         top_section = QWidget()
         top_layout = QHBoxLayout(top_section)
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(30)
         
-        # 1. Left: Unified Radar Chart
-        radar = RadarChart() # from UI.widgets.charts
+        radar = RadarChart() 
         is_pitcher = (player.position.value == "投手")
         radar.set_player_stats(player, is_pitcher)
         top_layout.addWidget(radar, 2)
         
-        # 2. Right: Info & OVR & Stats
         right_panel = QWidget()
         rp_layout = QVBoxLayout(right_panel)
         rp_layout.setContentsMargins(0, 10, 0, 0)
         
-        # Header (Name + OVR)
         header_h = QHBoxLayout()
         name_v = QVBoxLayout()
         name_lbl = QLabel(player.name.upper())
@@ -320,9 +290,7 @@ class PlayerDetailPage(QWidget):
         
         header_h.addStretch()
         
-        # OVR Display (Top Right)
         ovr_v = QVBoxLayout()
-        # ★数値表記に変更
         ovr_val = QLabel(f"★ {player.overall_rating}")
         stats_util = PlayerStats()
         ovr_color = stats_util.get_rank_color(player.overall_rating)
@@ -337,7 +305,6 @@ class PlayerDetailPage(QWidget):
         rp_layout.addLayout(header_h)
         rp_layout.addSpacing(15)
         
-        # Stats Widget (Tabbed)
         stats_widget = SeasonStatsWidget(player)
         stats_widget.detail_requested.connect(self._on_detail_stats)
         rp_layout.addWidget(stats_widget)
@@ -347,7 +314,6 @@ class PlayerDetailPage(QWidget):
         
         self.content_layout.addWidget(top_section, 4)
 
-        # === BOTTOM SECTION (Tabbed Abilities - Full Width & All Stats) ===
         bottom_tabs = QTabWidget()
         bottom_tabs.setStyleSheet(f"""
             QTabWidget::pane {{ border: none; }}
@@ -361,26 +327,21 @@ class PlayerDetailPage(QWidget):
         
         stats = player.stats
         
-        # タブごとのデータ定義 (全能力網羅 + 守備/メンタル分離 + 守備範囲)
         if is_pitcher:
-            # 投手: 基礎
             pitch_basic = [
                 ("球速", stats.velocity, 165), ("制球", stats.control, 99),
                 ("スタミナ", stats.stamina, 99), ("球威", stats.stuff, 99),
                 ("変化量", stats.movement, 99), ("安定度", stats.stability, 99)
             ]
-            # 投手: 特殊・その他
             pitch_spec = [
                 ("対左打者", stats.vs_left_pitcher, 99), ("対ピンチ", stats.vs_pinch, 99),
                 ("クイック", stats.hold_runners, 99)
             ]
-            # 投手: 守備
             pitch_fld = [
                 ("守備力", stats.fielding, 99), ("肩力", stats.arm, 99),
                 ("捕球", stats.error, 99), ("打球反応", stats.gb_tendency, 99), 
                 ("バント", stats.bunt_sac, 99)
             ]
-            # 投手: メンタル・その他
             pitch_mental = [
                 ("メンタル", stats.mental, 99), ("野球脳", stats.intelligence, 99),
                 ("回復", stats.recovery, 99), ("ケガ耐性", stats.durability, 99),
@@ -388,28 +349,61 @@ class PlayerDetailPage(QWidget):
             ]
             
             bottom_tabs.addTab(self._create_full_tab(pitch_basic), "PITCHING BASIC")
+            
+            # ★追加: 球種タブ (球種ごとのパラメータ表示)
+            pitch_types_widget = QWidget()
+            pt_layout = QHBoxLayout(pitch_types_widget)
+            pt_layout.setContentsMargins(0, 10, 0, 0)
+            pt_layout.setSpacing(10)
+            
+            if stats.pitches:
+                for p_name in stats.pitches.keys():
+                    qual = stats.get_pitch_quality(p_name)
+                    stf = stats.get_pitch_stuff(p_name)
+                    mov = stats.get_pitch_movement(p_name)
+                    
+                    # 1球種につき3本のバーを表示するためのコンテナ
+                    p_box = QFrame()
+                    p_box.setStyleSheet("background: #222; border-radius: 6px;")
+                    vb = QVBoxLayout(p_box)
+                    vb.setContentsMargins(5,5,5,5)
+                    
+                    lbl = QLabel(p_name)
+                    lbl.setAlignment(Qt.AlignCenter)
+                    lbl.setStyleSheet("color: #ccc; font-weight: bold; font-size: 11px;")
+                    vb.addWidget(lbl)
+                    
+                    h_bars = QHBoxLayout()
+                    h_bars.setSpacing(4)
+                    h_bars.addWidget(VerticalStatBar("精度", qual, 99))
+                    h_bars.addWidget(VerticalStatBar("球威", stf, 99))
+                    h_bars.addWidget(VerticalStatBar("変化", mov, 99))
+                    vb.addLayout(h_bars)
+                    
+                    pt_layout.addWidget(p_box)
+                pt_layout.addStretch()
+            else:
+                pt_layout.addWidget(QLabel("変化球なし", styleSheet="color:#666;"))
+                
+            bottom_tabs.addTab(pitch_types_widget, "PITCHES")
+            
             bottom_tabs.addTab(self._create_full_tab(pitch_spec), "SPECIAL")
             bottom_tabs.addTab(self._create_full_tab(pitch_fld), "FIELDING")
             bottom_tabs.addTab(self._create_full_tab(pitch_mental), "MENTAL / OTHER")
             
         else:
-            # 野手: 打撃 (弾道を一番左に移動)
             bat_basic = [
-                ("弾道", stats.trajectory, 4), # 先頭へ
+                ("弾道", stats.trajectory, 4), 
                 ("ミート", stats.contact, 99), ("パワー", stats.power, 99),
                 ("ギャップ", stats.gap, 99), 
                 ("選球眼", stats.eye, 99), ("三振回避", stats.avoid_k, 99)
             ]
-            # 野手: 特殊打撃・走塁
             bat_spec = [
                 ("対左投手", stats.vs_left_batter, 99), ("チャンス", stats.chance, 99),
                 ("バント", stats.bunt_sac, 99), ("バント安打", stats.bunt_hit, 99),
                 ("走力", stats.speed, 99), ("盗塁", stats.steal, 99),
                 ("走塁技術", stats.baserunning, 99)
             ]
-            
-            # 野手: 守備 (ポジション別適性を含む)
-            # 「守備力(最大)」を削除
             fld_list = [
                 ("捕球", stats.error, 99),
                 ("肩力", stats.arm, 99), ("送球安定", getattr(stats, 'stability', 50), 99),
@@ -418,13 +412,11 @@ class PlayerDetailPage(QWidget):
             if safe_enum_val(player.position) == "捕手":
                 fld_list.append(("リード", stats.catcher_lead, 99))
             
-            # 守備範囲（ポジション別）を追加
             if hasattr(stats, 'defense_ranges'):
                 for pos_name, val in stats.defense_ranges.items():
                     if val > 0:
                         fld_list.append((f"守備({pos_name})", val, 99))
 
-            # 野手: メンタル・その他
             mental_list = [
                 ("メンタル", stats.mental, 99), ("野球脳", stats.intelligence, 99),
                 ("回復", stats.recovery, 99), ("ケガ耐性", stats.durability, 99),
