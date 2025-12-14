@@ -59,12 +59,23 @@ class SeasonCalendar:
     @classmethod
     def create(cls, year: int) -> 'SeasonCalendar':
         """NPB準拠のカレンダーを生成"""
+        # 交流戦開始は火曜日に設定（5月最終週の火曜日）
+        il_start_base = datetime.date(year, 5, 27)
+        # 火曜日(weekday=1)になるよう調整
+        days_until_tuesday = (1 - il_start_base.weekday()) % 7
+        interleague_start = il_start_base + datetime.timedelta(days=days_until_tuesday)
+
+        # 交流戦構造: 火-日(6日) + 月休 + 火-日(6日) + 月休 + 火-日(6日) = 20日間
+        # その後、予備日4日間
+        interleague_end = interleague_start + datetime.timedelta(days=19)  # 20日目（3週目の日曜）
+        interleague_reserve_end = interleague_end + datetime.timedelta(days=4)  # 予備日4日間
+
         return cls(
             year=year,
             opening_day=datetime.date(year, 3, 29),
-            interleague_start=datetime.date(year, 6, 3),
-            interleague_end=datetime.date(year, 6, 20),
-            interleague_reserve_end=datetime.date(year, 6, 23),
+            interleague_start=interleague_start,  # 火曜日開始
+            interleague_end=interleague_end,  # 3週目の日曜日
+            interleague_reserve_end=interleague_reserve_end,  # 予備日終了
             allstar_day1=datetime.date(year, 7, 23),
             allstar_day2=datetime.date(year, 7, 24),
             regular_season_end=datetime.date(year, 9, 28),
@@ -78,43 +89,46 @@ class SeasonCalendar:
 class WeatherSystem:
     """天候シミュレーションシステム"""
 
+    # 雨天確率を現実的な値に調整（NPBの実際の中止率は年間5-10試合程度）
     MONTHLY_RAIN_PROBABILITY = {
-        3: 0.25, 4: 0.28, 5: 0.30, 6: 0.45,
-        7: 0.35, 8: 0.30, 9: 0.35, 10: 0.25,
+        3: 0.15, 4: 0.18, 5: 0.20, 6: 0.30,  # 梅雨時期でも控えめに
+        7: 0.20, 8: 0.15, 9: 0.20, 10: 0.15,
     }
 
     @classmethod
     def get_weather(cls, date: datetime.date) -> WeatherCondition:
-        rain_prob = cls.MONTHLY_RAIN_PROBABILITY.get(date.month, 0.25)
+        rain_prob = cls.MONTHLY_RAIN_PROBABILITY.get(date.month, 0.15)
         roll = random.random()
-        if roll < rain_prob * 0.3:
+        if roll < rain_prob * 0.2:  # 大雨は稀（雨の20%）
             return WeatherCondition.HEAVY_RAIN
-        elif roll < rain_prob * 0.6:
+        elif roll < rain_prob * 0.5:  # 雨（雨の30%）
             return WeatherCondition.RAIN
-        elif roll < rain_prob:
+        elif roll < rain_prob:  # 小雨（雨の50%）
             return WeatherCondition.LIGHT_RAIN
-        elif roll < rain_prob + 0.3:
+        elif roll < rain_prob + 0.25:
             return WeatherCondition.CLOUDY
         return WeatherCondition.CLEAR
 
     @classmethod
     def should_cancel_game(cls, weather: WeatherCondition) -> bool:
+        """試合中止判定（ドーム球場を考慮して確率を下げる）"""
         if weather == WeatherCondition.HEAVY_RAIN:
-            return True
+            return random.random() < 0.6  # 大雨でも40%はドームで開催
         elif weather == WeatherCondition.RAIN:
-            return random.random() < 0.7
+            return random.random() < 0.3  # 雨でも70%は開催
         elif weather == WeatherCondition.LIGHT_RAIN:
-            return random.random() < 0.15
+            return random.random() < 0.05  # 小雨はほぼ開催
         return False
 
     @classmethod
     def should_call_game(cls, weather: WeatherCondition, inning: int) -> bool:
+        """試合途中のコールド判定"""
         if inning < 5:
             return False
         if weather == WeatherCondition.HEAVY_RAIN:
-            return random.random() < 0.8
+            return random.random() < 0.5
         elif weather == WeatherCondition.RAIN:
-            return random.random() < 0.4
+            return random.random() < 0.2
         return False
 
 
@@ -196,43 +210,79 @@ class LeagueScheduleEngine:
         return cards
 
     def _generate_interleague_cards(self) -> List[SeriesCard]:
-        """交流戦3連戦カードを生成（各チーム18試合）"""
+        """交流戦3連戦カードを生成（NPB方式: 2年1サイクルでホーム・ビジター入替）
+
+        NPB方式:
+        - 各リーグ6チームを2グループに分割（A: 0,1,2番目、B: 3,4,5番目）
+        - 偶数年: 北チームはAグループ南とホーム、Bグループ南とビジター
+        - 奇数年: 北チームはAグループ南とビジター、Bグループ南とホーム
+        - 4年ごとにグループ組み合わせがローテーション
+        """
         cards = []
 
+        # 南リーグを2グループに分割（年によってローテーション）
+        cycle = (self.year // 4) % 3  # 4年ごとにグループ変更、3パターン
+        if cycle == 0:
+            south_group_a = self.south_teams[0:3]  # インデックス 0,1,2
+            south_group_b = self.south_teams[3:6]  # インデックス 3,4,5
+        elif cycle == 1:
+            south_group_a = [self.south_teams[0], self.south_teams[2], self.south_teams[4]]
+            south_group_b = [self.south_teams[1], self.south_teams[3], self.south_teams[5]]
+        else:
+            south_group_a = [self.south_teams[0], self.south_teams[3], self.south_teams[4]]
+            south_group_b = [self.south_teams[1], self.south_teams[2], self.south_teams[5]]
+
+        # 2年1サイクルでホーム・ビジター入替
+        is_even_year = self.year % 2 == 0
+
         for n_team in self.north_teams:
-            for s_team in self.south_teams:
-                # 3試合1カード
-                if self.year % 2 == 0:
-                    # 偶数年: 北リーグがホーム2試合、南リーグがホーム1試合
+            # グループAの南チームとの対戦
+            for s_team in south_group_a:
+                if is_even_year:
+                    # 偶数年: 北チームホーム
                     cards.append(SeriesCard(home_team=n_team, away_team=s_team, games=3, is_interleague=True))
                 else:
-                    # 奇数年: 南リーグがホーム2試合、北リーグがホーム1試合
+                    # 奇数年: 南チームホーム
                     cards.append(SeriesCard(home_team=s_team, away_team=n_team, games=3, is_interleague=True))
+
+            # グループBの南チームとの対戦
+            for s_team in south_group_b:
+                if is_even_year:
+                    # 偶数年: 南チームホーム
+                    cards.append(SeriesCard(home_team=s_team, away_team=n_team, games=3, is_interleague=True))
+                else:
+                    # 奇数年: 北チームホーム
+                    cards.append(SeriesCard(home_team=n_team, away_team=s_team, games=3, is_interleague=True))
 
         return cards
 
     def _assign_cards_to_calendar(self, north_cards: List[SeriesCard],
                                    south_cards: List[SeriesCard],
                                    interleague_cards: List[SeriesCard]):
-        """カードを日程に配置（3連戦単位）"""
-        random.shuffle(north_cards)
-        random.shuffle(south_cards)
-        random.shuffle(interleague_cards)
+        """カードを日程に配置 - 日別均等配分＋連戦継続優先方式"""
 
-        game_number = 1
+        # 必要な試合数を計算
+        required_games: Dict[Tuple[str, str], int] = {}
 
-        # 期間を分類
-        pre_il_dates = []  # 交流戦前
-        il_dates = []      # 交流戦期間
-        post_il_dates = [] # 交流戦後
+        for card in north_cards + south_cards:
+            key = tuple(sorted([card.home_team, card.away_team]))
+            required_games[key] = required_games.get(key, 0) + card.games
+
+        for card in interleague_cards:
+            key = tuple(sorted([card.home_team, card.away_team]))
+            required_games[key] = required_games.get(key, 0) + card.games
+
+        # 日程を分類
+        pre_il_dates = []
+        il_dates = []
+        post_il_dates = []
 
         d = self.calendar.opening_day
         while d <= self.calendar.regular_season_end:
-            if d.weekday() == 0:  # 月曜休み
+            if d.weekday() == 0:
                 d += datetime.timedelta(days=1)
                 continue
 
-            # オールスター期間スキップ
             allstar_rest_start = self.calendar.allstar_day1 - datetime.timedelta(days=1)
             allstar_rest_end = self.calendar.allstar_day2 + datetime.timedelta(days=1)
             if allstar_rest_start <= d <= allstar_rest_end:
@@ -248,120 +298,323 @@ class LeagueScheduleEngine:
 
             d += datetime.timedelta(days=1)
 
-        # === 交流戦前のリーグ戦 ===
-        game_number = self._schedule_league_cards(
-            north_cards[:len(north_cards)//2],
-            south_cards[:len(south_cards)//2],
-            pre_il_dates, game_number
-        )
+        all_league_dates = pre_il_dates + post_il_dates
+        all_dates = pre_il_dates + il_dates + post_il_dates
 
-        # === 交流戦期間 ===
-        game_number = self._schedule_interleague_cards(
-            interleague_cards, il_dates, game_number
-        )
+        # 実施済み試合数を追跡
+        scheduled_games: Dict[Tuple[str, str], int] = {key: 0 for key in required_games}
 
-        # === 交流戦後のリーグ戦 ===
-        game_number = self._schedule_league_cards(
-            north_cards[len(north_cards)//2:],
-            south_cards[len(south_cards)//2:],
-            post_il_dates, game_number
-        )
+        # ホーム・アウェイのバランスを追跡
+        home_games: Dict[str, Dict[str, int]] = {}
+        for team in self.north_teams + self.south_teams:
+            home_games[team] = {}
+
+        # 連戦追跡（各チームが前日にどのチームと対戦したか）
+        yesterday_opponent: Dict[str, Tuple[str, int]] = {}  # team -> (opponent, consecutive_days)
+        # 連戦中のホームチーム追跡（3連戦中は同じ球場で開催）
+        series_home: Dict[Tuple[str, str], str] = {}  # (t1, t2) sorted -> home_team
+
+        # 交流戦グループ分け（NPB方式）
+        cycle = (self.year // 4) % 3
+        if cycle == 0:
+            south_group_a = set(self.south_teams[0:3])
+            south_group_b = set(self.south_teams[3:6])
+        elif cycle == 1:
+            south_group_a = {self.south_teams[0], self.south_teams[2], self.south_teams[4]}
+            south_group_b = {self.south_teams[1], self.south_teams[3], self.south_teams[5]}
+        else:
+            south_group_a = {self.south_teams[0], self.south_teams[3], self.south_teams[4]}
+            south_group_b = {self.south_teams[1], self.south_teams[2], self.south_teams[5]}
+
+        is_even_year = self.year % 2 == 0
+
+        def get_home_team(t1: str, t2: str, is_interleague: bool = False) -> str:
+            key = tuple(sorted([t1, t2]))
+            # 連戦継続中は同じホームを維持
+            if key in series_home:
+                return series_home[key]
+            # 交流戦の場合、グループと年によってホームを決定
+            if is_interleague:
+                n_team = t1 if t1 in self.north_teams else t2
+                s_team = t2 if t1 in self.north_teams else t1
+                # グループAの南チームとの対戦
+                if s_team in south_group_a:
+                    return n_team if is_even_year else s_team
+                # グループBの南チームとの対戦
+                else:
+                    return s_team if is_even_year else n_team
+            # 通常はバランスで決定
+            h1 = home_games.get(t1, {}).get(t2, 0)
+            h2 = home_games.get(t2, {}).get(t1, 0)
+            return t1 if h1 <= h2 else t2
+
+        def add_game_for_pair(t1: str, t2: str, date: datetime.date, is_il: bool = False):
+            key = tuple(sorted([t1, t2]))
+            home = get_home_team(t1, t2, is_il)
+            away = t2 if home == t1 else t1
+
+            date_str = date.strftime("%Y-%m-%d")
+            self.schedule.games.append(ScheduledGame(
+                game_number=len(self.schedule.games) + 1,
+                date=date_str,
+                home_team_name=home,
+                away_team_name=away
+            ))
+
+            scheduled_games[key] += 1
+            if home not in home_games:
+                home_games[home] = {}
+            home_games[home][away] = home_games[home].get(away, 0) + 1
+
+            # 連戦開始時にホームを記録
+            if key not in series_home:
+                series_home[key] = home
+
+        def needs_more_games(t1: str, t2: str) -> bool:
+            key = tuple(sorted([t1, t2]))
+            return scheduled_games.get(key, 0) < required_games.get(key, 0)
+
+        def remaining_games(t1: str, t2: str) -> int:
+            key = tuple(sorted([t1, t2]))
+            return required_games.get(key, 0) - scheduled_games.get(key, 0)
+
+        def is_interleague(t1: str, t2: str) -> bool:
+            return (t1 in self.north_teams) != (t2 in self.north_teams)
+
+        # 日付ごとのチーム使用状況
+        date_team_usage: Dict[str, Set[str]] = {
+            d.strftime("%Y-%m-%d"): set() for d in all_dates
+        }
+
+        # === メインスケジューリング: 日別に6試合ずつ配置 ===
+        def schedule_date(date: datetime.date, valid_pairs: List[Tuple[str, str]], is_interleague: bool = False):
+            """指定日に最大6試合を配置（連戦継続を優先、残り試合数で確実に優先）"""
+            date_str = date.strftime("%Y-%m-%d")
+            teams_used: Set[str] = set()
+            games_today = 0
+
+            # 優先度でソート: (連戦継続可能, 残り試合数)
+            def pair_priority(pair):
+                t1, t2 = pair
+                if t1 in teams_used or t2 in teams_used:
+                    return (-1, -1, -1, 0)  # 使用済み
+
+                remaining = remaining_games(t1, t2)
+                if remaining <= 0:
+                    return (-1, -1, -1, 0)  # 試合不要
+
+                # 連戦継続ボーナス（前日同じ相手と対戦していて、3連戦未満なら優先）
+                series_bonus = 0
+                if t1 in yesterday_opponent:
+                    opp, days = yesterday_opponent[t1]
+                    if opp == t2 and days < 3:
+                        series_bonus = 1000  # 高い優先度
+
+                # 残り試合数が多いペアを優先（確実性のため）
+                return (series_bonus, remaining, -hash((t1, t2)) % 1000, 0)
+
+            # 6試合分を配置
+            while games_today < 6:
+                # 利用可能なペアを優先度順に取得
+                available = [(p, pair_priority(p)) for p in valid_pairs
+                             if p[0] not in teams_used and p[1] not in teams_used]
+                available = [(p, pri) for p, pri in available if pri[0] >= 0]
+
+                if not available:
+                    break
+
+                available.sort(key=lambda x: x[1], reverse=True)
+                best_pair, _ = available[0]
+                t1, t2 = best_pair
+
+                if not needs_more_games(t1, t2):
+                    # このペアはもう試合不要、次を探す
+                    valid_pairs = [p for p in valid_pairs if p != best_pair]
+                    continue
+
+                add_game_for_pair(t1, t2, date, is_interleague)
+                teams_used.add(t1)
+                teams_used.add(t2)
+                date_team_usage[date_str].add(t1)
+                date_team_usage[date_str].add(t2)
+                games_today += 1
+
+            return teams_used
+
+        # リーグ戦ペア
+        north_pairs = [(self.north_teams[i], self.north_teams[j])
+                       for i in range(len(self.north_teams))
+                       for j in range(i + 1, len(self.north_teams))]
+        south_pairs = [(self.south_teams[i], self.south_teams[j])
+                       for i in range(len(self.south_teams))
+                       for j in range(i + 1, len(self.south_teams))]
+        league_pairs = north_pairs + south_pairs
+
+        # 交流戦ペア
+        il_pairs = [(n, s) for n in self.north_teams for s in self.south_teams]
+
+        # === 交流戦を先にスケジュール（ラウンドロビン方式）===
+        # 構造: 3週間 × 6日/週 = 18日
+        # 各週で各チームは2つのシリーズ（3連戦×2）をプレイ
+        # 36ペア × 3試合 = 108試合
+        il_dates_sorted = sorted(il_dates)
+
+        # 週ごとに分割（月曜を除いた6日ブロック）
+        weeks = []
+        current_week = []
+        for date in il_dates_sorted:
+            if date.weekday() == 0:  # 月曜はスキップ
+                continue
+            current_week.append(date)
+            if len(current_week) == 6:
+                weeks.append(current_week)
+                current_week = []
+        if current_week:  # 残りがあれば追加
+            weeks.append(current_week)
+
+        # 各北チームと南チームの対戦スケジュールを作成
+        # 各週で各チームは2チームと3連戦（計6試合）
+        # 3週間で6チームと1回ずつ対戦（計18試合）
+
+        # ラウンドロビン: 各週でどの北チームがどの南チームと対戦するか決定
+        # Week 1: North[i] vs South[i], South[(i+1)%6]
+        # Week 2: North[i] vs South[(i+2)%6], South[(i+3)%6]
+        # Week 3: North[i] vs South[(i+4)%6], South[(i+5)%6]
+        week_matchups = []
+        for week_idx in range(3):
+            matchups = []  # (north_idx, south_idx) のリスト
+            for n_idx in range(6):
+                # 各週で2つの南チームと対戦
+                s_idx1 = (n_idx + week_idx * 2) % 6
+                s_idx2 = (n_idx + week_idx * 2 + 1) % 6
+                matchups.append((n_idx, s_idx1))
+                matchups.append((n_idx, s_idx2))
+            week_matchups.append(matchups)
+
+        # 週ごとにスケジュール
+        for week_idx, week_dates in enumerate(weeks):
+            if week_idx >= 3:
+                break  # 3週間分のみ
+
+            matchups = week_matchups[week_idx]
+
+            # この週の各日の対戦を決定
+            # 3日目までと4日目以降で異なるシリーズを配置
+
+            # 前半3日（シリーズA）: 各北チームの1つ目の対戦
+            series_a = [(n_idx, s_idx) for n_idx, s_idx in matchups[::2]]  # 偶数インデックス
+            # 後半3日（シリーズB）: 各北チームの2つ目の対戦
+            series_b = [(n_idx, s_idx) for n_idx, s_idx in matchups[1::2]]  # 奇数インデックス
+
+            for day_offset, date in enumerate(week_dates):
+                date_str = date.strftime("%Y-%m-%d")
+
+                # 前半3日か後半3日かでシリーズを選択
+                if day_offset < 3:
+                    day_series = series_a
+                else:
+                    day_series = series_b
+
+                for n_idx, s_idx in day_series:
+                    n_team = self.north_teams[n_idx]
+                    s_team = self.south_teams[s_idx]
+
+                    add_game_for_pair(n_team, s_team, date, True)
+                    date_team_usage[date_str].add(n_team)
+                    date_team_usage[date_str].add(s_team)
+
+        # === リーグ戦を日付順に処理 ===
+        prev_date = None
+        for date in sorted(all_league_dates):
+            # 前日からの連戦情報を更新
+            if prev_date is not None:
+                day_gap = (date - prev_date).days
+                if day_gap <= 2:  # 月曜スキップ考慮
+                    # 連戦を継続
+                    new_yesterday = {}
+                    pairs_to_clear = []  # 3連戦終了したペア
+                    for game in self.schedule.games:
+                        if game.date == prev_date.strftime("%Y-%m-%d"):
+                            t1, t2 = game.home_team_name, game.away_team_name
+                            key = tuple(sorted([t1, t2]))
+                            prev_days_1 = yesterday_opponent.get(t1, (None, 0))[1] if yesterday_opponent.get(t1, (None, 0))[0] == t2 else 0
+                            prev_days_2 = yesterday_opponent.get(t2, (None, 0))[1] if yesterday_opponent.get(t2, (None, 0))[0] == t1 else 0
+                            new_days = prev_days_1 + 1
+                            new_yesterday[t1] = (t2, new_days)
+                            new_yesterday[t2] = (t1, new_days)
+                            # 3連戦終了したらseries_homeをクリア
+                            if new_days >= 3:
+                                pairs_to_clear.append(key)
+                    yesterday_opponent.clear()
+                    yesterday_opponent.update(new_yesterday)
+                    for key in pairs_to_clear:
+                        series_home.pop(key, None)
+                else:
+                    # 日程が離れたら全連戦リセット
+                    yesterday_opponent.clear()
+                    series_home.clear()
+
+            schedule_date(date, league_pairs.copy(), False)
+            prev_date = date
+
+        # === 補完パス: 不足分を埋める（最大30パス）===
+        for pass_num in range(30):
+            any_added = False
+            total_remaining = sum(remaining_games(p[0], p[1]) for p in league_pairs + il_pairs)
+
+            if total_remaining == 0:
+                break
+
+            for date in sorted(all_dates):
+                date_str = date.strftime("%Y-%m-%d")
+                teams_used = date_team_usage[date_str].copy()
+
+                if len(teams_used) >= 12:
+                    continue
+
+                # 交流戦期間かどうかで使用するペアを決定
+                is_il = self.calendar.interleague_start <= date <= self.calendar.interleague_end
+                if is_il:
+                    valid_pairs = il_pairs
+                else:
+                    valid_pairs = league_pairs
+
+                # 残り試合数が多いペアを優先
+                pairs_with_need = []
+                for pair in valid_pairs:
+                    t1, t2 = pair
+                    if t1 in teams_used or t2 in teams_used:
+                        continue
+                    rem = remaining_games(t1, t2)
+                    if rem > 0:
+                        pairs_with_need.append((rem, pair))
+
+                if not pairs_with_need:
+                    continue
+
+                pairs_with_need.sort(reverse=True)
+
+                for _, pair in pairs_with_need:
+                    if len(teams_used) >= 12:
+                        break
+                    t1, t2 = pair
+                    if t1 in teams_used or t2 in teams_used:
+                        continue
+
+                    add_game_for_pair(t1, t2, date, is_il)
+                    date_team_usage[date_str].add(t1)
+                    date_team_usage[date_str].add(t2)
+                    teams_used.add(t1)
+                    teams_used.add(t2)
+                    any_added = True
+
+            if not any_added:
+                break
 
         # ソートして番号振り直し
         self.schedule.games.sort(key=lambda g: (g.date, g.game_number))
         for i, game in enumerate(self.schedule.games):
             game.game_number = i + 1
-
-    def _schedule_league_cards(self, north_cards: List[SeriesCard],
-                                south_cards: List[SeriesCard],
-                                dates: List[datetime.date],
-                                start_game_number: int) -> int:
-        """リーグ戦カードを日程に配置（同一リーグのみ）"""
-        game_number = start_game_number
-        date_idx = 0
-
-        all_cards = north_cards + south_cards
-        random.shuffle(all_cards)
-
-        for card in all_cards:
-            if date_idx + card.games > len(dates):
-                # 日程不足時は残りの日に詰める
-                for remaining_game in range(card.games):
-                    if date_idx < len(dates):
-                        date_str = dates[date_idx].strftime("%Y-%m-%d")
-                        self.schedule.games.append(ScheduledGame(
-                            game_number=game_number, date=date_str,
-                            home_team_name=card.home_team, away_team_name=card.away_team
-                        ))
-                        game_number += 1
-                        date_idx += 1
-                continue
-
-            # 3連戦を連続日程に配置
-            for g in range(card.games):
-                if date_idx < len(dates):
-                    date_str = dates[date_idx].strftime("%Y-%m-%d")
-
-                    # 同日に既に試合があるチームはスキップ
-                    games_on_date = [x for x in self.schedule.games if x.date == date_str]
-                    teams_playing = set()
-                    for x in games_on_date:
-                        teams_playing.add(x.home_team_name)
-                        teams_playing.add(x.away_team_name)
-
-                    if card.home_team in teams_playing or card.away_team in teams_playing:
-                        # 次の空き日を探す
-                        for future_idx in range(date_idx + 1, len(dates)):
-                            future_date = dates[future_idx].strftime("%Y-%m-%d")
-                            future_games = [x for x in self.schedule.games if x.date == future_date]
-                            future_teams = set()
-                            for x in future_games:
-                                future_teams.add(x.home_team_name)
-                                future_teams.add(x.away_team_name)
-                            if card.home_team not in future_teams and card.away_team not in future_teams:
-                                date_str = future_date
-                                break
-
-                    self.schedule.games.append(ScheduledGame(
-                        game_number=game_number, date=date_str,
-                        home_team_name=card.home_team, away_team_name=card.away_team
-                    ))
-                    game_number += 1
-                    date_idx += 1
-
-        return game_number
-
-    def _schedule_interleague_cards(self, cards: List[SeriesCard],
-                                     dates: List[datetime.date],
-                                     start_game_number: int) -> int:
-        """交流戦カードを日程に配置（他リーグのみ）"""
-        game_number = start_game_number
-        date_idx = 0
-
-        random.shuffle(cards)
-
-        for card in cards:
-            for g in range(card.games):
-                if date_idx < len(dates):
-                    date_str = dates[date_idx].strftime("%Y-%m-%d")
-
-                    # 同日に既に試合があるチームはスキップ
-                    games_on_date = [x for x in self.schedule.games if x.date == date_str]
-                    teams_playing = set()
-                    for x in games_on_date:
-                        teams_playing.add(x.home_team_name)
-                        teams_playing.add(x.away_team_name)
-
-                    if card.home_team not in teams_playing and card.away_team not in teams_playing:
-                        self.schedule.games.append(ScheduledGame(
-                            game_number=game_number, date=date_str,
-                            home_team_name=card.home_team, away_team_name=card.away_team
-                        ))
-                        game_number += 1
-
-                date_idx += 1
-
-        return game_number
 
     # ========================================
     # 天候・振替システム
@@ -383,7 +636,7 @@ class LeagueScheduleEngine:
 
         for game in games_today:
             if WeatherSystem.should_cancel_game(weather):
-                game.status = GameStatus.COMPLETED
+                game.status = GameStatus.CANCELLED
                 self.postponed_games.append(game)
                 cancelled_games.append(game)
 
@@ -404,14 +657,55 @@ class LeagueScheduleEngine:
         return rescheduled
 
     def _find_makeup_date(self, game: ScheduledGame) -> Optional[datetime.date]:
+        """延期試合の振替日を探す
+
+        ルール:
+        - 交流戦: 交流戦予備日（interleague_end + 1 ～ interleague_reserve_end）に振替
+        - リーグ戦: 元の日付以降の9月～で空きを探す
+        - 元の日付より前には振替しない
+        """
         try:
             original_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
         except:
             return None
 
-        # シーズン延長期間を探す
-        d = self.calendar.regular_season_end + datetime.timedelta(days=1)
-        while d <= self.calendar.max_season_end:
+        # 交流戦かどうか判定
+        is_interleague = (game.home_team_name in self.north_teams) != (game.away_team_name in self.north_teams)
+
+        if is_interleague:
+            # 交流戦は予備日に振替
+            d = self.calendar.interleague_end + datetime.timedelta(days=1)
+            while d <= self.calendar.interleague_reserve_end:
+                if d.weekday() != 0:  # 月曜以外
+                    if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
+                        return d
+                d += datetime.timedelta(days=1)
+            # 予備日に空きがない場合は9月以降で探す
+            september_start = datetime.date(self.year, 9, 1)
+            d = september_start
+            while d <= self.calendar.regular_season_end:
+                if d.weekday() != 0:
+                    if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
+                        return d
+                d += datetime.timedelta(days=1)
+        else:
+            # リーグ戦: 元の日付以降の9月～で探す
+            september_start = datetime.date(self.year, 9, 1)
+            # 元の日付と9月1日の遅い方から開始
+            search_start = max(original_date + datetime.timedelta(days=1), september_start)
+
+            d = search_start
+            while d <= self.calendar.regular_season_end:
+                if d.weekday() != 0:  # 月曜以外
+                    if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
+                        return d
+                d += datetime.timedelta(days=1)
+
+        # シーズン終了後〜CS前で探す（元の日付以降のみ）
+        d = max(self.calendar.regular_season_end + datetime.timedelta(days=1),
+                original_date + datetime.timedelta(days=1))
+        max_search = d + datetime.timedelta(days=30)
+        while d < max_search:
             if d.weekday() != 0:
                 if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
                     return d
@@ -436,8 +730,28 @@ class LeagueScheduleEngine:
         scheduled_games = [g for g in self.schedule.games if g.status == GameStatus.SCHEDULED]
         return len(scheduled_games) == 0 and len(self.postponed_games) == 0
 
+    def get_last_regular_season_game_date(self) -> datetime.date:
+        """全ての正規シーズン試合の最終日を取得"""
+        if not self.schedule.games:
+            return self.calendar.regular_season_end
+
+        last_date = self.calendar.regular_season_end
+        for game in self.schedule.games:
+            try:
+                game_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
+                if game_date > last_date:
+                    last_date = game_date
+            except:
+                continue
+        return last_date
+
     def get_postseason_start_date(self) -> datetime.date:
-        return self.calendar.cs_first_start
+        """CSの開始日を計算（最後の試合の1週間後）"""
+        last_game = self.get_last_regular_season_game_date()
+        # 最後の試合から1週間後
+        cs_start = last_game + datetime.timedelta(days=7)
+        # 元の予定より早い場合は元の予定を使用
+        return max(cs_start, self.calendar.cs_first_start)
 
     # ========================================
     # 二軍・三軍日程生成

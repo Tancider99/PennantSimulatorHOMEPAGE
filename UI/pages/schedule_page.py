@@ -138,12 +138,24 @@ class GameCalendarWidget(QCalendarWidget):
         if date in self.games_map:
             game = self.games_map[date]
             opponent = ""
-            if game.home_team_name == self.player_team_name: opponent = f"vs {game.away_team_name[:2]}"
-            elif game.away_team_name == self.player_team_name: opponent = f"@ {game.home_team_name[:2]}"
-            else: opponent = f"{game.away_team_name[:1]}-{game.home_team_name[:1]}"
+            # ホーム/ビジター情報付きで対戦相手を表示
+            if game.home_team_name == self.player_team_name:
+                opponent = f"vs {game.away_team_name[:3]}"  # ホーム
+            elif game.away_team_name == self.player_team_name:
+                opponent = f"@ {game.home_team_name[:3]}"   # ビジター
+            else:
+                opponent = f"{game.away_team_name[:1]}-{game.home_team_name[:1]}"
 
             bg_color = QColor(self.theme.bg_input); text_color = QColor(self.theme.text_secondary)
-            if game.is_completed:
+            status_text = ""
+
+            # 雨天中止チェック
+            is_cancelled = game.status == GameStatus.CANCELLED
+
+            if is_cancelled:
+                bg_color = QColor("#666666"); text_color = QColor("white")
+                status_text = "雨天中止"
+            elif game.is_completed:
                 is_win, is_draw = False, False
                 if self.player_team_name:
                     if game.home_team_name == self.player_team_name:
@@ -152,21 +164,25 @@ class GameCalendarWidget(QCalendarWidget):
                     elif game.away_team_name == self.player_team_name:
                         if game.away_score > game.home_score: is_win = True
                         elif game.away_score == game.home_score: is_draw = True
-                
+
                 if is_win: bg_color = QColor(self.theme.success); text_color = QColor("white")
                 elif is_draw: bg_color = QColor(self.theme.text_muted); text_color = QColor("white")
                 else: bg_color = QColor(self.theme.danger); text_color = QColor("white")
             else:
+                # 試合予定（未消化）
                 bg_color = QColor(self.theme.primary); text_color = QColor("white")
 
             info_rect = QRect(rect.left() + 2, rect.top() + 22, rect.width() - 4, 18)
             painter.fillRect(info_rect, bg_color)
             painter.setPen(text_color); font.setPointSize(9); painter.setFont(font)
             painter.drawText(info_rect, Qt.AlignCenter, opponent)
-            
-            if game.is_completed:
-                score_rect = QRect(rect.left() + 2, rect.top() + 42, rect.width() - 4, 16)
-                painter.setPen(QColor(self.theme.text_primary))
+
+            # スコアまたはステータス表示
+            score_rect = QRect(rect.left() + 2, rect.top() + 42, rect.width() - 4, 16)
+            painter.setPen(QColor(self.theme.text_primary))
+            if is_cancelled:
+                painter.drawText(score_rect, Qt.AlignCenter, status_text)
+            elif game.is_completed:
                 painter.drawText(score_rect, Qt.AlignCenter, f"{game.away_score}-{game.home_score}")
         painter.restore()
 

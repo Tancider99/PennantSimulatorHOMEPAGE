@@ -48,6 +48,7 @@ class GameStatus(Enum):
     SCHEDULED = "未消化"
     IN_PROGRESS = "試合中"
     COMPLETED = "終了"
+    CANCELLED = "雨天中止"
 
 class Hand(Enum):
     RIGHT = "右"
