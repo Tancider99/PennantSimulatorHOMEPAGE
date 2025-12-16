@@ -75,6 +75,8 @@ class Theme:
     silver: str = "#9da5b4"
     bronze: str = "#8f5e38"
     accent_gold: str = "#d65d0e"      # Alias
+    gradient_start: str = "#d65d0e"   # Orange Gradient
+    gradient_end: str = "#e67f33"
 
     # === UI Elements ===
     bg_overlay: str = "#000000dd"

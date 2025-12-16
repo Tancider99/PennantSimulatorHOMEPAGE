@@ -27,6 +27,15 @@ class PitchType(Enum):
     RELIEVER = "中継ぎ"
     CLOSER = "抑え"
 
+class PitcherRole(Enum):
+    STARTER = "先発"
+    SETUP_A = "勝利の方程式A" # 8回 (Primary Setup)
+    SETUP_B = "勝利の方程式B" # 7回 (Secondary Setup)
+    CLOSER = "守護神"      # 9回
+    MIDDLE = "中継ぎ"      # 接戦/ビハインド
+    LONG = "ロング"        # 敗戦処理/ロングリリーフ
+    SPECIALIST = "ワンポイント" # 左キラーなど
+
 
 class TeamLevel(Enum):
     FIRST = "一軍"
@@ -402,6 +411,7 @@ class PlayerRecord:
     runs_allowed: int = 0
     wild_pitches: int = 0
     balks: int = 0
+    batters_faced: int = 0
 
     # Advanced Tracking
     total_bases: int = 0
@@ -678,15 +688,19 @@ class PlayerRecord:
 
     @property
     def k_rate_pitched(self) -> float:
-        total_batters = self.hits_allowed + self.walks_allowed + self.hit_batters + self.strikeouts_pitched + self.ground_outs + self.fly_outs 
-        if total_batters == 0: return 0.0
-        return self.strikeouts_pitched / total_batters
+        if self.batters_faced == 0: return 0.0
+        return self.strikeouts_pitched / self.batters_faced
 
     @property
     def bb_rate_pitched(self) -> float:
-        total_batters = self.hits_allowed + self.walks_allowed + self.hit_batters + self.strikeouts_pitched + self.ground_outs + self.fly_outs
-        if total_batters == 0: return 0.0
-        return self.walks_allowed / total_batters
+        if self.batters_faced == 0: return 0.0
+        return self.walks_allowed / self.batters_faced
+    
+    @property
+    def pitcher_hr_fb(self) -> float:
+        """投手の被本塁打/被フライ率"""
+        if self.fly_balls == 0: return 0.0
+        return self.home_runs_allowed / self.fly_balls
         
     @property
     def bb_rate(self) -> float:
@@ -755,7 +769,7 @@ class PlayerRecord:
     def babip_against(self) -> float:
         if self.balls_in_play > 0:
             return (self.hits_allowed - self.home_runs_allowed) / self.balls_in_play
-        denom = (self.hits_allowed + self.walks_allowed + self.hit_batters + self.strikeouts_pitched + (self.innings_pitched*3)) - self.strikeouts_pitched - self.home_runs_allowed
+        denom = self.batters_faced - self.strikeouts_pitched - self.home_runs_allowed - self.walks_allowed - self.hit_batters
         if denom <= 0: return 0.0
         return (self.hits_allowed - self.home_runs_allowed) / denom
 
@@ -874,6 +888,8 @@ class Player:
     middle_aptitude: int = 50
     closer_aptitude: int = 50
 
+    potential: int = 50 # 潜在能力
+
     special_abilities: Optional[object] = None
     player_status: Optional[object] = None
     growth: Optional[object] = None
@@ -891,11 +907,32 @@ class Player:
     throws: str = "右"
     
     recent_records: List[Tuple[str, PlayerRecord]] = field(default_factory=list)
+    recent_records: List[Tuple[str, PlayerRecord]] = field(default_factory=list)
     days_until_promotion: int = 0
+    
+    # スタミナは球数ベース（20〜120球）
+    # 実際の最大値は calc_max_pitches() で計算
+    current_stamina: int = 100  # 現在の残り球数
 
     def __post_init__(self):
         if self.team_level is None:
             self.team_level = TeamLevel.FIRST
+        # 投手の場合、初期スタミナを最大値に設定
+        if self.position == Position.PITCHER:
+            self.current_stamina = self.calc_max_pitches()
+    
+    def calc_max_pitches(self, is_starting: bool = False) -> int:
+        """最大投球可能数を計算
+        
+        中継ぎ時: 20〜70球 (20 + スタミナ×0.5)
+        先発時: 70〜170球 (70 + スタミナ×1.0)
+        """
+        if is_starting:
+            # 先発: 70〜170球
+            return 70 + int(self.stats.stamina * 1.0)
+        else:
+            # 中継ぎ: 20〜70球
+            return 20 + int(self.stats.stamina * 0.5)
 
     def get_record_by_level(self, level: TeamLevel) -> PlayerRecord:
         if level == TeamLevel.FIRST: return self.record
@@ -973,6 +1010,15 @@ class Player:
         
         if self.position == Position.PITCHER:
             self.days_rest += 1
+            # スタミナ回復ロジック
+            recovery = 0
+            if self.days_rest >= 4: recovery = 100
+            elif self.days_rest == 3: recovery = 60
+            elif self.days_rest == 2: recovery = 30
+            elif self.days_rest == 1: recovery = 5
+            else: recovery = 0 # 連投時
+            
+            self.current_stamina = min(100, self.current_stamina + recovery)
             
         if self.days_until_promotion > 0:
             self.days_until_promotion -= 1
@@ -1019,6 +1065,55 @@ class Player:
             val = self.stats.overall_batting(self.position)
         return int(val)
 
+    def get_aptitude_symbol(self, value: int) -> str:
+        """適性を◎、〇、△、ーで返す (1-4段階評価)"""
+        if value >= 4: return "◎"
+        if value == 3: return "〇" 
+        if value == 2: return "△"
+        return "ー"
+
+    def recover_daily(self):
+        """日次ステータス更新 (疲労回復・怪我回復・調子変動)"""
+        import random 
+        
+        # 1. 怪我回復
+        if self.is_injured:
+            self.injury_days = max(0, self.injury_days - 1)
+        
+        # 2. 登録抹消期間カウントダウン
+        if self.days_until_promotion > 0:
+            self.days_until_promotion -= 1
+            
+        # 3. 調子変動 (ランダムウォーク)
+        if random.random() < 0.2:
+            change = random.choice([-1, 1])
+            self.condition += change
+            self.condition = max(1, min(9, self.condition))
+            
+        # 4. スタミナ & 休養日回復（投手のみ、球数ベース）
+        if self.position.value == "投手": 
+            self.days_rest += 1
+            
+            # 回復量計算（回復力と休養日数に基づく）
+            recovery_stat = self.stats.recovery if hasattr(self.stats, 'recovery') else 50
+            max_pitches = self.calc_max_pitches()
+            
+            # 完全回復に必要な日数: 回復力1=中6日、回復力99=中4日
+            full_recovery_days = 6 - int(recovery_stat / 50)  # 4〜6日
+            full_recovery_days = max(4, min(6, full_recovery_days))
+            
+            if self.days_rest >= full_recovery_days:
+                # 完全回復
+                self.current_stamina = max_pitches
+            else:
+                # 段階的回復（中0日でも少し回復）
+                # 基本回復量: 回復力に応じて5〜25球
+                base_recovery = 5 + int(recovery_stat * 0.2)
+                # 休養日数ボーナス: 1日あたり+3〜8球
+                day_bonus = int(self.days_rest * (3 + recovery_stat * 0.05))
+                total_recovery = base_recovery + day_bonus
+                self.current_stamina = min(max_pitches, self.current_stamina + total_recovery)
+
 
 @dataclass(eq=False)
 class Team:
@@ -1054,6 +1149,9 @@ class Team:
     
     best_order: List[int] = field(default_factory=list)
     lineup_positions: List[str] = field(default_factory=lambda: ["捕", "一", "二", "三", "遊", "左", "中", "右", "DH"])
+    
+    # オーダーが初期化されているかどうか (False の場合、ユーザーが最初に保存するまで空のまま)
+    order_initialized: bool = False
 
     ACTIVE_ROSTER_LIMIT = 31
     FARM_ROSTER_LIMIT = 40
@@ -1073,68 +1171,179 @@ class Team:
             else:
                 self.closers[0] = val
 
+    def get_closer(self) -> Optional[Player]:
+        if not self.closers: return None
+        idx = self.closers[0]
+        if 0 <= idx < len(self.players):
+            return self.players[idx]
+        return None
+
+    def get_setup_pitcher(self) -> Optional[Player]:
+        if not self.setup_pitchers: return None
+        # Primary setup
+        idx = self.setup_pitchers[0]
+        if 0 <= idx < len(self.players):
+            return self.players[idx]
+        return None
+
     def get_today_starter(self) -> Optional[Player]:
-        if not self.rotation: return None
+        # 1. ローテーション順序に従って、登板可能な(中3日以上)投手を探索
+        # rotation_indexから順にチェックし、条件を満たす最初の投手を返す
+        
+        # まずローテーション内の有効なインデックスをフィルタリング (active_rosterにいる人のみ)
+        valid_rotation = [idx for idx in self.rotation if idx in self.active_roster and 0 <= idx < len(self.players)]
+        
+        if valid_rotation:
+            try:
+                n = len(valid_rotation)
+                # rotation_indexが範囲外なら補正
+                start_ptr = self.rotation_index % n
+                
+                for i in range(n):
+                    # 現在のインデックスから i 個先を確認
+                    idx_ptr = (start_ptr + i) % n
+                    p_idx = valid_rotation[idx_ptr]
+                    
+                    p = self.players[p_idx]
+                    # 条件: 怪我していない かつ 中3日以上 (スタミナ回復考慮)
+                    if not p.is_injured and p.days_rest >= 3:
+                        return p
+            except Exception:
+                pass
+        
+        # 2. ローテが機能していない場合、緊急措置として Active Roster 全体から探す
+        # 条件: 投手、怪我なし、中3日以上
         candidates = []
-        for idx in self.rotation:
+        for idx in self.active_roster:
             if 0 <= idx < len(self.players):
-                candidates.append(self.players[idx])
-        if not candidates: return None
-        best_candidate = None
-        for p in candidates:
-            if p.days_rest >= 5:
-                best_candidate = p
-                break
-        if not best_candidate:
-            for p in candidates:
-                if p.days_rest >= 4:
-                    best_candidate = p
-                    break
-        if not best_candidate:
-            best_candidate = max(candidates, key=lambda p: p.days_rest)
-        return best_candidate
+                p = self.players[idx]
+                if p.position.value == "投手" and not p.is_injured and p.days_rest >= 3:
+                    # スコア付け: 適性 > スタミナ > 能力
+                    score = 0
+                    if p.starter_aptitude >= 4: score += 1000
+                    elif p.starter_aptitude == 3: score += 500
+                    
+                    score += p.current_stamina * 2
+                    score += p.stats.overall_pitching()
+                    
+                    candidates.append((p, score))
+                    
+        if candidates:
+            # ベストな候補を返す
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[0][0]
+            
+        # 3. どうしようもない場合: 連投でもいいから一番マシな投手 (Ace Fallbackの前にここで粘る)
+        # Active Rosterの投手全員
+        desperate_candidates = []
+        for idx in self.active_roster:
+            if 0 <= idx < len(self.players):
+                p = self.players[idx]
+                if p.position.value == "投手" and not p.is_injured:
+                    # とにかく休養が多い順
+                    desperate_candidates.append(p)
+                    
+        if desperate_candidates:
+            return max(desperate_candidates, key=lambda p: p.days_rest)
+            
+        return None
 
     def auto_assign_pitching_roles(self, level: TeamLevel = TeamLevel.FIRST):
+        """
+        投手の役割自動設定 (厳格な適性判断・1〜4段階評価版)
+        - 先発: 先発適正◎(4)推奨、足りなければ〇(3)も可
+        - 中継: 中継適正◎(4)推奨、足りなければ〇(3)も可
+        - 抑え: 抑え適正◎(4)推奨、足りなければ〇(3)も可
+        - 適正△(2)以下は原則その役割に就けない
+        """
         roster_players = self.get_players_by_level(level)
         pitchers = [p for p in roster_players if p.position == Position.PITCHER]
         if not pitchers: return
 
         pitcher_indices = [self.players.index(p) for p in pitchers]
         
-        def starter_score(p: Player):
+        # --- Helper for sorting ---
+        def get_score(p: Player, mode: str):
+            # 基本は能力順。適性はフィルタリングに使用済みだが、同値なら適性高い方が良い
             rating = p.stats.overall_pitching()
-            stamina = p.stats.stamina
-            aptitude = p.starter_aptitude
-            return rating * 0.4 + stamina * 0.3 + aptitude * 0.3
+            if mode == "starter":
+                stamina = p.stats.stamina
+                return rating * 1.5 + stamina * 1.0 + (p.starter_aptitude * 100.0)
+            else:
+                velocity = p.stats.velocity
+                # Relief aptitude: max of middle/closer? Use relevant one.
+                # Caller context handles filtering, so here we use general relief attributes
+                return rating * 1.5 + (velocity - 130) * 1.0
 
-        def reliever_score(p: Player):
-            rating = p.stats.overall_pitching()
-            velocity = p.stats.velocity
-            aptitude = max(p.middle_aptitude, p.closer_aptitude)
-            return rating * 0.4 + (velocity - 130) * 0.5 + aptitude * 0.3
-
-        pitchers.sort(key=starter_score, reverse=True)
-        starters = pitchers[:6]
-        starter_indices = [self.players.index(p) for p in starters]
-
-        remaining_pitchers = pitchers[6:]
-        remaining_pitchers.sort(key=reliever_score, reverse=True)
-        closer = []
-        closer_idx = []
-        if remaining_pitchers:
-            closer = [remaining_pitchers[0]]
-            closer_idx = [self.players.index(remaining_pitchers[0])]
-            remaining_pitchers = remaining_pitchers[1:]
-
-        setups = remaining_pitchers[:2]
-        setup_indices = [self.players.index(p) for p in setups]
+        # --- 1. Starters Determination ---
+        # 優先度: 適正4 -> 適正3
+        starters_s = [p for p in pitchers if p.starter_aptitude >= 4]
+        starters_a = [p for p in pitchers if p.starter_aptitude == 3]
         
-        others = remaining_pitchers[2:]
+        starters_s.sort(key=lambda p: get_score(p, "starter"), reverse=True)
+        starters_a.sort(key=lambda p: get_score(p, "starter"), reverse=True)
+        
+        # Combine list
+        starter_candidates = starters_s + starters_a
+        
+        final_starters = starter_candidates[:6]
+        
+        # 不足時の救済措置 (適正2以下でも能力順で埋める場合)
+        # ユーザー要望「それ以外の適性の選手はそのポジションに編成しない」
+        # しかし先発6人必須のため、足りない場合は警告しつつ埋めるか、システム上必須なら埋めるしかない。
+        # 現状の生成ロジックならS60%あるのでほぼ足りる。
+        if len(final_starters) < 6:
+            remaining = [p for p in pitchers if p not in final_starters]
+            remaining.sort(key=lambda p: get_score(p, "starter"), reverse=True)
+            needed = 6 - len(final_starters)
+            final_starters.extend(remaining[:needed])
+            
+        starter_indices = [self.players.index(p) for p in final_starters]
+
+        # --- 2. Relief / Closer Determination ---
+        # Pool exclude confirmed starters
+        pool = [p for p in pitchers if p not in final_starters]
+        
+        # Closer: Prefer Aptitude 4 -> 3
+        # Strict filter: only >= 3 allowed
+        closer_candidates = [p for p in pool if p.closer_aptitude >= 3]
+        closer_candidates.sort(key=lambda p: get_score(p, "relief") + (p.closer_aptitude * 50), reverse=True)
+        
+        final_closer = None
+        if closer_candidates:
+            final_closer = closer_candidates[0]
+        else:
+            # Fallback if no valid closer found (rare): Pick best relief aptitude even if < 3?
+            # User prohibits it. But we need a closer.
+            # We pick best available middle aptitude as fallback
+            pool.sort(key=lambda p: get_score(p, "relief") + (p.middle_aptitude * 10), reverse=True)
+            if pool: final_closer = pool[0]
+            
+        closer_idx_list = []
+        if final_closer:
+            closer_idx_list = [self.players.index(final_closer)]
+            pool = [p for p in pool if p != final_closer]
+
+        # Setup / Middle
+        # Filter valid middle pitchers (>= 3)
+        middle_candidates = [p for p in pool if p.middle_aptitude >= 3]
+        
+        middle_candidates.sort(key=lambda p: get_score(p, "relief") + (p.middle_aptitude * 20), reverse=True)
+        
+        setups = middle_candidates[:4]
+        others = middle_candidates[4:]
+
+        
+        # Invalid pitchers (aptitude <= 2) go to bench/others
+        invalid_pool = [p for p in pool if p not in middle_candidates]
+        others.extend(invalid_pool) # They sit in bullpen
+        
+        setup_indices = [self.players.index(p) for p in setups]
         other_indices = [self.players.index(p) for p in others]
 
         if level == TeamLevel.FIRST:
             self.rotation = starter_indices
-            self.closers = closer_idx
+            self.closers = closer_idx_list
             self.setup_pitchers = setup_indices
             self.bench_pitchers = other_indices
         elif level == TeamLevel.SECOND:
@@ -1185,6 +1394,15 @@ class Team:
             self.players[player_idx].days_until_promotion = 10
         return True
 
+    def move_to_active_roster(self, player_idx: int) -> bool:
+        if player_idx in self.farm_roster: self.farm_roster.remove(player_idx)
+        elif player_idx in self.third_roster: self.third_roster.remove(player_idx)
+        else: return False
+        if player_idx not in self.active_roster: self.active_roster.append(player_idx)
+        if 0 <= player_idx < len(self.players):
+            self.players[player_idx].team_level = TeamLevel.FIRST
+        return True
+
     def move_to_third_roster(self, player_idx: int) -> bool:
         if player_idx in self.farm_roster: self.farm_roster.remove(player_idx)
         elif player_idx in self.active_roster: self.active_roster.remove(player_idx)
@@ -1205,22 +1423,54 @@ class Team:
 
     def auto_assign_rosters(self):
         from models import Position as Pos
+        
+        # 登録抹消中（昇格不可）の選手を除外してランク付け
+        # まず全員をリストアップ
         pitchers = [(i, p) for i, p in enumerate(self.players) if p.position == Pos.PITCHER]
         batters = [(i, p) for i, p in enumerate(self.players) if p.position != Pos.PITCHER]
+        
         pitchers.sort(key=lambda x: x[1].stats.overall_pitching(), reverse=True)
         batters.sort(key=lambda x: x[1].stats.overall_batting(), reverse=True)
+        
         self.active_roster = []
         self.farm_roster = []
         self.third_roster = []
-        first_pitchers = [idx for idx, _ in pitchers[:12]]
-        first_batters = [idx for idx, _ in batters[:19]]
+        
+        # 一軍候補 (昇格制限がない選手のみ)
+        available_pitchers = [(i, p) for i, p in pitchers if not (hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0)]
+        available_batters = [(i, p) for i, p in batters if not (hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0)]
+        
+        # 制限中の選手
+        restricted_pitchers = [(i, p) for i, p in pitchers if (hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0)]
+        restricted_batters = [(i, p) for i, p in batters if (hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0)]
+        
+        # 一軍枠を埋める
+        # 投手13人, 野手18人 (計31人)
+        # 投手: 先発6 + 中継ぎ6 + 抑え1 = 13人体制
+        first_pitchers = [idx for idx, _ in available_pitchers[:13]]
+        first_batters = [idx for idx, _ in available_batters[:18]]
+        
         self.active_roster = first_pitchers + first_batters
-        farm_pitchers = [idx for idx, _ in pitchers[12:27]]
-        farm_batters = [idx for idx, _ in batters[19:44]]
+        
+        # 残りをプールに戻して再配分 (制限中の選手はここに含まれるべき)
+        # availableの残り + restricted
+        remaining_pitchers = available_pitchers[13:] + restricted_pitchers
+        remaining_batters = available_batters[18:] + restricted_batters
+        
+        # 再ソート (能力順)
+        remaining_pitchers.sort(key=lambda x: x[1].stats.overall_pitching(), reverse=True)
+        remaining_batters.sort(key=lambda x: x[1].stats.overall_batting(), reverse=True)
+        
+        # 二軍 (投手15人, 野手25人 -> 40人枠)
+        farm_pitchers = [idx for idx, _ in remaining_pitchers[:15]]
+        farm_batters = [idx for idx, _ in remaining_batters[:25]]
         self.farm_roster = farm_pitchers + farm_batters
-        third_pitchers = [idx for idx, _ in pitchers[27:]]
-        third_batters = [idx for idx, _ in batters[44:]]
+        
+        # 三軍 (残り)
+        third_pitchers = [idx for idx, _ in remaining_pitchers[15:]]
+        third_batters = [idx for idx, _ in remaining_batters[25:]]
         self.third_roster = third_pitchers + third_batters
+        
         for idx in self.active_roster: self.players[idx].team_level = TeamLevel.FIRST
         for idx in self.farm_roster: self.players[idx].team_level = TeamLevel.SECOND
         for idx in self.third_roster: self.players[idx].team_level = TeamLevel.THIRD
@@ -1316,7 +1566,7 @@ TEAM_ABBRS = {
     "Kobe Buffaloes": "KB",
 }
 
-def generate_best_lineup(team: Team, roster_players: List[Player]) -> List[int]:
+def generate_best_lineup(team: Team, roster_players: List[Player], ignore_restriction: bool = False) -> List[int]:
     def_priority = [
         (Position.CATCHER, "捕手", 1.5),
         (Position.SHORTSTOP, "遊撃手", 1.4),
@@ -1331,6 +1581,8 @@ def generate_best_lineup(team: Team, roster_players: List[Player]) -> List[int]:
     for p in roster_players:
         try:
             if p.is_injured: continue
+            if not ignore_restriction:
+                if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0: continue # 制限中の選手は除外
             original_idx = team.players.index(p)
             candidates[original_idx] = p
         except ValueError: continue

@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from UI.theme import get_theme
 from UI.widgets.panels import ToolbarPanel
-from UI.widgets.tables import SortableTableWidgetItem, RatingDelegate
-from models import PlayerStats, TeamLevel
+from UI.widgets.tables import SortableTableWidgetItem, RatingDelegate, DefenseDelegate, DraggableTableWidget
+from models import TeamLevel
 
 # MIME Types
 MIME_PLAYER_DATA = "application/x-pennant-player-data"
@@ -39,221 +39,9 @@ def get_pos_color(pos: str) -> str:
     if pos == "DH": return "#e74c3c"
     return "#7f8c8d"
 
-class DefenseDelegate(QStyledItemDelegate):
-    """Custom delegate to draw Main Position Large and Sub Positions Small"""
-    def __init__(self, theme, parent=None):
-        super().__init__(parent)
-        self.theme = theme
 
-    def paint(self, painter, option, index):
-        painter.save()
-        
-        raw_data = index.data(Qt.DisplayRole)
-        text = str(raw_data) if raw_data is not None else ""
 
-        if "|" in text:
-            parts = text.split("|", 1)
-            main_pos = parts[0]
-            sub_pos = parts[1] if len(parts) > 1 else ""
-        else:
-            main_pos, sub_pos = text, ""
 
-        rect = option.rect
-        
-        # 1. Main Position (Large)
-        if option.state & QStyle.StateFlag.State_Selected:
-             painter.setPen(QColor(self.theme.text_primary)) 
-        else:
-             fg_color = index.model().data(index, Qt.ForegroundRole)
-             if isinstance(fg_color, QBrush): 
-                 fg_color = fg_color.color()
-             painter.setPen(fg_color if fg_color else QColor(self.theme.text_primary))
-             
-        font = painter.font()
-        font.setPointSize(12) 
-        font.setBold(True)
-        painter.setFont(font)
-        
-        fm = painter.fontMetrics()
-        main_width = fm.horizontalAdvance(main_pos)
-        
-        main_rect = rect.adjusted(4, 0, 0, 0)
-        painter.drawText(main_rect, Qt.AlignLeft | Qt.AlignVCenter, main_pos)
-        
-        # 2. Sub Positions (Small)
-        if sub_pos:
-            font.setPointSize(9)
-            font.setBold(False)
-            painter.setFont(font)
-            
-            if option.state & QStyle.StateFlag.State_Selected:
-                painter.setPen(QColor(self.theme.text_secondary))
-            else:
-                painter.setPen(QColor(self.theme.text_secondary))
-            
-            sub_rect = rect.adjusted(main_width + 10, 0, 0, 0)
-            painter.drawText(sub_rect, Qt.AlignLeft | Qt.AlignVCenter, sub_pos)
-        
-        # 3. Draw Bottom Border manually
-        painter.setPen(QPen(QColor(self.theme.border_muted), 1))
-        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
-            
-        painter.restore()
-
-class DraggableTableWidget(QTableWidget):
-    """Enhanced TableWidget supporting Drag & Drop for Order Management"""
-    
-    items_changed = Signal()
-    position_swapped = Signal(int, int)
-
-    def __init__(self, mode="batter", parent=None):
-        super().__init__(parent)
-        self.mode = mode 
-        self.setDragEnabled(True)
-        self.setAcceptDrops(True)
-        self.setViewportMargins(0, 0, 0, 0)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.setDragDropMode(QAbstractItemView.DragDrop)
-        self.setDefaultDropAction(Qt.MoveAction)
-        self.verticalHeader().setVisible(False)
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.horizontalHeader().setStretchLastSection(True)
-        self.setShowGrid(False)
-        self.setFocusPolicy(Qt.ClickFocus)
-        self.theme = get_theme()
-        
-        self.setSortingEnabled(False)
-        
-        if "farm" in mode:
-            header = self.horizontalHeader()
-            header.setSectionsClickable(True)
-            header.setSortIndicatorShown(True)
-            header.sectionClicked.connect(self._on_header_clicked)
-
-    def _on_header_clicked(self, logicalIndex):
-        header_text = self.horizontalHeaderItem(logicalIndex).text()
-        if header_text in ["選手名", "適正", "守備適正"]:
-            return
-
-        header = self.horizontalHeader()
-        current_column = header.sortIndicatorSection()
-        current_order = header.sortIndicatorOrder()
-        
-        if current_column != logicalIndex:
-            new_order = Qt.DescendingOrder
-        else:
-            if current_order == Qt.DescendingOrder:
-                new_order = Qt.AscendingOrder
-            else:
-                new_order = Qt.DescendingOrder
-
-        self.sortItems(logicalIndex, new_order)
-        header.setSortIndicator(logicalIndex, new_order)
-
-    def startDrag(self, supportedActions):
-        item = self.currentItem()
-        if not item: return
-
-        row = item.row()
-        col = item.column()
-        player_idx = item.data(ROLE_PLAYER_IDX)
-        
-        mime = QMimeData()
-        data = QByteArray()
-        stream = QDataStream(data, QIODevice.WriteOnly)
-        
-        is_pos_swap = (self.mode == "lineup" and col == 1)
-        
-        if is_pos_swap:
-            stream.writeInt32(row)
-            mime.setData(MIME_POS_SWAP, data)
-            text = item.text()
-            pixmap = self._create_drag_pixmap(text, is_pos=True)
-        else:
-            if player_idx is None: return
-            stream.writeInt32(player_idx)
-            stream.writeInt32(row)
-            mime.setData(MIME_PLAYER_DATA, data)
-            
-            if self.mode == "lineup": name_col = 3 
-            elif self.mode == "bench": name_col = 2 
-            elif self.mode == "farm_batter": name_col = 1 
-            elif self.mode in ["rotation", "bullpen"]: name_col = 2 
-            elif self.mode == "farm_pitcher": name_col = 2 
-            else: name_col = 1
-            
-            name_item = self.item(row, name_col)
-            name_text = name_item.text() if name_item else "Player"
-            pixmap = self._create_drag_pixmap(name_text, is_pos=False)
-
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
-        drag.exec(Qt.MoveAction)
-
-    def _create_drag_pixmap(self, text, is_pos=False):
-        width = 40 if is_pos else 200
-        height = 40
-        pixmap = QPixmap(width, height)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        bg_color = QColor("#222222")
-        if is_pos:
-            bg_color = QColor("#c0392b") 
-
-        painter.setBrush(bg_color)
-        painter.setPen(QPen(QColor("#555555"), 1))
-        painter.drawRect(0, 0, width, height)
-        
-        painter.setPen(Qt.white)
-        font = QFont("Yu Gothic UI", 11, QFont.Bold)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, text)
-        painter.end()
-        return pixmap
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat(MIME_PLAYER_DATA) or event.mimeData().hasFormat(MIME_POS_SWAP):
-            event.accept()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasFormat(MIME_PLAYER_DATA) or event.mimeData().hasFormat(MIME_POS_SWAP):
-            event.setDropAction(Qt.MoveAction)
-            event.accept()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event):
-        pos = event.position().toPoint()
-        target_item = self.itemAt(pos)
-        target_row = target_item.row() if target_item else self.rowCount() - 1
-        if target_row < 0: target_row = 0
-
-        if event.mimeData().hasFormat(MIME_POS_SWAP):
-            if self.mode != "lineup": return
-            data = event.mimeData().data(MIME_POS_SWAP)
-            stream = QDataStream(data, QIODevice.ReadOnly)
-            source_row = stream.readInt32()
-            if source_row != target_row:
-                self.position_swapped.emit(source_row, target_row)
-            event.accept()
-            
-        elif event.mimeData().hasFormat(MIME_PLAYER_DATA):
-            data = event.mimeData().data(MIME_PLAYER_DATA)
-            stream = QDataStream(data, QIODevice.ReadOnly)
-            player_idx = stream.readInt32()
-            
-            self.dropped_player_idx = player_idx
-            self.dropped_target_row = target_row
-            
-            event.accept()
-            self.items_changed.emit()
 
 class OrderPage(QWidget):
     """Redesigned Order Page with DH, Color Coding, and Advanced Filters"""
@@ -275,6 +63,10 @@ class OrderPage(QWidget):
         self.has_unsaved_changes = False
         
         self._setup_ui()
+
+    def refresh(self):
+        """外部から画面更新を要求するメソッド"""
+        self._load_team_data()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -317,9 +109,20 @@ class OrderPage(QWidget):
 
         toolbar.add_stretch()
         
+        # 自動編成優先度選択
+        priority_label = QLabel("自動編成:")
+        priority_label.setStyleSheet(f"color: {self.theme.text_secondary}; margin-right: 4px;")
+        toolbar.add_widget(priority_label)
+        
+        self.priority_combo = QComboBox()
+        self.priority_combo.addItems(["能力優先", "調子優先"])
+        self.priority_combo.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 4px 8px; min-width: 80px;")
+        self.priority_combo.currentIndexChanged.connect(self._on_priority_changed)
+        toolbar.add_widget(self.priority_combo)
+        
         auto_btn = QPushButton("自動編成")
         auto_btn.setCursor(Qt.PointingHandCursor)
-        auto_btn.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary}; padding: 6px 12px; border: 1px solid {self.theme.border}; border-radius: 4px;")
+        auto_btn.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary}; padding: 6px 12px; border: 1px solid {self.theme.border}; border-radius: 4px; margin-left: 8px;")
         auto_btn.clicked.connect(self._auto_fill)
         toolbar.add_widget(auto_btn)
 
@@ -504,7 +307,7 @@ class OrderPage(QWidget):
 
         if mode == "lineup":
             cols = ["順", "守", "調", "選手名", "ミ", "パ", "走", "肩", "守", "適正", "総合"]
-            widths = [30, 40, 30, 130, 35, 35, 35, 35, 35, 80, 45]
+            widths = [30, 40, 50, 130, 35, 35, 35, 35, 35, 80, 45]
             table.position_swapped.connect(self._on_pos_swapped)
             for c in [4, 5, 6, 7, 8]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
@@ -512,27 +315,27 @@ class OrderPage(QWidget):
             
         elif mode == "bench":
             cols = ["適性", "調", "選手名", "ミ", "パ", "走", "肩", "守", "適正", "総合"]
-            widths = [70, 30, 130, 35, 35, 35, 35, 35, 80, 45]
+            widths = [70, 50, 130, 35, 35, 35, 35, 35, 80, 45]
             for c in [3, 4, 5, 6, 7]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
             table.setItemDelegateForColumn(8, self.defense_delegate)
 
         elif mode == "farm_batter":
             cols = ["調", "選手名", "年齢", "ミ", "パ", "走", "肩", "守", "守備適正", "総合"]
-            widths = [30, 130, 40, 35, 35, 35, 35, 35, 80, 45]
+            widths = [50, 130, 40, 35, 35, 35, 35, 35, 80, 45]
             for c in [3, 4, 5, 6, 7]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
             table.setItemDelegateForColumn(8, self.defense_delegate)
 
         elif mode == "rotation" or mode == "bullpen":
             cols = ["役", "調", "選手名", "球速", "コ", "ス", "変", "先", "中", "抑", "総合"]
-            widths = [40, 30, 130, 50, 35, 35, 35, 35, 35, 35, 45]
+            widths = [40, 50, 130, 50, 35, 35, 35, 35, 35, 35, 45]
             for c in [4, 5, 6]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
 
         elif mode == "farm_pitcher":
             cols = ["タイプ", "調", "選手名", "年齢", "球速", "コ", "ス", "変", "先", "中", "抑", "総合"]
-            widths = [45, 30, 130, 40, 50, 35, 35, 35, 35, 35, 35, 45]
+            widths = [45, 50, 130, 40, 50, 35, 35, 35, 35, 35, 35, 45]
             for c in [5, 6, 7]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
 
@@ -604,6 +407,13 @@ class OrderPage(QWidget):
         self.game_state = game_state
         if not game_state: return
         
+        # 優先度コンボボックスをgame_stateと同期
+        if hasattr(game_state, 'auto_order_priority'):
+            if game_state.auto_order_priority == "condition":
+                self.priority_combo.setCurrentIndex(1)
+            else:
+                self.priority_combo.setCurrentIndex(0)
+        
         if game_state.player_team:
             self.current_team = game_state.player_team
             self.team_name_label.setText(self.current_team.name)
@@ -615,6 +425,14 @@ class OrderPage(QWidget):
         else:
             self.current_team = None
             self.team_name_label.setText("チーム選択なし")
+    
+    def _on_priority_changed(self, index):
+        """優先度選択が変更されたときにgame_stateに反映"""
+        if self.game_state:
+            if index == 1:
+                self.game_state.auto_order_priority = "condition"
+            else:
+                self.game_state.auto_order_priority = "ability"
 
     def _ensure_lists_initialized(self):
         team = self.current_team
@@ -696,6 +514,9 @@ class OrderPage(QWidget):
 
         # --- ロースター変更処理（登録抹消・昇格） ---
         
+        # 初回保存かどうか（初回は降格ペナルティなし）
+        is_first_save = not getattr(t, 'order_initialized', True)
+        
         # 現在の一軍メンバーセット
         old_roster_set = set(t.active_roster)
         
@@ -703,12 +524,16 @@ class OrderPage(QWidget):
         new_roster_set = active_ids # 上で作成済み
         
         # 1. 登録抹消（二軍降格）処理
-        # 元々一軍にいたが、新編成で外れた選手 -> 10日間の再登録不可ペナルティ
+        # 元々一軍にいたが、新編成で外れた選手
         demoted = old_roster_set - new_roster_set
         for p_idx in demoted:
             if 0 <= p_idx < len(t.players):
                 p = t.players[p_idx]
-                p.days_until_promotion = 10  # ★10日間の再登録禁止
+                
+                # 初回保存時は降格ペナルティなし（単純にファームへ移動のみ）
+                if not is_first_save:
+                    p.days_until_promotion = 10  # 10日間の再登録禁止
+                
                 p.team_level = TeamLevel.SECOND
                 
                 # リスト更新
@@ -741,8 +566,12 @@ class OrderPage(QWidget):
         t.setup_pitchers = list(self.edit_state['setup_pitchers'])
         t.closers = list(self.edit_state['closers'])
         
+        # 初回保存でオーダー初期化フラグを立てる
+        t.order_initialized = True
+        
         self.order_saved.emit()
         self._load_team_data() # 状態リセット
+        self._refresh_all() # 画面更新
         self._update_status_label()
         QMessageBox.information(self, "保存完了", "オーダーを保存しました。\n一軍から外れた選手は10日間再登録できません。")
 
@@ -850,7 +679,10 @@ class OrderPage(QWidget):
         # ★登録抹消中（再登録待機期間）のチェック
         if hasattr(player, 'days_until_promotion') and player.days_until_promotion > 0:
             item.setText(f"抹{player.days_until_promotion}") # "抹消"だと幅をとるので短縮
-            item.setForeground(QColor("#7f8c8d")) # グレー
+            item.setForeground(QColor("#e74c3c")) # 赤色で強調
+            font = QFont()
+            font.setBold(True)
+            item.setFont(font)
             item.setToolTip(f"出場選手登録抹消中: 再登録まであと{player.days_until_promotion}日")
             item.setData(Qt.UserRole, -99)
             return item
@@ -1116,12 +948,12 @@ class OrderPage(QWidget):
             table.setItem(i, 6, self._create_item(p.stats.stamina, rank_color=True))
             table.setItem(i, 7, self._create_item(p.stats.stuff, rank_color=True))
             
-            st = "◎" if p.pitch_type.value == "先発" else "△"
-            rl = "◎" if p.pitch_type.value == "中継ぎ" else "△"
-            cl = "◎" if p.pitch_type.value == "抑え" else "△"
-            table.setItem(i, 8, self._create_item(st, sort_val=2 if st=="◎" else 1, text_color=row_color))
-            table.setItem(i, 9, self._create_item(rl, sort_val=2 if rl=="◎" else 1, text_color=row_color))
-            table.setItem(i, 10, self._create_item(cl, sort_val=2 if cl=="◎" else 1, text_color=row_color))
+            st = p.get_aptitude_symbol(p.starter_aptitude)
+            rl = p.get_aptitude_symbol(p.middle_aptitude)
+            cl = p.get_aptitude_symbol(p.closer_aptitude)
+            table.setItem(i, 8, self._create_item(st, sort_val=p.starter_aptitude, text_color=row_color))
+            table.setItem(i, 9, self._create_item(rl, sort_val=p.middle_aptitude, text_color=row_color))
+            table.setItem(i, 10, self._create_item(cl, sort_val=p.closer_aptitude, text_color=row_color))
             table.setItem(i, 11, self._create_item(f"★{p.overall_rating}", is_star=True))
 
             for c in range(table.columnCount()):
@@ -1143,12 +975,12 @@ class OrderPage(QWidget):
         table.setItem(row, start_col+4, self._create_item(p.stats.stamina, rank_color=True))
         table.setItem(row, start_col+5, self._create_item(p.stats.stuff, rank_color=True))
         
-        st = "◎" if p.pitch_type.value == "先発" else "△"
-        rl = "◎" if p.pitch_type.value == "中継ぎ" else "△"
-        cl = "◎" if p.pitch_type.value == "抑え" else "△"
-        table.setItem(row, start_col+6, self._create_item(st, text_color=row_color))
-        table.setItem(row, start_col+7, self._create_item(rl, text_color=row_color))
-        table.setItem(row, start_col+8, self._create_item(cl, text_color=row_color))
+        st = p.get_aptitude_symbol(p.starter_aptitude)
+        rl = p.get_aptitude_symbol(p.middle_aptitude)
+        cl = p.get_aptitude_symbol(p.closer_aptitude)
+        table.setItem(row, start_col+6, self._create_item(st, sort_val=p.starter_aptitude, text_color=row_color))
+        table.setItem(row, start_col+7, self._create_item(rl, sort_val=p.middle_aptitude, text_color=row_color))
+        table.setItem(row, start_col+8, self._create_item(cl, sort_val=p.closer_aptitude, text_color=row_color))
         table.setItem(row, start_col+9, self._create_item(f"★{p.overall_rating}", is_star=True))
 
         for c in range(table.columnCount()):

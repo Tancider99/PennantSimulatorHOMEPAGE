@@ -673,8 +673,19 @@ class HomePage(ContentPanel):
         batters = [p for p in team.players if p.position.value != "投手" and not p.is_developmental]
         pitchers = [p for p in team.players if p.position.value == "投手" and not p.is_developmental]
 
-        # Batting average
-        batters_sorted = sorted(batters, key=lambda p: p.record.batting_average, reverse=True)
+        # Games Played
+        team_games = team.wins + team.losses + team.draws
+        if team_games == 0: team_games = 1 # Avoid division by zero start of season
+
+        # Batting average (Qualify: PA >= 3.1 * Team Games)
+        qualified_batters = [p for p in batters if p.record.plate_appearances >= team_games * 3.1]
+        # If no one qualifies (early season), maybe show top by PA? Or just allow all.
+        # Strict regulation implies showing nothing or strict.
+        # Fallback to top 3 by PA if qualified < 3? No, keep strict.
+        
+        target_batters = qualified_batters if qualified_batters else batters
+        batters_sorted = sorted(target_batters, key=lambda p: p.record.batting_average, reverse=True)
+        
         self.avg_leaders.set_leaders([
             (p.name, f".{int(p.record.batting_average * 1000):03d}" if p.record.at_bats > 0 else ".---")
             for p in batters_sorted[:3]
@@ -686,10 +697,11 @@ class HomePage(ContentPanel):
             (p.name, p.record.home_runs) for p in hr_sorted[:3]
         ])
 
-        # ERA
-        # 規定回数などのフィルタを入れるとよりリアルだが、まずは投球回0より大きい選手でソート
-        pitchers_with_innings = [p for p in pitchers if p.record.innings_pitched > 0]
-        pitchers_sorted_era = sorted(pitchers_with_innings, key=lambda p: p.record.era)
+        # ERA (Qualify: IP >= Team Games)
+        qualified_pitchers = [p for p in pitchers if p.record.innings_pitched >= team_games * 1.0]
+        target_pitchers = qualified_pitchers if qualified_pitchers else [p for p in pitchers if p.record.innings_pitched > 0]
+        
+        pitchers_sorted_era = sorted(target_pitchers, key=lambda p: p.record.era)
         
         self.era_leaders.set_leaders([
             (p.name, f"{p.record.era:.2f}")

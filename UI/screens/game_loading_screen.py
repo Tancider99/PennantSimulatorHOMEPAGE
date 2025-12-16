@@ -44,6 +44,7 @@ class GameLoadingScreen(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False) # Hide percent text
         self.progress_bar.setFixedWidth(340)
         self.progress_bar.setStyleSheet("""
             QProgressBar {

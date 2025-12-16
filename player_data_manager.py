@@ -341,7 +341,73 @@ class PlayerDataManager:
             player = self.dict_to_player(player_data)
             team.players.append(player)
         
+        # ★ロースターリストを選手のteam_levelに基づいて構築
+        self._rebuild_roster_lists(team)
+        
         return team
+    
+    def _rebuild_roster_lists(self, team: Team):
+        """選手のteam_level属性に基づいてactive_roster/farm_roster/third_rosterを構築し、投手役割も設定"""
+        team.active_roster = []
+        team.farm_roster = []
+        team.third_roster = []
+        
+        for idx, player in enumerate(team.players):
+            if player.team_level == TeamLevel.FIRST:
+                team.active_roster.append(idx)
+            elif player.team_level == TeamLevel.SECOND:
+                team.farm_roster.append(idx)
+            elif player.team_level == TeamLevel.THIRD:
+                team.third_roster.append(idx)
+            else:
+                # team_levelが設定されていない場合はデフォルトで二軍
+                team.farm_roster.append(idx)
+        
+        # 一軍の構成チェック: サイズと投手・野手バランス
+        active_pitchers = [i for i in team.active_roster if team.players[i].position == Position.PITCHER]
+        active_batters = [i for i in team.active_roster if team.players[i].position != Position.PITCHER]
+        
+        # 理想: 投手15人、野手16人 (計31人)
+        # 許容範囲: 投手11-17人、野手12-20人
+        needs_rebalance = (
+            len(team.active_roster) < 20 or 
+            len(team.active_roster) > 35 or
+            len(active_pitchers) < 11 or 
+            len(active_pitchers) > 17 or
+            len(active_batters) < 12
+        )
+        
+        if needs_rebalance:
+            # 全選手を能力順に再配分
+            pitchers = [(i, p) for i, p in enumerate(team.players) if p.position == Position.PITCHER]
+            batters = [(i, p) for i, p in enumerate(team.players) if p.position != Position.PITCHER]
+            
+            pitchers.sort(key=lambda x: x[1].stats.overall_pitching(), reverse=True)
+            batters.sort(key=lambda x: x[1].stats.overall_batting(), reverse=True)
+            
+            # 一軍: 投手15人, 野手16人 (計31人)
+            team.active_roster = [idx for idx, _ in pitchers[:15]] + [idx for idx, _ in batters[:16]]
+            
+            # 二軍: 投手15人, 野手25人
+            remaining_pitchers = pitchers[15:]
+            remaining_batters = batters[16:]
+            team.farm_roster = [idx for idx, _ in remaining_pitchers[:15]] + [idx for idx, _ in remaining_batters[:25]]
+            
+            # 三軍: 残り
+            team.third_roster = [idx for idx, _ in remaining_pitchers[15:]] + [idx for idx, _ in remaining_batters[25:]]
+            
+            # team_levelを更新
+            for idx in team.active_roster:
+                team.players[idx].team_level = TeamLevel.FIRST
+            for idx in team.farm_roster:
+                team.players[idx].team_level = TeamLevel.SECOND
+            for idx in team.third_roster:
+                team.players[idx].team_level = TeamLevel.THIRD
+        
+        # 投手役割の設定（ローテーション、セットアップ、クローザー）
+        team.auto_assign_pitching_roles(TeamLevel.FIRST)
+        team.auto_assign_pitching_roles(TeamLevel.SECOND)
+        team.auto_assign_pitching_roles(TeamLevel.THIRD)
     
     def save_team(self, team: Team) -> bool:
         """球団データを個別ファイルに保存

@@ -180,9 +180,10 @@ class LoadingScreen(QWidget):
         """)
         progress_layout.addWidget(self.progress_bar)
 
-        # Percentage
+        # Percentage (Hidden)
         self.percent_label = QLabel("0%")
         self.percent_label.setAlignment(Qt.AlignCenter)
+        self.percent_label.setVisible(False) # Hide percent display
         self.percent_label.setStyleSheet("""
             font-size: 11px;
             font-weight: 500;

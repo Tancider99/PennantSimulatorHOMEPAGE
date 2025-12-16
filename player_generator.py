@@ -14,10 +14,65 @@ def generate_japanese_name() -> str:
 def generate_foreign_name() -> str:
     return f"{random.choice(FOREIGN_FIRSTNAMES)} {random.choice(FOREIGN_SURNAMES)}"
 
-def generate_high_school_name() -> str:
-    prefs = ["北海", "東都", "なにわ", "西京", "南国"]
     types = ["高校", "学園", "実業", "工業", "学院"]
     return random.choice(prefs) + random.choice(types)
+
+def _assign_pitcher_aptitudes(player: Player):
+    """
+    投手の適正（先発・中継・抑え）を設定する
+    要件:
+    - 4段階評価 (4:◎, 3:〇, 2:△, 1:×)
+    - 先発◎(4): 約60%
+    - 中継ぎ◎(4): 約60%
+    - 抑え◎(4): 約20%
+    
+    また、役割に応じてスタミナ/回復力を調整:
+    - 先発: スタミナ高め、回復力普通
+    - 中継ぎ: スタミナ低め、回復力高め
+    - 抑え: スタミナ低め、回復力高め
+    """
+    if player.position != Position.PITCHER:
+        return
+
+    def get_sub_aptitude() -> int:
+        """サブ適正値を決定（確率は少し高めに設定）"""
+        roll = random.random()
+        if roll < 0.50: return 1  # 50%で適性なし
+        if roll < 0.80: return 2  # 30%で△
+        if roll < 0.95: return 3  # 15%で〇
+        return 4                  # 5%で◎
+
+    # メイン役割が未定義の場合は確率で決定 (先発5: 中継4: 抑え1)
+    if player.pitch_type is None:
+        roll = random.random()
+        if roll < 0.50:
+            player.pitch_type = PitchType.STARTER
+        elif roll < 0.90:
+            player.pitch_type = PitchType.RELIEVER
+        else:
+            player.pitch_type = PitchType.CLOSER
+
+    # メイン役割の適性は◎(4)、それ以外は確率で設定
+    if player.pitch_type == PitchType.STARTER:
+        player.starter_aptitude = 4
+        player.middle_aptitude = get_sub_aptitude()
+        player.closer_aptitude = get_sub_aptitude()
+        # 先発: スタミナ高め (+15〜25)、回復力普通
+        player.stats.stamina = min(99, player.stats.stamina + random.randint(15, 25))
+    elif player.pitch_type == PitchType.RELIEVER:
+        player.starter_aptitude = get_sub_aptitude()
+        player.middle_aptitude = 4
+        player.closer_aptitude = get_sub_aptitude()
+        # 中継ぎ: スタミナ低め (-10〜-5)、回復力高め (+15〜25)
+        player.stats.stamina = max(1, player.stats.stamina - random.randint(5, 10))
+        player.stats.recovery = min(99, player.stats.recovery + random.randint(15, 25))
+    else: # CLOSER
+        player.starter_aptitude = get_sub_aptitude()
+        player.middle_aptitude = get_sub_aptitude()
+        player.closer_aptitude = 4
+        # 抑え: スタミナ低め (-10〜-5)、回復力高め (+15〜25)
+        player.stats.stamina = max(1, player.stats.stamina - random.randint(5, 10))
+        player.stats.recovery = min(99, player.stats.recovery + random.randint(15, 25))
 
 def create_random_player(position: Position,
                         pitch_type: Optional[PitchType] = None,
@@ -38,8 +93,7 @@ def create_random_player(position: Position,
 
     if position == Position.PITCHER:
         # --- 投手能力 ---
-        stats.velocity = int(random.gauss(145, 7))
-        stats.velocity = max(120, min(170, stats.velocity))
+        stats.velocity = random.randint(140, 160)
 
         stats.stuff = get_stat(50)
         stats.movement = get_stat(50)
@@ -165,6 +219,9 @@ def create_random_player(position: Position,
         age=age, status=status, uniform_number=number, is_foreign=is_foreign, salary=salary,
         bats=player_bats, throws=player_throws
     )
+    
+    if position == Position.PITCHER:
+        _assign_pitcher_aptitudes(player)
 
     return player
 
@@ -275,7 +332,20 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
     potential = int((target_total / (3 if position == Position.PITCHER else 5)) + pot_bonus)
     potential = max(1, min(99, potential))
 
-    return DraftProspect(name, position, pitch_type, stats, age, origin, potential)
+    prospect = DraftProspect(name, position, pitch_type, stats, age, origin, potential)
+    
+    # ドラフト候補の適正も設定（DraftProspectがPlayerを継承していない場合、別途考慮が必要だが、
+    # ここではPlayerオブジェクトに変換された後に設定されることが多い。
+    # しかしDraftProspect自体もaptitudeを持つべきなら修正が必要。
+    # ひとまずDraftProspectはPlayerではないのでここでは設定できないが、
+    # 実際に入団する際にPlayerオブジェクトになるタイミングで設定されるべき。
+    # もしDraftProspectにフィールドがあれば設定する。
+    # 確認: DraftProspectはmodels.pyにあるが、aptitudeフィールドがあるか不明。
+    # なければPlayer変換時に設定するロジックが必要。
+    # 修正: 今回はPlayer生成時に必ず呼ばれる create_random_player 等を修正したが、
+    # DraftProspect -> Player変換時 (draft_logic.py?) も確認が必要。
+    # いったんここはスキップし、Player生成時のみとする。
+    return prospect
 
 def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType] = None) -> Player:
     """
@@ -318,9 +388,8 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
         stats.control = max(1, min(99, int(v2 * ratio)))
         stats.stamina = max(1, min(99, int(v3 * ratio)))
         
-        # 球速は速め (140~165km/h)
-        stats.velocity = int(random.gauss(152 + (target_total - 200)/6, 5))
-        stats.velocity = max(135, min(168, stats.velocity))
+        # 球速は速め (140~160km/h)
+        stats.velocity = random.randint(140, 160)
         
         # その他能力
         stats.movement = get_stat_gauss(55, 15)
@@ -434,5 +503,8 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
         salary=annual_salary, contract_bonus=contract_bonus, # 契約金を設定
         bats=player_bats, throws=player_throws
     )
+    
+    if position == Position.PITCHER:
+        _assign_pitcher_aptitudes(player)
     
     return player

@@ -157,7 +157,7 @@ class FarmLeagueManager:
             
         # 選抜メンバーで最適なポジション配置を行う
         # generate_best_lineupは渡されたリストの中から最適な9人を選ぶ
-        final_lineup = generate_best_lineup(team, top_candidates_objects)
+        final_lineup = generate_best_lineup(team, top_candidates_objects, ignore_restriction=True)
         
         # 生成したラインナップをセット
         if level == TeamLevel.SECOND:

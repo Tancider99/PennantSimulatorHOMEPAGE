@@ -17,114 +17,90 @@ def create_team(team_name: str, league: League) -> Team:
     
     # ==============================
     # 支配下選手 (70人)
+    # 1軍枠配分: 投手15人 / 野手16人
     # ==============================
-    # 投手 (28人)
-    for _ in range(8):
+    
+    # 投手 (28人) - 5:4:1 比率 (14:11:3)
+    for _ in range(14):
         p = create_random_player(Position.PITCHER, PitchType.STARTER, PlayerStatus.ACTIVE, number)
         p.is_developmental = False
         _add_sub_positions_pitcher(p)
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
+        p.team_level = TeamLevel.SECOND # Default to Farm
         player_count += 1
         team.players.append(p)
         number += 1
-    for _ in range(14):
+    for _ in range(11):
         p = create_random_player(Position.PITCHER, PitchType.RELIEVER, PlayerStatus.ACTIVE, number)
         p.is_developmental = False
         _add_sub_positions_pitcher(p)
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
+        p.team_level = TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
         number += 1
-    for _ in range(6):
+    for _ in range(3):
         p = create_random_player(Position.PITCHER, PitchType.CLOSER, PlayerStatus.ACTIVE, number)
         p.is_developmental = False
         _add_sub_positions_pitcher(p)
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
+        p.team_level = TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
         number += 1
     
     # 野手 (42人)
-    # 捕手
+    # 捕手 (4)
     for _ in range(4):
         p = create_random_player(Position.CATCHER, status=PlayerStatus.ACTIVE, number=number)
         p.is_developmental = False
         _add_sub_positions_catcher(p)
         p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
+        p.team_level = TeamLevel.SECOND
         player_count += 1
         team.players.append(p)
         number += 1
     
-    # 内野手
-    for _ in range(5): # 一塁
-        p = create_random_player(Position.FIRST, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_infielder(p, Position.FIRST)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
-    for _ in range(6): # 二塁
-        p = create_random_player(Position.SECOND, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_infielder(p, Position.SECOND)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
-    for _ in range(5): # 三塁
-        p = create_random_player(Position.THIRD, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_infielder(p, Position.THIRD)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
-    for _ in range(6): # 遊撃
-        p = create_random_player(Position.SHORTSTOP, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_infielder(p, Position.SHORTSTOP)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
+    # 内野手 (22)
+    for pos, count in [(Position.FIRST, 5), (Position.SECOND, 6), (Position.THIRD, 5), (Position.SHORTSTOP, 6)]:
+        for _ in range(count):
+            p = create_random_player(pos, status=PlayerStatus.ACTIVE, number=number)
+            p.is_developmental = False
+            _add_sub_positions_infielder(p, pos)
+            p.fix_main_position()
+            p.team_level = TeamLevel.SECOND
+            player_count += 1
+            team.players.append(p)
+            number += 1
+            
+    # 外野手 (16)
+    for pos, count in [(Position.LEFT, 5), (Position.CENTER, 6), (Position.RIGHT, 5)]:
+        for _ in range(count):
+            p = create_random_player(pos, status=PlayerStatus.ACTIVE, number=number)
+            p.is_developmental = False
+            _add_sub_positions_outfielder(p)
+            p.fix_main_position()
+            p.team_level = TeamLevel.SECOND
+            player_count += 1
+            team.players.append(p)
+            number += 1
+            
+    # ==============================
+    # 1軍昇格ロジック (Best Selection)
+    # ==============================
+    # 支配下選手の中からベストメンバーを選出
+    majors = [p for p in team.players if not p.is_developmental]
+    m_pitchers = [p for p in majors if p.position.value == "投手"]
+    m_batters = [p for p in majors if p.position.value != "投手"]
     
-    # 外野手 (計16人を分割)
-    # 左翼手 (5人)
-    for _ in range(5):
-        p = create_random_player(Position.LEFT, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_outfielder(p)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
-    # 中堅手 (6人)
-    for _ in range(6):
-        p = create_random_player(Position.CENTER, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_outfielder(p)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
-    # 右翼手 (5人)
-    for _ in range(5):
-        p = create_random_player(Position.RIGHT, status=PlayerStatus.ACTIVE, number=number)
-        p.is_developmental = False
-        _add_sub_positions_outfielder(p)
-        p.fix_main_position()
-        p.team_level = TeamLevel.FIRST if player_count < first_team_limit else TeamLevel.SECOND
-        player_count += 1
-        team.players.append(p)
-        number += 1
+    # 能力順にソート (降順)
+    m_pitchers.sort(key=lambda x: x.stats.overall_pitching(), reverse=True)
+    m_batters.sort(key=lambda x: x.stats.overall_batting(), reverse=True)
+    
+    # 上位15人を1軍へ
+    for i in range(min(15, len(m_pitchers))):
+        m_pitchers[i].team_level = TeamLevel.FIRST
+        
+    # 上位16人を1軍へ
+    for i in range(min(16, len(m_batters))):
+        m_batters[i].team_level = TeamLevel.FIRST
     
     # ==============================
     # 育成選手 (30人) - 背番号は3桁
@@ -135,7 +111,7 @@ def create_team(team_name: str, league: League) -> Team:
     for _ in range(12):
         p = create_random_player(
             Position.PITCHER, 
-            random.choice(list(PitchType)), 
+            None, # 自動決定（5:4:1）
             PlayerStatus.FARM, 
             dev_number
         )

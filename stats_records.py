@@ -143,9 +143,12 @@ class LeagueStatsCalculator:
         c["league_woba"] = lg_woba_raw * woba_scale 
 
         # --- FIP Constant ---
+        # FIP定数 = リーグ全体の失点率 - リーグFIP生値
+        # FIP = (13×HR + 3×(BB-IBB+HBP) - 2×K) / IP + 定数
         if t["IP"] > 0:
             league_era = (league_runs * 9) / t["IP"]
-            fip_raw = (13 * t["HR"] + 3 * (t["BB"] + t["HBP"]) - 2 * t["K"]) / t["IP"]
+            ubb = max(0, t["BB"] - t["IBB"])  # 故意四球を除外
+            fip_raw = (13 * t["HR"] + 3 * (ubb + t["HBP"]) - 2 * t["K"]) / t["IP"]
             c["fip_constant"] = league_era - fip_raw
             c["league_fip"] = league_era 
         else:
@@ -279,12 +282,15 @@ class LeagueStatsCalculator:
             
         # --- Pitching Stats ---
         if r.innings_pitched > 0:
-            fip_val = (13 * r.home_runs_allowed + 3 * (r.walks_allowed + r.hit_batters) - 2 * r.strikeouts_pitched) / r.innings_pitched
+            # FIP = (13×HR + 3×(BB-IBB+HBP) - 2×K) / IP + 定数
+            ubb = max(0, r.walks_allowed - r.intentional_walks_allowed)
+            fip_val = (13 * r.home_runs_allowed + 3 * (ubb + r.hit_batters) - 2 * r.strikeouts_pitched) / r.innings_pitched
             r.fip_val = fip_val + fip_const
             
+            # xFIP = (13×(lg_HR/FB×FB) + 3×(BB-IBB+HBP) - 2×K) / IP + 定数
             lg_hr_fb = c.get("league_hr_fb", 0.10)
             expected_hr = r.fly_balls * lg_hr_fb
-            xfip_val = (13 * expected_hr + 3 * (r.walks_allowed + r.hit_batters) - 2 * r.strikeouts_pitched) / r.innings_pitched
+            xfip_val = (13 * expected_hr + 3 * (ubb + r.hit_batters) - 2 * r.strikeouts_pitched) / r.innings_pitched
             r.xfip_val = xfip_val + fip_const
 
         # --- Defensive Stats ---

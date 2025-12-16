@@ -570,13 +570,13 @@ class FarmSwapPage(QWidget):
                     table.setItem(row, 7, self._create_item(p.stats.stuff, rank_color=True))
                     
                     # 適正
-                    st = "◎" if role_str == "先発" else "△"
-                    rl = "◎" if role_str == "中継" else "△"
-                    cl = "◎" if role_str == "抑え" else "△"
+                    st = p.get_aptitude_symbol(p.starter_aptitude)
+                    rl = p.get_aptitude_symbol(p.middle_aptitude)
+                    cl = p.get_aptitude_symbol(p.closer_aptitude)
                     
-                    table.setItem(row, 8, self._create_item(st, sort_val=2 if st=="◎" else 1, text_color=text_color))
-                    table.setItem(row, 9, self._create_item(rl, sort_val=2 if rl=="◎" else 1, text_color=text_color))
-                    table.setItem(row, 10, self._create_item(cl, sort_val=2 if cl=="◎" else 1, text_color=text_color))
+                    table.setItem(row, 8, self._create_item(st, sort_val=p.starter_aptitude, text_color=text_color))
+                    table.setItem(row, 9, self._create_item(rl, sort_val=p.middle_aptitude, text_color=text_color))
+                    table.setItem(row, 10, self._create_item(cl, sort_val=p.closer_aptitude, text_color=text_color))
                     
                     table.setItem(row, 11, self._create_item(f"★{p.overall_rating}", is_star=True))
 

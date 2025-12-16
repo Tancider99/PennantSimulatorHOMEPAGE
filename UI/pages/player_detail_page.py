@@ -60,13 +60,17 @@ class VerticalStatBar(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(bar_x, rank_h + val_h + 5, bar_w, bar_area_h, 6, 6)
         
-        ratio = min(1.0, max(0.0, self.value / float(self.max_value)))
+        if self.label == "球速":
+            ratio = min(1.0, max(0.0, (self.value - 120) / (170 - 120)))
+        else:
+            ratio = min(1.0, max(0.0, self.value / float(self.max_value)))
         fill_h = int(bar_area_h * ratio)
         fill_y = bar_bottom_y - fill_h
         
         stats = PlayerStats()
         
         is_trajectory = (self.label == "弾道")
+        is_velocity = (self.label == "球速")
         
         if is_trajectory:
             if self.value == 1: color = QColor("#4488FF")
@@ -86,7 +90,7 @@ class VerticalStatBar(QWidget):
         painter.setFont(font_lbl)
         painter.drawText(QRect(0, h - label_h, w, label_h), Qt.AlignCenter, self.label)
         
-        if not is_trajectory:
+        if not is_trajectory and not is_velocity:
             painter.setPen(color)
             font_rank = QFont("Segoe UI", 16, QFont.Black)
             painter.setFont(font_rank)
@@ -97,8 +101,8 @@ class VerticalStatBar(QWidget):
         font_val = QFont("Consolas", font_size, QFont.Bold)
         painter.setFont(font_val)
         
-        val_rect_y = 0 if is_trajectory else rank_h
-        val_rect_h = rank_h + val_h if is_trajectory else val_h
+        val_rect_y = 0 if (is_trajectory or is_velocity) else rank_h
+        val_rect_h = rank_h + val_h if (is_trajectory or is_velocity) else val_h
         
         painter.drawText(QRect(0, val_rect_y, w, val_rect_h), Qt.AlignCenter, str(self.value))
 
@@ -234,8 +238,9 @@ class PlayerDetailPage(QWidget):
         self.placeholder.setStyleSheet("font-size: 24px; color: #555; font-weight: bold;")
         self.content_layout.addWidget(self.placeholder)
 
-    def set_player(self, player):
+    def set_player(self, player, team_name=None):
         self.current_player = player
+        self.current_team_name = team_name
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -282,7 +287,9 @@ class PlayerDetailPage(QWidget):
         name_v = QVBoxLayout()
         name_lbl = QLabel(player.name.upper())
         name_lbl.setStyleSheet("font-size: 42px; font-weight: 900; color: #fff; font-family: 'Segoe UI';")
-        sub_info = QLabel(f"#{player.uniform_number} | {safe_enum_val(player.position)} | {player.bats}打{player.throws}投 | {player.age}歳")
+        
+        t_str = f"[{self.current_team_name}] " if getattr(self, 'current_team_name', None) else ""
+        sub_info = QLabel(f"{t_str}#{player.uniform_number} | {safe_enum_val(player.position)} | {player.bats}打{player.throws}投 | {player.age}歳")
         sub_info.setStyleSheet("font-size: 16px; color: #5fbcd3; font-weight: bold;")
         name_v.addWidget(name_lbl)
         name_v.addWidget(sub_info)
@@ -312,7 +319,7 @@ class PlayerDetailPage(QWidget):
         rp_layout.addStretch()
         top_layout.addWidget(right_panel, 3)
         
-        self.content_layout.addWidget(top_section, 4)
+        self.content_layout.addWidget(top_section, 3)
 
         bottom_tabs = QTabWidget()
         bottom_tabs.setStyleSheet(f"""
@@ -323,13 +330,13 @@ class PlayerDetailPage(QWidget):
             QTabBar::tab:selected {{ color: #fff; border-bottom: 2px solid #5fbcd3; }}
         """)
         
-        self.content_layout.addWidget(bottom_tabs, 3)
+        self.content_layout.addWidget(bottom_tabs, 5)
         
         stats = player.stats
         
         if is_pitcher:
             pitch_basic = [
-                ("球速", stats.velocity, 165), ("制球", stats.control, 99),
+                ("球速", stats.velocity, 170), ("制球", stats.control, 99),
                 ("スタミナ", stats.stamina, 99), ("球威", stats.stuff, 99),
                 ("変化量", stats.movement, 99), ("安定度", stats.stability, 99)
             ]

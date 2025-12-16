@@ -43,18 +43,18 @@ class SimulationWorker(QThread):
             # 翌日からターゲット日付まで
             days_to_sim = current_qdate.daysTo(self.target_date)
             
-            if days_to_sim <= 0:
+            if days_to_sim < 0: # 修正: 0日(当日)も含めるため < 0 に変更
                 self.finished.emit()
                 return
 
-            for i in range(days_to_sim):
+            for i in range(days_to_sim + 1): # 修正: 当日〜ターゲット日まで含める
                 if self.is_cancelled: break
                 
-                # 翌日の日付を取得してシミュレート
-                sim_date = current_qdate.addDays(i + 1) 
+                # 修正: 当日から順にシミュレート
+                sim_date = current_qdate.addDays(i) 
                 date_str = sim_date.toString("yyyy-MM-dd")
                 
-                self.progress_updated.emit(i + 1, days_to_sim, f"Simulating: {date_str}")
+                self.progress_updated.emit(i + 1, days_to_sim + 1, f"Simulating: {date_str}")
                 
                 # GameStateに処理を委譲（エラーハンドリング済み）
                 self.game_state.process_date(date_str)

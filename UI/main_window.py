@@ -23,6 +23,8 @@ from UI.widgets.panels import SidebarPanel, HeaderPanel, StatusPanel, PageContai
 from UI.widgets.buttons import ActionButton
 from farm_game_simulator import simulate_farm_games_for_day
 from models import GameStatus
+# from UI.dialogs.game_result_dialog import GameResultDialog # No longer used
+from UI.pages.game_result_page import GameResultPage
 
 
 class MainWindow(QMainWindow):
@@ -180,6 +182,7 @@ class MainWindow(QMainWindow):
         from UI.pages.farm_swap_page import FarmSwapPage
         from UI.pages.tv_broadcast_game_page import TVBroadcastGamePage  # TV中継風ゲームページ
         from UI.pages.contracts_page import ContractsPage # ContractsPageをインポート
+        from UI.pages.pre_game_page import PreGamePage # ★追加
         
         page = None
         
@@ -221,6 +224,8 @@ class MainWindow(QMainWindow):
         elif section == "game": # TV中継風ゲームページ
             page = TVBroadcastGamePage(self)
             page.game_finished.connect(self._on_game_finished)
+            if hasattr(page, 'go_to_player_detail'):
+                page.go_to_player_detail.connect(self._show_player_detail)
             self.game_page = page # 属性として保持
             
         elif section == "contract_changes": # ★追加: 契約ページ
@@ -228,7 +233,20 @@ class MainWindow(QMainWindow):
             # 選手詳細画面への遷移シグナルを接続 (ContractsPageから飛べるように)
             if hasattr(page, 'go_to_player_detail'):
                 page.go_to_player_detail.connect(self._show_player_detail)
+            if hasattr(page, 'go_to_player_detail'):
+                page.go_to_player_detail.connect(self._show_player_detail)
             self.contracts_page = page
+
+        elif section == "game_result": # ★追加: 試合結果ページ
+            page = GameResultPage(self)
+            page.return_home.connect(lambda: self._navigate_to("home"))
+            self.game_result_page = page
+
+        elif section == "pre_game": # ★追加: 試合前確認ページ
+            page = PreGamePage(self)
+            page.start_game_requested.connect(self._on_pre_game_start)
+            page.edit_order_requested.connect(self._on_edit_order_requested)
+            self.pre_game_page = page
         
         # Unimplemented pages (kept for code reference but not in sidebar)
             
@@ -303,7 +321,7 @@ class MainWindow(QMainWindow):
                 opponent.auto_assign_rosters()
                 opponent.auto_set_bench()
                 
-                self.show_game(home_team, away_team)
+                self.show_pre_game(home_team, away_team) # 修正: 直接試合開始ではなくPreGameへ
             else:
                 QMessageBox.warning(self, "エラー", "対戦チームデータが見つかりませんでした。")
         else:
@@ -328,6 +346,67 @@ class MainWindow(QMainWindow):
             self._on_page_changed(0)
             
             QMessageBox.information(self, "日程進行", "本日は試合がありませんでした。次の日へ進みます。")
+
+    def show_pre_game(self, home_team, away_team):
+        """Show pre-game confirmation page"""
+        self._navigate_to("pre_game")
+        self.pre_game_page.set_teams(home_team, away_team)
+    
+    def _on_pre_game_start(self, params):
+        """Handle start/skip from pre-game page"""
+        mode = params.get("mode")
+        home = self.pre_game_page.home_team
+        away = self.pre_game_page.away_team
+        
+        if mode == "manual":
+            self.show_game(home, away)
+        elif mode == "fast":
+            self._simulate_fast_forward_game(home, away)
+
+    def _on_edit_order_requested(self, team=None):
+        """Handle request to edit a team's order"""
+        if not team: return
+        self._navigate_to("order")
+        # OrderPageに特定のチームを表示させるハック
+        # 通常は game_state.player_team を表示するが、ここでは一時的に上書き
+        if hasattr(self, 'order_page') and self.order_page:
+            self.order_page.current_team = team
+            self.order_page.team_name_label.setText(team.name)
+            self.order_page._load_team_data()
+            self.order_page._refresh_all()
+            # 戻るボタン的なものがないので、ナビゲーションで戻る必要がある
+            # ここではシンプルにOrderPageへ飛ばすだけ（再度PreGameに戻るのはユーザー操作）
+
+    def _simulate_fast_forward_game(self, home_team, away_team):
+        """Simulate game headlessly and go to results"""
+        from live_game_engine import LiveGameEngine
+        
+        # UIをブロックしないようにしたいが、簡単のため同期実行 (Fast forward is fast enough usually)
+        from models import TeamLevel
+        engine = LiveGameEngine(home_team, away_team, TeamLevel.FIRST)
+        
+        # Run until game over
+        # 安全策: 無限ループ防止のため最大300打席程度で切る
+        max_steps = 2000 
+        steps = 0
+        while not engine.is_game_over() and steps < max_steps:
+            engine.simulate_pitch()
+            steps += 1
+            
+        # Finalize
+        current_date = self.game_state.current_date if self.game_state else "2027-01-01"
+        stats_result = engine.finalize_game_stats(current_date)
+        
+        result = {
+            "home_team": home_team,
+            "away_team": away_team,
+            "home_score": engine.state.home_score,
+            "away_score": engine.state.away_score,
+            "game_result": engine.state, # 一部互換のため
+            "game_stats": stats_result.get("game_stats", {})
+        }
+        
+        self._on_game_finished(result)
 
     def _on_game_finished(self, result):
         """Handle game finish"""
@@ -375,10 +454,18 @@ class MainWindow(QMainWindow):
             # 【重要】他球場試合を消化し、日付を進める
             self.game_state.finish_day_and_advance()
         
-        msg = f"Game Finished\n\n{away_team.name} {away_score} - {home_score} {home_team.name}\n\nWinner: {winner_name}"
-        QMessageBox.information(self, "Result", msg)
+        # Show NPB Style Result Page
+        # dialog = GameResultDialog(result, self)
+        # dialog.exec()
         
-        self._navigate_to("home")
+        # Navigate to Game Result Page
+        if self.game_state:
+            # Create page if not exists (via navigate logic)
+            self._navigate_to("game_result")
+            self.game_result_page.set_result(result)
+            
+        # self._navigate_to("home") # Removed auto nav to home
+
 
     def set_sidebar_visible(self, visible: bool):
         """Toggle sidebar and status bar visibility"""
@@ -438,7 +525,10 @@ class MainWindow(QMainWindow):
                     page.set_game_state(self.game_state)
                 
                 # 手動リフレッシュメソッドがあれば呼ぶ（念のため）
-                if hasattr(page, '_refresh_all'):
+                if hasattr(page, 'refresh'):
+                    try: page.refresh()
+                    except: pass
+                elif hasattr(page, '_refresh_all'):
                     try: page._refresh_all()
                     except: pass
                 if hasattr(page, '_load_team_data'):
@@ -461,6 +551,10 @@ class MainWindow(QMainWindow):
 
         # 3. Handle Sidebar Visibility
         if section == "game":
+            self.set_sidebar_visible(False)
+        elif section == "player_detail" and self.previous_section == "game":
+            self.set_sidebar_visible(False)
+        elif section == "player_stats_detail" and self.previous_section == "game":
             self.set_sidebar_visible(False)
         else:
             self.set_sidebar_visible(True)
@@ -550,7 +644,16 @@ class MainWindow(QMainWindow):
         if self.current_section != "player_detail":
             self.previous_section = self.current_section
             
-        self.player_detail_page.set_player(player)
+        # チーム名を検索
+        team_name = None
+        if self.game_state:
+            for team in self.game_state.teams:
+                # オブジェクトIDで比較、またはplayersリストに含まれているか
+                if player in team.players:
+                    team_name = team.name
+                    break
+            
+        self.player_detail_page.set_player(player, team_name)
         self._navigate_to("player_detail")
         
     def _on_player_detail_back(self):

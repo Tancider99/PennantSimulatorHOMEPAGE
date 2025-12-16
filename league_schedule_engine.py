@@ -59,6 +59,14 @@ class SeasonCalendar:
     @classmethod
     def create(cls, year: int) -> 'SeasonCalendar':
         """NPB準拠のカレンダーを生成"""
+        # 開幕日: 3月最終週の金曜日（月曜日を避ける）
+        base_opening = datetime.date(year, 3, 29)
+        # 金曜日(weekday=4)になるよう調整
+        days_until_friday = (4 - base_opening.weekday()) % 7
+        if days_until_friday == 0 and base_opening.weekday() != 4:
+            days_until_friday = 7  # すでに過ぎている場合は次週
+        opening_day = datetime.date(year, 3, 25) + datetime.timedelta(days=(4 - datetime.date(year, 3, 25).weekday()) % 7)
+        
         # 交流戦開始は火曜日に設定（5月最終週の火曜日）
         il_start_base = datetime.date(year, 5, 27)
         # 火曜日(weekday=1)になるよう調整
@@ -72,7 +80,7 @@ class SeasonCalendar:
 
         return cls(
             year=year,
-            opening_day=datetime.date(year, 3, 29),
+            opening_day=opening_day,
             interleague_start=interleague_start,  # 火曜日開始
             interleague_end=interleague_end,  # 3週目の日曜日
             interleague_reserve_end=interleague_reserve_end,  # 予備日終了
