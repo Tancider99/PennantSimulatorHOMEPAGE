@@ -123,10 +123,6 @@ class TrainingStatWidget(QFrame):
                     border: 1px solid transparent;
                     border-radius: 4px;
                 }}
-                TrainingStatWidget:hover {{
-                    border: 1px solid {theme.border_muted};
-                    background-color: {theme.bg_card_hover};
-                }}
             """)
         
         layout = QVBoxLayout(self)
@@ -214,7 +210,6 @@ class TrainingStatWidget(QFrame):
         layout.addWidget(xp_bar)
         
     def mousePressEvent(self, event: QMouseEvent):
-        print(f"[DEBUG] TrainingStatWidget.mousePressEvent: emitting key='{self.stat_key}', widget at pos=({self.x()}, {self.y()})")
         self.clicked.emit(self.stat_key)
         super().mousePressEvent(event)
 
@@ -722,7 +717,6 @@ class TrainingPage(ContentPanel):
             widget = TrainingStatWidget(label, val, key, self.theme, max_val, is_spec, is_selected, xp_val=xp_val)
             widget.clicked.connect(self._on_stat_selected)
             self.stats_grid.addWidget(widget, row, col)
-            print(f"[DEBUG] Created widget: key='{key}', grid pos=({row}, {col}), is_selected={is_selected}")
             
             col += 1
             if col >= cols_count:
@@ -730,13 +724,10 @@ class TrainingPage(ContentPanel):
                 row += 1
 
     def _on_stat_selected(self, stat_key):
-        print(f"[DEBUG] _on_stat_selected called with stat_key='{stat_key}'")
         if not self.selected_player: 
-            print("[DEBUG] No selected player, returning")
             return
         p = self.selected_player
         is_pitcher = p.position == Position.PITCHER
-        print(f"[DEBUG] Player: {p.name}, is_pitcher: {is_pitcher}")
         
         # Special handling for new pitch selection
         if stat_key == "new_pitch_progress" and is_pitcher:
@@ -745,11 +736,9 @@ class TrainingPage(ContentPanel):
         
         menu_map = KEY_TO_MENU_PITCHER if is_pitcher else KEY_TO_MENU_BATTER
         menu = menu_map.get(stat_key)
-        print(f"[DEBUG] menu for stat_key '{stat_key}': {menu}")
         
         if menu:
             p.training_menu = menu
-            print(f"[DEBUG] Setting selected_stat_key = '{stat_key}' (was '{self.selected_stat_key}')")
             self.selected_stat_key = stat_key  # Track which stat was clicked
             
             # Block signals during ENTIRE update process
@@ -758,16 +747,13 @@ class TrainingPage(ContentPanel):
             try:
                 # Trigger immediate save
                 self.training_saved.emit() 
-                print(f"[DEBUG] Before _refresh_tables_internal, selected_stat_key={self.selected_stat_key}")
                 self._refresh_tables_internal()  # Use internal method without signal blocking
-                print(f"[DEBUG] After _refresh_tables_internal, selected_stat_key={self.selected_stat_key}")
                 self._update_detail_view(update_combo=True) # Reflect in combo
-                print(f"[DEBUG] After _update_detail_view, selected_stat_key={self.selected_stat_key}")
             finally:
                 self.batter_table.blockSignals(False)
                 self.pitcher_table.blockSignals(False)
         else:
-            print(f"[DEBUG] No menu found for stat_key '{stat_key}', doing nothing")
+            pass
 
     def _show_new_pitch_dialog(self, player):
         """新球種選択ダイアログを表示"""

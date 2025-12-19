@@ -740,7 +740,7 @@ class ScoreBoardWidget(QFrame):
         self.info_box = self._create_info_box()
         layout.addWidget(self.info_box)
         
-        self.line_score = LineScoreTable()
+        self.line_score = LineScoreTable(self)
         layout.addWidget(self.line_score, stretch=1)  # 横幅いっぱいに広げる
 
     def _create_info_box(self):
@@ -1199,7 +1199,7 @@ class TVBroadcastGamePage(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.scoreboard = ScoreBoardWidget()
+        self.scoreboard = ScoreBoardWidget(self)
         main_layout.addWidget(self.scoreboard)
 
         content = QWidget()

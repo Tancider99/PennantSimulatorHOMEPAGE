@@ -655,6 +655,9 @@ class DraftScoutingPage(QWidget):
 
         self._generate_dummy_data()
         self._setup_ui()
+        
+        # Hide initially to prevent appearing at (0,0) before being properly added to layout
+        self.hide()
 
     def _generate_dummy_data(self):
         """データ生成 (300人)"""
@@ -1196,6 +1199,9 @@ class ForeignPlayerScoutingPage(QWidget):
 
         self._generate_dummy_data()
         self._setup_ui()
+        
+        # Hide initially to prevent appearing at (0,0) before being properly added to layout
+        self.hide()
     
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
@@ -2032,6 +2038,9 @@ class TradePage(QWidget):
         self.requested_players: List[int] = []  # 要求する選手のインデックス
 
         self._setup_ui()
+        
+        # Hide initially to prevent appearing at (0,0) before being properly added to layout
+        self.hide()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -2530,6 +2539,9 @@ class ContractsPage(QWidget):
 
         self.stacked_widget.setCurrentIndex(self.current_index)
         self.nav_buttons[self.current_index].setChecked(True)
+        
+        # Hide initially to prevent appearing at (0,0) before being properly added to layout
+        self.hide()
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -2557,9 +2569,9 @@ class ContractsPage(QWidget):
         self.stacked_widget.setStyleSheet("background: transparent; border: none;")
 
         # サブページ
-        self.draft_page = DraftScoutingPage()
-        self.foreign_page = ForeignPlayerScoutingPage()
-        self.trade_page = TradePage()
+        self.draft_page = DraftScoutingPage(self)
+        self.foreign_page = ForeignPlayerScoutingPage(self)
+        self.trade_page = TradePage(self)
 
         self.stacked_widget.addWidget(self.draft_page)
         self.stacked_widget.addWidget(self.foreign_page)

@@ -680,6 +680,7 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, section: str):
         """Navigate to a section, preserving page state where possible"""
         
+        
         # ページがまだ存在しない場合のみ新規作成するロジック
         is_persistent = section in self.persistent_pages or section == "title"
         is_cached = section in self.cached_pages
