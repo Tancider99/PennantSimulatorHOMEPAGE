@@ -183,6 +183,8 @@ class MainWindow(QMainWindow):
         from UI.pages.tv_broadcast_game_page import TVBroadcastGamePage  # TV中継風ゲームページ
         from UI.pages.contracts_page import ContractsPage # ContractsPageをインポート
         from UI.pages.pre_game_page import PreGamePage # ★追加
+        from UI.pages.acquisitions_page import AcquisitionsPage # ★追加: 補強ページ
+
         
         page = None
         
@@ -190,6 +192,7 @@ class MainWindow(QMainWindow):
             page = HomePage(self)
             page.game_requested.connect(self._on_game_requested)
             page.view_roster_requested.connect(lambda: self._navigate_to("roster"))
+            page.player_detail_requested.connect(self._show_player_detail)
             self.home_page = page 
             
         elif section == "roster":
@@ -207,6 +210,9 @@ class MainWindow(QMainWindow):
 
         elif section == "schedule":
             self.schedule_page = SchedulePage(self)
+            # Link contracts_page for scouting progress during bulk skip
+            if hasattr(self, 'contracts_page') and self.contracts_page:
+                self.schedule_page.contracts_page = self.contracts_page
             page = self.schedule_page 
 
         elif section == "stats":
@@ -249,6 +255,20 @@ class MainWindow(QMainWindow):
             # 詳細画面への遷移シグナルを接続
             page.player_detail_requested.connect(self._show_player_detail)
             self.pre_game_page = page
+
+        elif section == "reinforcement":
+            page = AcquisitionsPage(self)
+            if hasattr(page, 'player_detail_requested'):
+                page.player_detail_requested.connect(self._show_player_detail)
+            self.acquisitions_page = page
+
+        elif section == "training":
+            from UI.pages.training_page import TrainingPage
+            page = TrainingPage(self)
+            page.training_saved.connect(self._on_training_saved)
+            if hasattr(page, 'player_detail_requested'):
+                page.player_detail_requested.connect(self._show_player_detail)
+            self.training_page = page
         
         # Unimplemented pages (kept for code reference but not in sidebar)
             
@@ -257,7 +277,7 @@ class MainWindow(QMainWindow):
             page.settings_changed.connect(self._on_settings_changed)
             self.settings_page = page
 
-        # New sidebar items (farm_swap, contract_changes, reinforcement, training, staff, finance, save_load)
+        # New sidebar items (farm_swap, contract_changes, reinforcement, staff, finance, save_load)
         # are currently unimplemented and return None.
 
         return page
@@ -334,8 +354,13 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Farm Simulation Error: {e}")
 
-            if hasattr(self, 'contracts_page') and self.contracts_page:
-                self.contracts_page.advance_day()
+            # Create contracts_page if not yet navigated to
+            if not hasattr(self, 'contracts_page') or not self.contracts_page:
+                from UI.pages.contracts_page import ContractsPage
+                self.contracts_page = ContractsPage(self)
+                if hasattr(self.contracts_page, 'go_to_player_detail'):
+                    self.contracts_page.go_to_player_detail.connect(self._show_player_detail)
+            self.contracts_page.advance_day()
 
             self.game_state.finish_day_and_advance()
             
@@ -439,6 +464,8 @@ class MainWindow(QMainWindow):
             engine.simulate_pitch()
             steps += 1
             
+        
+            
         # Finalize Last Inning
         # If Game Over at Top 9 3 outs -> Bot 9 not played (if home winning)
         # or Bot 9 3 outs -> End.
@@ -505,6 +532,15 @@ class MainWindow(QMainWindow):
                      
                      hr_list.append((p.name, stats['home_runs'], t_name))
 
+        # ★追加: Highlight Logging
+        if stats_result and "highlights" in stats_result:
+            for h in stats_result["highlights"]:
+                self.game_state.log_news(
+                    category=h['category'],
+                    message=h['message'],
+                    team_name=h['team']
+                )
+
         result = {
             "home_team": home_team,
             "away_team": away_team,
@@ -530,10 +566,24 @@ class MainWindow(QMainWindow):
         # Show sidebar and status bar again
         self.set_sidebar_visible(True)
         
-        home_score = result['home_score']
-        away_score = result['away_score']
+        # Navigate to game result page
+        self._navigate_to("game_result")
+        if hasattr(self, 'game_result_page') and self.game_result_page:
+            self.game_result_page.set_result(result)
+        
+        # Call post-game processing
+        self._on_game_finished_post(result)
+
+    def _on_training_saved(self):
+        """Handle training saved"""
+        self.status.show_message("トレーニング設定を保存しました", 3000)
+
+    def _on_game_finished_post(self, result):
+        """Post-game processing after user saw result"""
         home_team = result['home_team']
         away_team = result['away_team']
+        home_score = result['home_score']
+        away_score = result['away_score']
         
         winner_name = "DRAW"
         if home_score > away_score:
@@ -565,8 +615,23 @@ class MainWindow(QMainWindow):
                 print(f"Farm Simulation Error: {e}")
 
             # ★追加: 契約関連（スカウト）の日付進行処理
-            if hasattr(self, 'contracts_page') and self.contracts_page:
-                self.contracts_page.advance_day()
+            # Create contracts_page if not yet navigated to
+            if not hasattr(self, 'contracts_page') or not self.contracts_page:
+                from UI.pages.contracts_page import ContractsPage
+                self.contracts_page = ContractsPage(self)
+                if hasattr(self.contracts_page, 'go_to_player_detail'):
+                    self.contracts_page.go_to_player_detail.connect(self._show_player_detail)
+            self.contracts_page.advance_day()
+
+
+            # ★追加: Highlight Logging from Manual Game (or any source passing 'highlights' in result)
+            if "highlights" in result:
+                for h in result["highlights"]:
+                    self.game_state.log_news(
+                        category=h['category'],
+                        message=h['message'],
+                        team_name=h['team']
+                    )
 
             # 【重要】他球場試合を消化し、日付を進める
             self.game_state.finish_day_and_advance()
@@ -751,6 +816,13 @@ class MainWindow(QMainWindow):
         current_widget = self.pages.currentWidget()
         if current_widget and hasattr(current_widget, 'set_game_state'):
             current_widget.set_game_state(game_state)
+        
+        # Pre-create contracts_page to avoid freeze during game result
+        if not hasattr(self, 'contracts_page') or not self.contracts_page:
+            from UI.pages.contracts_page import ContractsPage
+            self.contracts_page = ContractsPage(self)
+            if hasattr(self.contracts_page, 'go_to_player_detail'):
+                self.contracts_page.go_to_player_detail.connect(self._show_player_detail)
             
         # Ensure initial sidebar state is correct if just started
         self._on_page_changed(0)

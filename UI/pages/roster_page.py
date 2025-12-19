@@ -208,9 +208,6 @@ class RosterPage(QWidget):
                 color: {self.theme.primary};
                 border-bottom: 2px solid {self.theme.primary};
             }}
-            QTabBar::tab:hover {{
-                color: {self.theme.text_primary};
-            }}
         """)
 
         # Table style
@@ -226,25 +223,40 @@ class RosterPage(QWidget):
             }}
             QTableView::item:hover {{
                 background-color: transparent;
-                color: {self.theme.text_primary};
                 border: none;
-            }}
-            QTableView::item:selected:hover {{
-                background-color: {self.theme.primary};
-                color: #222222;
             }}
         """
 
         # Batters tab
         self.batter_table = PlayerTable()
-        self.batter_table.setStyleSheet(table_style)
+        # Override the inner table style to remove hover effect strictly
+        self.batter_table.table.setStyleSheet(self.batter_table.table.styleSheet() + """
+            QTableWidget::item:hover {
+                background-color: transparent;
+                border: none;
+            }
+            QTableWidget::item:selected:hover {
+                background-color: """ + self.theme.primary + """;
+                color: #222222;
+            }
+        """)
         self.batter_table.player_selected.connect(self._on_player_selected)
         self.batter_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.batter_table, "野手")
 
         # Pitchers tab
         self.pitcher_table = PlayerTable()
-        self.pitcher_table.setStyleSheet(table_style)
+        # Override the inner table style
+        self.pitcher_table.table.setStyleSheet(self.pitcher_table.table.styleSheet() + """
+            QTableWidget::item:hover {
+                background-color: transparent;
+                border: none;
+            }
+            QTableWidget::item:selected:hover {
+                background-color: """ + self.theme.primary + """;
+                color: #222222;
+            }
+        """)
         self.pitcher_table.player_selected.connect(self._on_player_selected)
         self.pitcher_table.player_double_clicked.connect(self._on_player_double_clicked)
         self.tabs.addTab(self.pitcher_table, "投手")

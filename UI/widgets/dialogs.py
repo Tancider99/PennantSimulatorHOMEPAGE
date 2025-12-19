@@ -364,7 +364,8 @@ class PlayerDetailDialog(BaseDialog):
         layout.addLayout(top_row)
         
         # Info Row
-        info_text = f"{player.position.value} | {player.age}歳 | プロ{player.years_pro}年目 | {player.salary//10000}万円"
+        type_str = player.player_type.value if player.player_type else "タイプ未定"
+        info_text = f"{player.position.value} ({type_str}) | {player.age}歳 | プロ{player.years_pro}年目 | {player.salary//10000}万円"
         info_lbl = QLabel(info_text)
         info_lbl.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 13px;")
         layout.addWidget(info_lbl)
@@ -375,7 +376,7 @@ class PlayerDetailDialog(BaseDialog):
         frame = QFrame()
         frame.setStyleSheet(f"background: {self.theme.bg_card}; border-radius: 8px;")
         layout = QGridLayout(frame)
-        layout.setSpacing(10)
+        layout.setSpacing(8)  # Reduced from 10 to prevent wrapping
         
         stats = player.stats
         is_pitcher = player.position.value == "投手"
@@ -477,7 +478,7 @@ class PlayerDetailDialog(BaseDialog):
         
         content = QWidget()
         grid = QGridLayout(content)
-        grid.setSpacing(12)
+        grid.setSpacing(8)  # Reduced spacing
         
         stats = player.stats
         is_pitcher = player.position.value == "投手"

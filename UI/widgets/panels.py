@@ -177,11 +177,20 @@ class SidebarPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Logo Area
-        logo_area = QFrame()
-        logo_area.setFixedHeight(80)
-        logo_area.setStyleSheet(f"border-bottom: 1px solid {self.theme.border};")
+        # Logo Area - Use QPalette for reliable background color
+        logo_area = QWidget()
+        logo_area.setObjectName("SidebarLogoArea")
+        logo_area.setAutoFillBackground(True)
+        logo_area.setFixedHeight(100)  # Extended height
+        
+        # Set background using QPalette (more reliable than stylesheet)
+        from PySide6.QtGui import QPalette, QColor
+        palette = logo_area.palette()
+        palette.setColor(QPalette.Window, QColor(self.theme.bg_darkest))
+        logo_area.setPalette(palette)
+        
         logo_layout = QVBoxLayout(logo_area)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
         logo_layout.setAlignment(Qt.AlignCenter)
         
         lbl = QLabel("Pennant SIM")
@@ -190,13 +199,14 @@ class SidebarPanel(QWidget):
             font-weight: 700;
             letter-spacing: 4px;
             color: {self.theme.text_primary};
+            background-color: transparent;
         """)
         logo_layout.addWidget(lbl)
         layout.addWidget(logo_area)
 
-        # Nav Area
+        # Nav Area - Remove top margin to avoid gap showing different background
         self.nav_layout = QVBoxLayout()
-        self.nav_layout.setContentsMargins(0, 20, 0, 20)
+        self.nav_layout.setContentsMargins(0, 0, 0, 20)  # Only bottom margin
         self.nav_layout.setSpacing(4)
         layout.addLayout(self.nav_layout)
 
@@ -369,7 +379,18 @@ class StatusPanel(QWidget):
     def set_right_text(self, text):
         self.right.setText(text)
 
+    def show_message(self, message, timeout=0):
+        """Show temporary message (timeout in ms not implemented fully here but kept for API compat)"""
+        # For now, just set the text. In full implementation, usage of QTimer to clear would be ideal.
+        # But simple text setting solves the crash.
+        self.right.setText(message)
+        # Optional: Clear after timeout if needed, but simple is fine for now.
+        if timeout > 0:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(timeout, lambda: self.right.setText(""))
+
 class PageContainer(QStackedWidget):
+
     page_changed = Signal(int)
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -455,3 +476,39 @@ class GradientPanel(QWidget):
         for i, c in enumerate(self.colors):
             gradient.setColorAt(i/(len(self.colors)-1), QColor(c))
         painter.fillRect(self.rect(), gradient)
+
+class Card(QFrame):
+    """Simple Card with Title"""
+    def __init__(self, title: str = "", parent=None, bordered: bool = True):
+        super().__init__(parent)
+        try:
+            self.theme = get_theme()
+        except:
+            from UI.theme import get_theme
+            self.theme = get_theme()
+            
+        self._title = title
+        self._bordered = bordered
+        self._setup_ui()
+
+    def _setup_ui(self):
+        border_str = f"1px solid {self.theme.border}" if self._bordered else "none"
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {self.theme.bg_card};
+                border: {border_str};
+                border-radius: 4px;
+            }}
+        """)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(12, 12, 12, 12)
+        self.layout.setSpacing(8)
+
+        if self._title:
+            t = QLabel(self._title)
+            t.setStyleSheet(f"""
+                font-size: 11px; font-weight: 700; color: {self.theme.text_secondary};
+                letter-spacing: 1px; border-bottom: 1px solid {self.theme.border};
+                padding-bottom: 4px; margin-bottom: 4px;
+            """)
+            self.layout.addWidget(t)

@@ -1563,7 +1563,7 @@ class LiveGameEngine:
         durability = getattr(player.stats, 'durability', 50)
         fatigue_factor = 1.0
         if player.position == Position.PITCHER and player.stats.stamina < 30: fatigue_factor = 3.0
-        base_rate = 0.0005
+        base_rate = 0.00005  # Reduced from 0.0005
         rate = base_rate * (100 - durability) / 50.0 * fatigue_factor
         if random.random() < rate:
             days = random.randint(3, 30) 
@@ -2331,12 +2331,124 @@ class LiveGameEngine:
                 if at_bats > 0 or defensive_innings > 0:
                     player.add_game_fatigue(at_bats=at_bats, defensive_innings=defensive_innings)
             
+        # Highlight Analysis
+        highlights = self._analyze_highlights(win_p, loss_p, save_p, home_win, away_win)
+
         return {
             "win": win_p,
             "loss": loss_p,
             "save": save_p,
-            "game_stats": self.game_stats
+            "game_stats": self.game_stats,
+            "highlights": highlights
         }
+
+    def _analyze_highlights(self, win_p, loss_p, save_p, home_win, away_win):
+        """Analyze game stats for highlight news"""
+        highlights = []
+        
+        # Win Team & Lose Team
+        win_team = self.home_team if home_win else self.away_team
+        loss_team = self.home_team if home_win else self.away_team
+        
+        # 1. Pitching Highlights
+        for p in self.state.home_pitchers_used + self.state.away_pitchers_used:
+            stats = self.game_stats[p]
+            ip = stats.get('innings_pitched', 0)
+            so = stats.get('strikeouts_pitched', 0)
+            runs = stats.get('runs_allowed', 0)
+            
+            p_team = self.home_team if p in self.home_team.players else self.away_team
+            
+            # Shutout (Kanpu) - Must be complete game (9+ IP) and 0 runs
+            if ip >= 9.0 and runs == 0 and stats.get('games_started', 0) == 1:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}投手（{p_team.name}）が完封勝利！",
+                    "team": p_team.name,
+                    "score": 100
+                })
+            # Complete Game (Kantou) - Must be complete game (9+ IP)
+            elif ip >= 9.0 and stats.get('games_started', 0) == 1:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}投手（{p_team.name}）が完投勝利！" if p == win_p else f"{p.name}投手（{p_team.name}）が完投！",
+                    "team": p_team.name,
+                    "score": 90
+                })
+            
+            # 10+ Strikeouts
+            if so >= 10:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}投手（{p_team.name}）が{so}奪三振の快投！",
+                    "team": p_team.name,
+                    "score": 85
+                })
+
+        # 2. Batting Highlights
+        for p, stats in self.game_stats.items():
+            if p.position == Position.PITCHER and stats.get('at_bats', 0) == 0: continue
+            
+            p_team = self.home_team if p in self.home_team.players else self.away_team
+            
+            hr = stats.get('home_runs', 0)
+            hits = stats.get('hits', 0)
+            rbi = stats.get('rbis', 0)
+            
+            # Multi-HR
+            if hr >= 3:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}選手（{p_team.name}）が1試合3本塁打の大爆発！",
+                    "team": p_team.name,
+                    "score": 120
+                })
+            elif hr == 2:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}選手（{p_team.name}）が2打席連続本塁打！", # Simplified text
+                    "team": p_team.name,
+                    "score": 95
+                })
+            elif hr == 1:
+                 # Check for Walk-off (Sayonara)
+                 # Difficult to detect strictly without play-by-play history, 
+                 # but if home team won, game ended in 9+ inning bottom, and this player hit a HR...
+                 # We need more context for walk-off. Skipping for now unless added to state.
+                 pass
+
+            # Cycle Hit (Requires keeping track of hit types per player more granularly OR checking stat dict)
+            # Checking stats dict keys? 'hits' is total.
+            # We don't track singles/doubles separately in game_stats dict by default?
+            # Let's check structure.
+            # game_stats[p] keys: at_bats, hits, doubles, triples, home_runs... usually.
+            # We assume standard keys exist.
+            
+            # 3+ Hits (Mouda)
+            if hits >= 4:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}選手（{p_team.name}）が固め打ち、4安打の大活躍！",
+                    "team": p_team.name,
+                    "score": 80
+                })
+            elif hits == 3:
+                 # Common, maybe too noisy? Log only if significant?
+                 # Highlights should be special. 3 hits is good but happens often.
+                 pass
+
+            # 4+ RBIs
+            if rbi >= 4:
+                highlights.append({
+                    "category": "PERFORMANCE",
+                    "message": f"{p.name}選手（{p_team.name}）が勝負強さを発揮、{rbi}打点！",
+                    "team": p_team.name,
+                    "score": 85
+                })
+        
+        # Sort by score (importance)
+        highlights.sort(key=lambda x: x['score'], reverse=True)
+        return highlights
 
     def get_winner(self):
         if self.state.home_score > self.state.away_score: return self.home_team.name

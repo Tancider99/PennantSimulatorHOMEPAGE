@@ -5,7 +5,8 @@ Industrial Sci-Fi Dashboard with High Information Density
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
-    QFrame, QPushButton, QScrollArea, QGraphicsDropShadowEffect
+    QFrame, QPushButton, QScrollArea, QGraphicsDropShadowEffect,
+    QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont
@@ -21,6 +22,149 @@ from UI.widgets.buttons import ActionButton
 from models import TEAM_COLORS
 
 
+class CompactStandingsCard(QFrame):
+    """Compact standings with league toggle"""
+    league_changed = Signal(str)  # Emits "north" or "south"
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+        self.current_league = "north"
+        self.north_teams = []
+        self.south_teams = []
+        
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        
+        # Header with toggle
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(4)
+        
+        header = QLabel("STANDINGS")
+        header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        
+        # Toggle buttons
+        self.north_btn = QPushButton("N")
+        self.south_btn = QPushButton("S")
+        
+        for btn in [self.north_btn, self.south_btn]:
+            btn.setFixedSize(22, 18)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setCheckable(True)
+        
+        self.north_btn.setChecked(True)
+        self._update_btn_styles()
+        
+        self.north_btn.clicked.connect(lambda: self._switch_league("north"))
+        self.south_btn.clicked.connect(lambda: self._switch_league("south"))
+        
+        header_layout.addWidget(self.north_btn)
+        header_layout.addWidget(self.south_btn)
+        layout.addLayout(header_layout)
+        
+        # Standings rows
+        self.rows_layout = QVBoxLayout()
+        self.rows_layout.setSpacing(1)
+        layout.addLayout(self.rows_layout)
+    
+    def _update_btn_styles(self):
+        for btn, is_active in [(self.north_btn, self.current_league == "north"),
+                               (self.south_btn, self.current_league == "south")]:
+            if is_active:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {self.theme.primary};
+                        color: white;
+                        border: none;
+                        font-size: 9px;
+                        font-weight: 700;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {self.theme.bg_input};
+                        color: {self.theme.text_muted};
+                        border: none;
+                        font-size: 9px;
+                    }}
+                    QPushButton:hover {{
+                        background: {self.theme.bg_card_hover};
+                    }}
+                """)
+    
+    def _switch_league(self, league):
+        self.current_league = league
+        self.north_btn.setChecked(league == "north")
+        self.south_btn.setChecked(league == "south")
+        self._update_btn_styles()
+        self._refresh_standings()
+        self.league_changed.emit(league)
+    
+    def set_standings(self, north_teams: list, south_teams: list):
+        """Set both league standings"""
+        self.north_teams = north_teams
+        self.south_teams = south_teams
+        self._refresh_standings()
+    
+    def _refresh_standings(self):
+        """Refresh with current league"""
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        teams = self.north_teams if self.current_league == "north" else self.south_teams
+        if not teams:
+            return
+        
+        top_pct = teams[0].winning_percentage if teams else 0
+        
+        for i, team in enumerate(teams[:6]):  # Show all 6 teams
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            
+            rank = QLabel(f"{i+1}")
+            rank.setFixedWidth(14)
+            rank.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {self.theme.accent_orange if i < 3 else self.theme.text_muted};")
+            row.addWidget(rank)
+            
+            # Get first word from team name (split on capital letters or spaces)
+            import re
+            name_parts = re.split(r'_|\s', team.name)
+            first_word = name_parts[0] if name_parts else team.name[:6]
+            name = QLabel(first_word)
+            name.setStyleSheet(f"font-size: 10px; color: {self.theme.text_primary};")
+            row.addWidget(name)
+            row.addStretch()
+            
+            # Record with draws: W-L-D
+            record = QLabel(f"{team.wins}-{team.losses}-{team.draws}")
+            record.setStyleSheet(f"font-size: 10px; color: {self.theme.text_secondary};")
+            row.addWidget(record)
+            
+            # Winning percentage
+            pct = QLabel(f".{int(team.winning_percentage * 1000):03d}")
+            pct.setStyleSheet(f"font-size: 10px; font-weight: 600; color: {self.theme.text_primary};")
+            row.addWidget(pct)
+            
+            container = QWidget()
+            container.setLayout(row)
+            if i % 2 == 0:
+                container.setStyleSheet(f"background: {self.theme.bg_card_elevated};")
+            self.rows_layout.addWidget(container)
+
+
 class TeamColorBar(QWidget):
     """Team color indicator bar"""
     def __init__(self, team, height=80, width=8, parent=None):
@@ -32,6 +176,7 @@ class TeamColorBar(QWidget):
         if not color:
             color = TEAM_COLORS.get(getattr(team, 'name', ''), self.theme.primary)
         self.setStyleSheet(f"background-color: {color}; border-radius: 0px;")
+
 
 
 class CompactStatCard(QFrame):
@@ -50,19 +195,19 @@ class CompactStatCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(1)
 
         lbl = QLabel(label)
-        lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; letter-spacing: 1px; font-weight: 600;")
+        lbl.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 1px; font-weight: 600;")
         layout.addWidget(lbl)
 
         self._value_label = QLabel(value)
-        self._value_label.setStyleSheet(f"font-size: 22px; font-weight: 800; color: {self._color};")
+        self._value_label.setStyleSheet(f"font-size: 18px; font-weight: 800; color: {self._color};")
         layout.addWidget(self._value_label)
 
         self._sub_label = QLabel(sub)
-        self._sub_label.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted};")
+        self._sub_label.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted};")
         layout.addWidget(self._sub_label)
 
     def set_value(self, value: str):
@@ -91,8 +236,8 @@ class MatchupCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
 
         header = QLabel("NEXT GAME")
         header.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
@@ -102,15 +247,15 @@ class MatchupCard(QFrame):
         self.matchup_layout.setSpacing(12)
 
         self.away_label = QLabel("---")
-        self.away_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {self.theme.text_primary};")
+        self.away_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {self.theme.text_primary};")
         self.away_label.setAlignment(Qt.AlignCenter)
 
         vs_label = QLabel("@")
-        vs_label.setStyleSheet(f"font-size: 12px; color: {self.theme.text_muted};")
+        vs_label.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted};")
         vs_label.setAlignment(Qt.AlignCenter)
 
         self.home_label = QLabel("---")
-        self.home_label.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {self.theme.text_primary};")
+        self.home_label.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {self.theme.text_primary};")
         self.home_label.setAlignment(Qt.AlignCenter)
 
         self.matchup_layout.addWidget(self.away_label)
@@ -148,8 +293,8 @@ class RecentResultsCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
 
         header = QLabel("RECENT RESULTS")
         header.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
@@ -161,10 +306,10 @@ class RecentResultsCard(QFrame):
 
         for i in range(10):
             lbl = QLabel("-")
-            lbl.setFixedSize(24, 24)
+            lbl.setFixedSize(18, 18)
             lbl.setAlignment(Qt.AlignCenter)
             lbl.setStyleSheet(f"""
-                font-size: 11px;
+                font-size: 9px;
                 font-weight: 700;
                 color: {self.theme.text_muted};
                 background: {self.theme.bg_input};
@@ -225,15 +370,15 @@ class LeaderCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
 
         header = QLabel(title)
-        header.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; letter-spacing: 1px; font-weight: 600;")
+        header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 1px; font-weight: 600;")
         layout.addWidget(header)
 
         self.entries_layout = QVBoxLayout()
-        self.entries_layout.setSpacing(4)
+        self.entries_layout.setSpacing(2)
         layout.addLayout(self.entries_layout)
 
     def set_leaders(self, leaders: list):
@@ -390,11 +535,164 @@ class TeamStatsCard(QFrame):
         self.stat_labels["ERA"].setText(era)
 
 
+class InjuriesCard(QFrame):
+    """Current injuries card with internal scroll"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+
+        header = QLabel("INJURIES")
+        header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        layout.addWidget(header)
+
+        # Scroll area for entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.entries_widget = QWidget()
+        self.entries_layout = QVBoxLayout(self.entries_widget)
+        self.entries_layout.setContentsMargins(0, 0, 0, 0)
+        self.entries_layout.setSpacing(1)
+        self.entries_layout.addStretch()
+        
+        scroll.setWidget(self.entries_widget)
+        layout.addWidget(scroll, stretch=1)
+
+    def set_injuries(self, injuries: list):
+        """Set injuries list [(player_name, position, days_left), ...]"""
+        while self.entries_layout.count() > 1:
+            item = self.entries_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not injuries:
+            no_injury = QLabel("故障者なし")
+            no_injury.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; font-style: italic;")
+            self.entries_layout.insertWidget(0, no_injury)
+            return
+
+        for name, pos, days in injuries:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+
+            pos_lbl = QLabel(pos)
+            pos_lbl.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; min-width: 16px;")
+            row.addWidget(pos_lbl)
+
+            name_lbl = QLabel(name[:8])
+            name_lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.text_primary};")
+            row.addWidget(name_lbl)
+            row.addStretch()
+
+            days_lbl = QLabel(f"{days}日")
+            days_lbl.setStyleSheet(f"font-size: 9px; font-weight: 600; color: {self.theme.danger};")
+            row.addWidget(days_lbl)
+
+            container = QWidget()
+            container.setLayout(row)
+            self.entries_layout.insertWidget(self.entries_layout.count() - 1, container)
+
+
+class NewsCard(QFrame):
+    """Recent news card with internal scroll"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+
+        header = QLabel("NEWS")
+        header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        layout.addWidget(header)
+
+        # Scroll area for entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.entries_widget = QWidget()
+        self.entries_layout = QVBoxLayout(self.entries_widget)
+        self.entries_layout.setContentsMargins(0, 0, 0, 0)
+        self.entries_layout.setSpacing(1)
+        self.entries_layout.addStretch()
+        
+        scroll.setWidget(self.entries_widget)
+        layout.addWidget(scroll, stretch=1)
+
+    def set_news(self, news_items: list):
+        """Set news list [(date, headline, type), ...]"""
+        while self.entries_layout.count() > 1:
+            item = self.entries_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not news_items:
+            no_news = QLabel("ニュースなし")
+            no_news.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; font-style: italic;")
+            self.entries_layout.insertWidget(0, no_news)
+            return
+
+        for date, headline, news_type in news_items:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+
+            # Type marker (no emoji)
+            if news_type == "trade":
+                marker = "[移籍]"
+            elif news_type == "sign":
+                marker = "[契約]"
+            elif news_type == "record":
+                marker = "[記録]"
+            elif news_type == "injury":
+                marker = "[故障]"
+            elif news_type == "game":
+                marker = "[試合]"
+            else:
+                marker = "[--]"
+
+            marker_lbl = QLabel(marker)
+            marker_lbl.setStyleSheet(f"font-size: 8px; color: {self.theme.primary}; min-width: 30px;")
+            row.addWidget(marker_lbl)
+
+            headline_lbl = QLabel(headline[:25] + ".." if len(headline) > 25 else headline)
+            headline_lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.text_primary};")
+            row.addWidget(headline_lbl)
+            row.addStretch()
+
+            container = QWidget()
+            container.setLayout(row)
+            self.entries_layout.insertWidget(self.entries_layout.count() - 1, container)
+
+
 class HomePage(ContentPanel):
     """Home page with high-density industrial dashboard"""
 
     game_requested = Signal()
     view_roster_requested = Signal()
+    player_detail_requested = Signal(object)  # Required by MainWindow
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -407,22 +705,45 @@ class HomePage(ContentPanel):
         # Header section
         self._create_header()
 
-        # Main grid
+        # Main grid layout
         main_grid = QGridLayout()
-        main_grid.setSpacing(12)
-        main_grid.setContentsMargins(0, 0, 0, 0)
+        main_grid.setSpacing(4)
+        main_grid.setContentsMargins(8, 4, 8, 8)
 
-        # Row 1: Stats cards
+        # Row 0: Stats cards (4 columns)
         self._create_stats_row(main_grid, 0)
 
-        # Row 2: Matchup + Results + Actions
+        # Row 1: Matchup + Results
         self._create_info_row(main_grid, 1)
 
-        # Row 3: Leaders + Standings
-        self._create_data_row(main_grid, 2)
+        # Row 2: Leaders (left, col 0-1)
+        self._create_leaders_widget(main_grid, 2, 0)
+
+        # Row 3: Injuries (left, col 0-1)
+        self.injuries_card = InjuriesCard()
+        main_grid.addWidget(self.injuries_card, 3, 0, 1, 2)
+
+        # Row 2-3: News + Standings (right, col 2-3, rowspan 2)
+        right_widget = QWidget()
+        right_layout = QHBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(4)
+        
+        self.news_card = NewsCard()
+        right_layout.addWidget(self.news_card, stretch=2)
+        
+        self.standings_card = CompactStandingsCard()
+        right_layout.addWidget(self.standings_card, stretch=1)
+        
+        main_grid.addWidget(right_widget, 2, 2, 2, 2)  # rowspan=2
+
+        # Set row stretches - rows 2 and 3 expand
+        main_grid.setRowStretch(0, 0)
+        main_grid.setRowStretch(1, 0)
+        main_grid.setRowStretch(2, 1)
+        main_grid.setRowStretch(3, 1)
 
         self.add_layout(main_grid)
-        self.add_stretch()
 
     def showEvent(self, event):
         """画面表示時にデータを更新"""
@@ -519,6 +840,78 @@ class HomePage(ContentPanel):
         self.results_card = RecentResultsCard()
         grid.addWidget(self.results_card, row, 2, 1, 2)
 
+    def _create_leaders_widget(self, grid: QGridLayout, row: int, col: int):
+        """Create leaders widget for grid placement"""
+        leaders_frame = QFrame()
+        leaders_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+                border-radius: 0px;
+            }}
+        """)
+        leaders_layout = QVBoxLayout(leaders_frame)
+        leaders_layout.setContentsMargins(8, 6, 8, 6)
+        leaders_layout.setSpacing(4)
+
+        leaders_header = QLabel("TEAM LEADERS")
+        leaders_header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        leaders_layout.addWidget(leaders_header)
+
+        leaders_grid = QGridLayout()
+        leaders_grid.setSpacing(4)
+
+        self.avg_leaders = LeaderCard("AVG")
+        leaders_grid.addWidget(self.avg_leaders, 0, 0)
+
+        self.hr_leaders = LeaderCard("HR")
+        leaders_grid.addWidget(self.hr_leaders, 0, 1)
+
+        self.era_leaders = LeaderCard("ERA")
+        leaders_grid.addWidget(self.era_leaders, 1, 0)
+
+        self.wins_leaders = LeaderCard("W")
+        leaders_grid.addWidget(self.wins_leaders, 1, 1)
+
+        leaders_layout.addLayout(leaders_grid)
+        grid.addWidget(leaders_frame, row, col, 1, 2)  # colspan=2
+
+    def _create_leaders_panel(self, parent_layout):
+        """Create leaders panel for layout (legacy)"""
+        leaders_frame = QFrame()
+        leaders_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+                border-radius: 0px;
+            }}
+        """)
+        leaders_layout = QVBoxLayout(leaders_frame)
+        leaders_layout.setContentsMargins(12, 8, 12, 8)
+        leaders_layout.setSpacing(6)
+
+        leaders_header = QLabel("TEAM LEADERS")
+        leaders_header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        leaders_layout.addWidget(leaders_header)
+
+        leaders_grid = QGridLayout()
+        leaders_grid.setSpacing(4)
+
+        self.avg_leaders = LeaderCard("AVG")
+        leaders_grid.addWidget(self.avg_leaders, 0, 0)
+
+        self.hr_leaders = LeaderCard("HR")
+        leaders_grid.addWidget(self.hr_leaders, 0, 1)
+
+        self.era_leaders = LeaderCard("ERA")
+        leaders_grid.addWidget(self.era_leaders, 1, 0)
+
+        self.wins_leaders = LeaderCard("W")
+        leaders_grid.addWidget(self.wins_leaders, 1, 1)
+
+        leaders_layout.addLayout(leaders_grid)
+        parent_layout.addWidget(leaders_frame)
+
     def _create_data_row(self, grid: QGridLayout, row: int):
         """Create data cards row"""
         # Leaders section
@@ -556,9 +949,19 @@ class HomePage(ContentPanel):
         leaders_layout.addLayout(leaders_grid)
         grid.addWidget(leaders_frame, row, 0, 1, 2)
 
-        # Standings
-        self.standings_card = StandingsCard("STANDINGS")
+        # Standings (compact with league toggle)
+        self.standings_card = CompactStandingsCard()
         grid.addWidget(self.standings_card, row, 2, 1, 2)
+
+    def _create_extra_row(self, grid: QGridLayout, row: int):
+        """Create injuries and news row"""
+        # Injuries
+        self.injuries_card = InjuriesCard()
+        grid.addWidget(self.injuries_card, row, 0, 1, 2)
+
+        # News
+        self.news_card = NewsCard()
+        grid.addWidget(self.news_card, row, 2, 1, 2)
 
     def set_game_state(self, game_state):
         """Update page with game state"""
@@ -601,8 +1004,16 @@ class HomePage(ContentPanel):
             else:
                 self.rank_card.set_sub("Leading")
 
-            # Standings
-            self.standings_card.set_standings(league_teams[:6])
+            # Standings - set both leagues
+            north_teams = [t for t in game_state.teams 
+                          if getattr(t.league, 'value', '').lower() == "north league" 
+                          or getattr(t.league, 'name', '').upper() == "NORTH"]
+            south_teams = [t for t in game_state.teams 
+                          if getattr(t.league, 'value', '').lower() == "south league" 
+                          or getattr(t.league, 'name', '').upper() == "SOUTH"]
+            north_teams.sort(key=lambda t: t.winning_percentage, reverse=True)
+            south_teams.sort(key=lambda t: t.winning_percentage, reverse=True)
+            self.standings_card.set_standings(north_teams, south_teams)
 
         # Games progress
         games_played = team.wins + team.losses + team.draws
@@ -624,6 +1035,12 @@ class HomePage(ContentPanel):
 
         # Leaders
         self._update_leaders(team)
+
+        # Injuries
+        self._update_injuries(team)
+
+        # News
+        self._update_news(game_state)
 
     def _update_next_game(self, game_state, team):
         """Update next game display from schedule and return True if game exists today"""
@@ -713,3 +1130,49 @@ class HomePage(ContentPanel):
         self.wins_leaders.set_leaders([
             (p.name, p.record.wins) for p in wins_sorted[:3]
         ])
+
+    def _update_injuries(self, team):
+        """Update injuries display"""
+        injured = [(p.name, "P" if p.position.value == "投手" else p.position.value[0], 
+                    getattr(p, 'injury_days', 0)) 
+                   for p in team.players if getattr(p, 'is_injured', False)]
+        self.injuries_card.set_injuries(injured)
+
+    def _update_news(self, game_state):
+        """Update news display with game highlights"""
+        news_items = []
+        
+        # Get news from game_state
+        if hasattr(game_state, 'get_recent_news'):
+            raw_news = game_state.get_recent_news(limit=5)
+            for n in raw_news:
+                date = n.get('date', '')
+                headline = n.get('headline', n.get('title', ''))
+                news_type = n.get('type', 'general')
+                news_items.append((date, headline, news_type))
+        elif hasattr(game_state, 'news_log'):
+            for n in game_state.news_log[:5]:
+                date = n.get('date', '')
+                headline = n.get('headline', n.get('title', ''))
+                news_type = n.get('type', 'general')
+                news_items.append((date, headline, news_type))
+        
+        # Add game highlights from recent games
+        if hasattr(game_state, 'schedule') and game_state.schedule:
+            recent_games = []
+            for game in game_state.schedule.games:
+                if hasattr(game, 'status') and str(game.status) == "GameStatus.COMPLETED":
+                    recent_games.append(game)
+            
+            # Get last 5 completed games for highlights
+            for game in recent_games[-5:]:
+                # Check for notable performances
+                highlights = getattr(game, 'highlights', [])
+                if highlights:
+                    for h in highlights[:2]:  # Max 2 per game
+                        news_items.insert(0, (game.date, h, "game"))
+                elif hasattr(game, 'mvp_name') and game.mvp_name:
+                    headline = f"{game.mvp_name}が活躍! {game.away_team_name} vs {game.home_team_name}"
+                    news_items.insert(0, (game.date, headline, "game"))
+        
+        self.news_card.set_news(news_items[:10])  # Show up to 10 items

@@ -40,7 +40,7 @@ class VerticalStatBar(QWidget):
         self.max_value = max_value
         self.theme = get_theme()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumWidth(60)
+        self.setMinimumWidth(45)  # Reduced for pitch display
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -211,6 +211,7 @@ class PlayerDetailPage(QWidget):
         super().__init__(parent)
         self.theme = get_theme()
         self.current_player = None
+        self.display_mode = None # "pitcher" or "batter" or None (auto)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -238,12 +239,16 @@ class PlayerDetailPage(QWidget):
         self.placeholder.setStyleSheet("font-size: 24px; color: #555; font-weight: bold;")
         self.content_layout.addWidget(self.placeholder)
 
-    def set_player(self, player, team_name=None):
-        self.current_player = player
-        self.current_team_name = team_name
+    def _clear_content(self):
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
+
+    def set_player(self, player, team_name=None):
+        self.current_player = player
+        self.current_team_name = team_name
+        self.display_mode = None # Reset to auto
+        self._clear_content()
             
         if not player:
             self.content_layout.addWidget(self.placeholder)
@@ -266,6 +271,24 @@ class PlayerDetailPage(QWidget):
         toolbar.add_separator()
         toolbar.add_widget(QLabel("PLAYER PROFILE", styleSheet="font-weight: bold; color: #fff;"))
         toolbar.add_stretch()
+        
+        # Toggle View Mode
+        self.view_toggle_btn = QPushButton("能力表示切替")
+        self.view_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.view_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_secondary};
+                border: 1px solid {self.theme.border};
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{ background-color: {self.theme.bg_hover}; color: white; }}
+        """)
+        self.view_toggle_btn.clicked.connect(self._toggle_view_mode)
+        toolbar.add_widget(self.view_toggle_btn)
+        
         return toolbar
 
     def _build_dashboard(self, player):
@@ -274,8 +297,15 @@ class PlayerDetailPage(QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(30)
         
+        top_layout.setSpacing(30)
+        
         radar = RadarChart() 
-        is_pitcher = (player.position.value == "投手")
+        # Determine mode
+        if self.display_mode:
+            is_pitcher = (self.display_mode == "pitcher")
+        else:
+            is_pitcher = (player.position.value == "投手")
+            
         radar.set_player_stats(player, is_pitcher)
         top_layout.addWidget(radar, 2)
         
@@ -352,7 +382,7 @@ class PlayerDetailPage(QWidget):
             pitch_mental = [
                 ("メンタル", stats.mental, 99), ("野球脳", stats.intelligence, 99),
                 ("回復", stats.recovery, 99), ("ケガ耐性", stats.durability, 99),
-                ("練習態度", stats.work_ethic, 99)
+                ("練習態度", stats.work_ethic, 99), ("潜在能力", getattr(player, 'potential', 50), 99)
             ]
             
             bottom_tabs.addTab(self._create_full_tab(pitch_basic), "PITCHING BASIC")
@@ -365,7 +395,7 @@ class PlayerDetailPage(QWidget):
             
             if stats.pitches:
                 for i, p_name in enumerate(stats.pitches.keys()):
-                    qual = stats.get_pitch_quality(p_name)
+                    ctrl = stats.get_pitch_control(p_name)
                     stf = stats.get_pitch_stuff(p_name)
                     mov = stats.get_pitch_movement(p_name)
                     
@@ -373,7 +403,8 @@ class PlayerDetailPage(QWidget):
                     p_box = QFrame()
                     p_box.setStyleSheet("background: #222; border-radius: 6px;")
                     vb = QVBoxLayout(p_box)
-                    vb.setContentsMargins(5,5,5,5)
+                    vb.setContentsMargins(3,3,3,3)
+                    vb.setSpacing(2)
                     
                     lbl = QLabel(p_name)
                     lbl.setAlignment(Qt.AlignCenter)
@@ -381,17 +412,22 @@ class PlayerDetailPage(QWidget):
                     vb.addWidget(lbl)
                     
                     h_bars = QHBoxLayout()
-                    h_bars.setSpacing(4)
-                    h_bars.addWidget(VerticalStatBar("精度", qual, 99))
+                    h_bars.setSpacing(2)
+                    h_bars.addWidget(VerticalStatBar("制球", ctrl, 99))
                     h_bars.addWidget(VerticalStatBar("球威", stf, 99))
                     h_bars.addWidget(VerticalStatBar("変化", mov, 99))
                     vb.addLayout(h_bars)
                     
-                    row = i // 3
-                    col = i % 3
+                    # Use up to 10 columns
+                    num_pitches = len(stats.pitches)
+                    cols = min(num_pitches, 10)
+                    row = i // cols
+                    col = i % cols
                     pt_layout.addWidget(p_box, row, col)
                     
-                for c in range(3): pt_layout.setColumnStretch(c, 1)
+                num_pitches = len(stats.pitches)
+                cols = min(num_pitches, 10)
+                for c in range(cols): pt_layout.setColumnStretch(c, 1)
             else:
                 pt_layout.addWidget(QLabel("変化球なし", styleSheet="color:#666;"), 0, 0)
                 
@@ -430,13 +466,30 @@ class PlayerDetailPage(QWidget):
             mental_list = [
                 ("メンタル", stats.mental, 99), ("野球脳", stats.intelligence, 99),
                 ("回復", stats.recovery, 99), ("ケガ耐性", stats.durability, 99),
-                ("練習態度", stats.work_ethic, 99)
+                ("練習態度", stats.work_ethic, 99), ("潜在能力", getattr(player, 'potential', 50), 99)
             ]
             
             bottom_tabs.addTab(self._create_full_tab(bat_basic), "BATTING")
             bottom_tabs.addTab(self._create_full_tab(bat_spec), "SPECIAL / RUNNING")
             bottom_tabs.addTab(self._create_full_tab(fld_list), "FIELDING")
             bottom_tabs.addTab(self._create_full_tab(mental_list), "MENTAL / OTHER")
+
+    def _toggle_view_mode(self):
+        if not self.current_player: return
+        
+        # Determine current effective mode
+        if self.display_mode:
+            current = self.display_mode
+        else:
+            current = "pitcher" if self.current_player.position.value == "投手" else "batter"
+            
+        # Switch
+        new_mode = "batter" if current == "pitcher" else "pitcher"
+        self.display_mode = new_mode
+        
+        # Rebuild
+        self._clear_content()
+        self._build_dashboard(self.current_player)
 
     def _create_full_tab(self, items):
         tab_widget = QWidget()

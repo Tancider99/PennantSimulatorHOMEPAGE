@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QFrame, QPushButton, QMenu, QStyledItemDelegate, QStyle
 )
 from PySide6.QtCore import Qt, Signal, QSortFilterProxyModel, QMimeData, QByteArray, QDataStream, QPoint, QIODevice, QSize
-from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPen, QPixmap, QDrag
+from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPen, QPixmap, QDrag, QPalette
 
 import sys
 sys.path.insert(0, '..')
@@ -101,6 +101,31 @@ class RatingDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
 
 
+class StarDelegate(QStyledItemDelegate):
+    """Delegate for Total Rating (Gold Text)"""
+    def paint(self, painter, option, index):
+        painter.save()
+        
+        # Initialize option to get default style
+        self.initStyleOption(option, index)
+        
+        # Override palette logic for Text
+        # Note: If we just draw text manually, we must handle background correct.
+        # Call base style to draw background, but we want to change text color.
+        
+        # Easiest way: Modify option.palette for Text roles
+        option.palette.setColor(QPalette.Text, QColor("#FFD700"))
+        option.palette.setColor(QPalette.HighlightedText, QColor("#FFD700"))
+        
+        # Also force Bold font
+        option.font.setBold(True)
+        
+        # Call base paint (which uses option)
+        super().paint(painter, option, index)
+        
+        painter.restore()
+
+
 class SortableTableWidgetItem(QTableWidgetItem):
     """
     数値でのソートを正しく行うためのカスタムアイテムクラス
@@ -188,6 +213,7 @@ class PlayerTable(QWidget):
 
         # Set delegate for rating columns
         self.rating_delegate = RatingDelegate(self)
+        self.star_delegate = StarDelegate(self)
 
         # Connect signals
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed) if self.table.selectionModel() else None
@@ -327,6 +353,9 @@ class PlayerTable(QWidget):
         rating_cols = [4, 5, 6, 7, 8, 9] if mode == "batter" else [4, 5, 6, 7]
         for col in rating_cols:
             self.table.setItemDelegateForColumn(col, self.rating_delegate)
+            
+        # Set StarDelegate for Total column (Last column)
+        self.table.setItemDelegateForColumn(len(headers)-1, self.star_delegate)
 
         # Refresh data
         self._populate_table(mode)
@@ -344,21 +373,24 @@ class PlayerTable(QWidget):
         if logicalIndex in [1, 2]:
             return
 
-        header = self.table.horizontalHeader()
-        # ★修正: 現在のソート状態を正しく取得してトグル
-        current_column = header.sortIndicatorSection()
-        current_order = header.sortIndicatorOrder()
-        
-        if current_column != logicalIndex:
-            new_order = Qt.DescendingOrder
-        else:
-            if current_order == Qt.DescendingOrder:
-                new_order = Qt.AscendingOrder
-            else:
-                new_order = Qt.DescendingOrder
+        # Initialize manual tracking if needed
+        if not hasattr(self, "_sort_col"):
+            self._sort_col = -1
+            self._sort_order = Qt.DescendingOrder
 
-        self.table.sortItems(logicalIndex, new_order)
-        header.setSortIndicator(logicalIndex, new_order)
+        # Toggle if same column, else default to Descending
+        if self._sort_col == logicalIndex:
+            if self._sort_order == Qt.DescendingOrder:
+                self._sort_order = Qt.AscendingOrder
+            else:
+                self._sort_order = Qt.DescendingOrder
+        else:
+            self._sort_col = logicalIndex
+            self._sort_order = Qt.DescendingOrder
+
+        header = self.table.horizontalHeader()
+        self.table.sortItems(self._sort_col, self._sort_order)
+        header.setSortIndicator(self._sort_col, self._sort_order)
 
     def _populate_table(self, mode: str = "batter"):
         """Fill table with player data"""
@@ -371,8 +403,13 @@ class PlayerTable(QWidget):
             self._set_player_row(row, player, mode)
 
         # データ入力後に現在のソート状態に従ってソートを実行
-        header = self.table.horizontalHeader()
-        self.table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
+        # データ入力後に現在のソート状態に従ってソートを実行
+        if hasattr(self, "_sort_col") and self._sort_col >= 0:
+            self.table.sortItems(self._sort_col, self._sort_order)
+        # else: No sort or default order applied by Qt logic? 
+        # Actually header.sortIndicatorSection() returns 0 by default. 
+        # If we want default sort (Total Ability?), we can set it. 
+        # But for now just respecting manual state is enough.
         
         self._update_status()
 
@@ -442,6 +479,10 @@ class PlayerTable(QWidget):
                 
                 # 総合力の場合は数値でソートできるように設定
                 if "★" in str(value):
+                    item.setForeground(QColor("#FFD700"))
+                    font = QFont()
+                    font.setBold(True)
+                    item.setFont(font)
                     try:
                         val_num = int(str(value).replace("★ ", ""))
                         item.setData(Qt.UserRole, val_num)

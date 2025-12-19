@@ -24,6 +24,7 @@ from models import GameStatus
 
 class SimulationWorker(QThread):
     progress_updated = Signal(int, int, str)
+    day_advanced = Signal()  # Signal to main thread to call advance_day
     finished = Signal()
     error_occurred = Signal(str)
 
@@ -58,6 +59,9 @@ class SimulationWorker(QThread):
                 
                 # GameStateに処理を委譲（エラーハンドリング済み）
                 self.game_state.process_date(date_str)
+                
+                # Emit signal for main thread to handle contracts/scouting updates
+                self.day_advanced.emit()
                 
             self.finished.emit()
             
@@ -194,6 +198,7 @@ class SchedulePage(QWidget):
         super().__init__(parent)
         self.theme = get_theme()
         self.game_state = None
+        self.contracts_page = None  # Set by main_window for scouting processing
         self.selected_date = QDate.currentDate()
         self.worker = None
         self._setup_ui()
@@ -321,6 +326,7 @@ class SchedulePage(QWidget):
 
         self.worker = SimulationWorker(self.game_state, self.selected_date, parent=self)
         self.worker.progress_updated.connect(self._update_progress)
+        self.worker.day_advanced.connect(self._on_day_advanced)  # Handle in main thread
         self.worker.finished.connect(self._on_simulation_finished)
         self.worker.error_occurred.connect(self._on_simulation_error)
         self.worker.start()
@@ -343,6 +349,14 @@ class SchedulePage(QWidget):
     def _on_simulation_finished(self):
         # 修正: accept()を呼ぶだけで、メッセージボックスはexec()の後で処理する
         self.progress_dialog.accept()
+
+    def _on_day_advanced(self):
+        """Handle day advanced signal from worker thread - run in main thread"""
+        if self.contracts_page:
+            try:
+                self.contracts_page.advance_day()
+            except Exception:
+                pass  # Ignore errors in contracts page
 
     def _on_simulation_error(self, message): 
         # エラー時はrejectで閉じる

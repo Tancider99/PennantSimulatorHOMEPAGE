@@ -122,30 +122,52 @@ def create_random_player(position: Position,
         stats.steal = get_stat(10, 5, 1, 40)
         stats.baserunning = get_stat(15, 7, 1, 60)
 
-        # 変化球生成 (詳細パラメータ付き)
+        # 変化球生成 (詳細パラメータ付き: stuff/control/movement)
         balls = ["ストレート", "スライダー", "カーブ", "フォーク", "チェンジアップ", "カットボール", "シンカー", "ツーシーム"]
         num_pitches = random.randint(3, 6)
         selected_balls = random.sample(balls, num_pitches)
         
+        # 基準となる平均値を設定
+        base_stuff = get_stat(50)
+        base_control = get_stat(50)
+        base_movement = get_stat(50)
+        
         stats.pitches = {}
         for ball in selected_balls:
-            qual = get_stat(50)
-            # 全体のstuff/movementを基準に±10の揺らぎを持たせる
-            p_stuff = get_stat(stats.stuff, 10)
-            p_move = get_stat(stats.movement, 10)
+            # 各球種ごとに±10の揺らぎを持たせる
+            p_stuff = get_stat(base_stuff, 10)
+            p_control = get_stat(base_control, 10)
+            p_move = get_stat(base_movement, 10) if ball not in ["ストレート", "Straight"] else get_stat(40, 10)
             
             stats.pitches[ball] = {
-                "quality": qual,
                 "stuff": p_stuff,
+                "control": p_control,
                 "movement": p_move
             }
             
         if "ストレート" not in stats.pitches:
             stats.pitches["ストレート"] = {
-                "quality": get_stat(stats.stuff, 10),
-                "stuff": stats.stuff,
-                "movement": get_stat(40, 10) # ストレートの変化量は控えめ
+                "stuff": get_stat(base_stuff, 10),
+                "control": get_stat(base_control, 10),
+                "movement": get_stat(40, 10)
             }
+
+        # --- 投手の打撃能力 (弱めに生成: 1-20, 弾道 1) ---
+        stats.trajectory = 1
+        stats.contact = random.randint(1, 20)
+        stats.gap = random.randint(1, 20)
+        stats.power = random.randint(1, 20)
+        stats.eye = random.randint(1, 20)
+        stats.avoid_k = random.randint(1, 20)
+        
+        # 投手の走力・肩・守備は野手と同じ基準で生成する
+        stats.speed = get_stat(50)
+        stats.steal = get_stat(50)
+        stats.baserunning = get_stat(50)
+        
+        # Arm/Defense for Pitcher is typically good (already get_stat(50))
+        # So we just update speed to match fielders.
+
 
     else:
         # --- 野手能力 ---
@@ -187,11 +209,14 @@ def create_random_player(position: Position,
         elif position in [Position.LEFT, Position.CENTER, Position.RIGHT]:
             stats.set_defense_range(position, get_stat(50))
 
-        stats.velocity = 130
-        stats.control = 50
-        stats.stuff = 50
-        stats.movement = 50
-        stats.stamina = 50
+        # --- 野手の投手能力 (弱めに生成: 1-10, 球速120km/h) ---
+        stats.velocity = 120
+        stats.control = random.randint(1, 10)
+        stats.stamina = random.randint(1, 10)
+        stats.breaking = random.randint(1, 10)
+        stats.stuff = random.randint(1, 10)
+        stats.movement = random.randint(1, 10)
+        stats.stability = random.randint(1, 10)
 
     stats.durability = get_stat(50)
     stats.recovery = get_stat(50)
@@ -214,10 +239,16 @@ def create_random_player(position: Position,
     base = 500
     salary = int(base * (rating ** 1.5) / 100) * 10000
 
+    # Generate potential based on age (younger = higher potential)
+    # Base potential decreases with age: ~75 at 18, ~50 at 28, ~30 at 38
+    age_factor = max(0, 40 - age) / 22.0  # 0.0-1.0 scale (higher for young)
+    base_potential = int(30 + 45 * age_factor)  # Range: 30-75 based on age
+    potential = max(1, min(99, int(random.gauss(base_potential, 12))))
+
     player = Player(
         name=name, position=position, pitch_type=pitch_type, stats=stats,
         age=age, status=status, uniform_number=number, is_foreign=is_foreign, salary=salary,
-        bats=player_bats, throws=player_throws
+        bats=player_bats, throws=player_throws, potential=potential
     )
     
     if position == Position.PITCHER:
@@ -263,26 +294,48 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
         stats.error = get_stat_gauss(50, 15)
         stats.turn_dp = get_stat_gauss(50, 15)
         
-        # 変化球 (詳細パラメータ)
+        # 変化球 (詳細パラメータ: stuff/control/movement)
         balls = ["ストレート", "スライダー", "カーブ", "フォーク", "チェンジアップ", "カットボール", "シンカー", "ツーシーム"]
         num_pitches = random.randint(2, 5)
         selected_balls = random.sample(balls, num_pitches)
         
+        # 基準値
+        base_stuff = stats.stuff  # すでに設定済み
+        base_control = stats.control  # すでに設定済み
+        
         stats.pitches = {}
         for ball in selected_balls:
-            base_val = int(random.gauss(stats.stuff, 10))
+            p_stuff = get_stat_gauss(base_stuff)
+            p_control = get_stat_gauss(base_control)
+            p_move = get_stat_gauss(50) if ball not in ["ストレート", "Straight"] else get_stat_gauss(40)
+            
             stats.pitches[ball] = {
-                "quality": get_stat_gauss(base_val),
-                "stuff": get_stat_gauss(stats.stuff),
-                "movement": get_stat_gauss(stats.movement)
+                "stuff": p_stuff,
+                "control": p_control,
+                "movement": p_move
             }
             
         if "ストレート" not in stats.pitches:
             stats.pitches["ストレート"] = {
-                "quality": stats.stuff,
-                "stuff": stats.stuff,
+                "stuff": get_stat_gauss(base_stuff),
+                "control": get_stat_gauss(base_control),
                 "movement": get_stat_gauss(40)
             }
+            
+        # --- Draft: Pitcher Batting Stats (Weak 1-20, Traj 1) ---
+        stats.trajectory = 1
+        stats.contact = random.randint(1, 20)
+        stats.gap = random.randint(1, 20)
+        stats.power = random.randint(1, 20)
+        stats.eye = random.randint(1, 20)
+        stats.avoid_k = random.randint(1, 20)
+        
+        stats.speed = get_stat_gauss(50, 15)
+        stats.steal = get_stat_gauss(50, 15)
+        stats.baserunning = get_stat_gauss(50, 15)
+        
+        stats.set_defense_range(Position.PITCHER, get_stat_gauss(50, 15))
+        stats.error = get_stat_gauss(50, 15)
 
     else:
         avg = target_total / 5
@@ -313,9 +366,14 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
         stats.avoid_k = stats.contact 
         stats.error = get_stat_gauss(50, 15)
         
-        stats.velocity = 130
-        stats.control = 50
-        stats.stuff = 50
+        # --- Draft: Fielder Pitching Stats (Weak 1-10, Vel 120) ---
+        stats.velocity = 120
+        stats.control = random.randint(1, 10)
+        stats.stuff = random.randint(1, 10)
+        stats.stamina = random.randint(1, 10)
+        stats.breaking = random.randint(1, 10)
+        stats.movement = random.randint(1, 10)
+        stats.stability = random.randint(1, 10)
 
     stats.durability = get_stat_gauss(50, 15)
     stats.recovery = get_stat_gauss(50, 15)
@@ -397,30 +455,48 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
         stats.arm = get_stat_gauss(55, 15)
         stats.error = get_stat_gauss(45, 15)
         
-        # 変化球 (球種別詳細パラメータ設定)
+        # 変化球 (球種別詳細パラメータ: stuff/control/movement)
         balls = ["ストレート", "スライダー", "カーブ", "チェンジアップ", "ツーシーム", "カットボール", "SFF", "ナックルカーブ"]
         num_pitches = random.randint(2, 4)
         selected_balls = random.sample(balls, num_pitches)
         
+        # 基準値
+        base_stuff = stats.stuff  # すでに設定済み
+        base_control = stats.control  # すでに設定済み
+        
         stats.pitches = {}
         for ball in selected_balls:
-            # 変化球の精度などは全体のstuff/movementを基準に決定
-            qual = get_stat_gauss(stats.stuff, 12)
-            p_stuff = get_stat_gauss(stats.stuff, 12)
-            p_move = get_stat_gauss(stats.movement, 12)
+            p_stuff = get_stat_gauss(base_stuff, 12)
+            p_control = get_stat_gauss(base_control, 12)
+            p_move = get_stat_gauss(55, 12) if ball not in ["ストレート", "Straight"] else get_stat_gauss(40, 10)
             
             stats.pitches[ball] = {
-                "quality": qual,
                 "stuff": p_stuff,
+                "control": p_control,
                 "movement": p_move
             }
             
         if "ストレート" not in stats.pitches:
             stats.pitches["ストレート"] = {
-                "quality": stats.stuff,
-                "stuff": stats.stuff,
+                "stuff": get_stat_gauss(base_stuff, 12),
+                "control": get_stat_gauss(base_control, 12),
                 "movement": get_stat_gauss(40, 10)
             }
+
+        # --- Foreign: Pitcher Batting (Weak 1-20, Traj 1) ---
+        stats.trajectory = 1
+        stats.contact = random.randint(1, 20)
+        stats.gap = random.randint(1, 20)
+        stats.power = random.randint(1, 20)
+        stats.eye = random.randint(1, 20)
+        stats.avoid_k = random.randint(1, 20)
+        
+        stats.speed = get_stat_gauss(50, 15)
+        stats.steal = get_stat_gauss(50, 15)
+        stats.baserunning = get_stat_gauss(50, 15)
+        
+        stats.set_defense_range(Position.PITCHER, get_stat_gauss(50, 15))
+        stats.error = get_stat_gauss(50, 15)
 
     else:
         # 野手: パワー重視の傾向
@@ -459,9 +535,14 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
         elif stats.power > 60: stats.trajectory = 3
         else: stats.trajectory = 2
         
-        stats.velocity = 130
-        stats.control = 50
-        stats.stuff = 50
+        # --- Foreign: Fielder Pitching (Weak 1-10, Vel 120) ---
+        stats.velocity = 120
+        stats.control = random.randint(1, 10)
+        stats.stuff = random.randint(1, 10)
+        stats.stamina = random.randint(1, 10)
+        stats.breaking = random.randint(1, 10)
+        stats.movement = random.randint(1, 10)
+        stats.stability = random.randint(1, 10)
 
     # 共通メンタル・回復など
     stats.durability = get_stat_gauss(65, 15) # 外国人は体が強い傾向

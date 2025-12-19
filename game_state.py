@@ -12,6 +12,7 @@ import datetime
 from PySide6.QtCore import QDate
 from farm_game_simulator import FarmGameSimulator
 from league_schedule_engine import WeatherSystem
+from training_system import apply_team_training
 
 class GameState(Enum):
     TITLE = "タイトル"
@@ -111,6 +112,156 @@ class GameStateManager:
         
         # 自動オーダー設定: "ability" (能力優先) or "condition" (調子優先)
         self.auto_order_priority = "ability"
+        
+        # 自由契約選手リスト (Acquisitions用)
+        self.free_agents: List[Player] = []
+        self.news_feed = [] # ニュースング
+        self._generate_dummy_free_agents()
+
+    def _generate_dummy_free_agents(self):
+        """テスト用の自由契約選手を生成"""
+        if self.free_agents: return
+        
+        import random
+        from models import Player, Position, PlayerStats
+        
+        # Foreigners / Veterans
+        names = ["スミス", "ジョンソン", "ガルシア", "李", "王", "田中(元)", "佐藤(元)"]
+        for name in names:
+            pos = random.choice(list(Position))
+            if pos == Position.DH: pos = Position.FIRST
+            p = Player(name=name, position=pos, age=random.randint(28, 38))
+            p.stats = PlayerStats()
+            
+            p.stats.speed = random.randint(30, 70)
+
+            if pos == Position.PITCHER:
+                p.stats.stuff = random.randint(30, 70)
+                p.stats.control = random.randint(30, 70)
+                p.stats.stamina = random.randint(30, 70)
+                p.stats.breaking = random.randint(30, 70)
+                p.stats.velocity = 150
+                
+                # Pitcher Batting (Weak)
+                p.stats.contact = random.randint(1, 20)
+                p.stats.power = random.randint(1, 20)
+                p.stats.trajectory = 1
+            else:
+                # Fielder Batting (Normal)
+                p.stats.contact = random.randint(30, 70)
+                p.stats.power = random.randint(40, 80)
+                
+                # Fielder Pitching (Weak)
+                p.stats.velocity = 120
+                p.stats.control = random.randint(1, 10)
+                p.stats.stuff = random.randint(1, 10)
+                p.stats.stamina = random.randint(1, 10)
+                p.stats.breaking = random.randint(1, 10)
+            
+            p.salary = random.randint(1000, 10000) * 10000
+            
+            self.free_agents.append(p)
+
+    def log_news(self, category: str, message: str, team_name: str = None, date: str = None):
+        """ニュースを記録"""
+        if date is None:
+            date = self.current_date
+        
+        self.news_feed.insert(0, {
+            "date": date,
+            "category": category,
+            "message": message,
+            "team": team_name
+        })
+        # 制限（最新500件）
+        if len(self.news_feed) > 500:
+            self.news_feed.pop()
+            
+    def get_news(self, team_name: str = None, limit: int = 50):
+        """ニュースを取得"""
+        # マッチ結果等は動的に結合するか、news_feedに都度入れるか。
+        # ここではnews_feedのみ返す設計にする（試合結果もnews_feedに入れる運用）
+        if not team_name:
+            return self.news_feed[:limit]
+        
+        filtered = [n for n in self.news_feed if n['team'] == team_name or n['team'] is None]
+        return filtered[:limit]
+
+    def get_league_leaders(self, league: 'League', stat_name: str, limit: int = 5, is_pitcher: bool = False) -> List['Player']:
+        """リーグリーダーを取得"""
+        from models import League
+        candidates = []
+        teams = self.north_teams if league == League.NORTH else self.south_teams
+        
+        for team in teams:
+            for p in team.players:
+                if is_pitcher and p.position.value == "投手":
+                    if p.record.innings_pitched > 0:
+                        candidates.append(p)
+                elif not is_pitcher and p.position.value != "投手":
+                    if p.record.plate_appearances > 0:
+                        candidates.append(p)
+                        
+        def get_stat_value(p):
+            # Check record first, then stats, then properties
+            val = getattr(p.record, stat_name, None)
+            if val is not None: return val
+            
+            val = getattr(p.stats, stat_name, None)
+            if val is not None: return val
+            
+            val = getattr(p, stat_name, None) # e.g. batting_average property
+            if val is not None: return val
+            
+            return 0
+            
+        reverse = True
+        if stat_name in ["era", "whip", "fip"]: reverse = False
+        
+        candidates.sort(key=get_stat_value, reverse=reverse)
+        return candidates[:limit]
+
+    def get_team_rankings(self, team: 'Team') -> dict:
+        """チームの各種スタッツ順位を返す"""
+        from models import League
+        rankings = {}
+        target_group = self.north_teams if team.league == League.NORTH else self.south_teams
+        
+        # 1. Runs Scored
+        target_group.sort(key=lambda t: getattr(t, 'team_record', None).runs if hasattr(t, 'team_record') else 0, reverse=True)
+        try: rankings["runs"] = target_group.index(team) + 1
+        except: rankings["runs"] = "-"
+        
+        # 2. Batting Average
+        target_group.sort(key=lambda t: getattr(t, 'team_record', None).batting_average if hasattr(t, 'team_record') else 0.0, reverse=True)
+        try: rankings["avg"] = target_group.index(team) + 1
+        except: rankings["avg"] = "-"
+        
+        # 3. ERA
+        target_group.sort(key=lambda t: getattr(t, 'team_record', None).era if hasattr(t, 'team_record') else 99.0, reverse=False)
+        try: rankings["era"] = target_group.index(team) + 1
+        except: rankings["era"] = "-"
+        
+        # 4. Def Eff (Fielding Pct for now)
+        target_group.sort(key=lambda t: getattr(t, 'team_record', None).fielding_pct if hasattr(t, 'team_record') else 0.0, reverse=True)
+        try: rankings["def"] = target_group.index(team) + 1
+        except: rankings["def"] = "-"
+        
+        return rankings
+
+    def get_top_prospects(self, team: 'Team', limit: int = 5) -> List['Player']:
+        """チーム内の有望株（若手・高評価）を取得"""
+        prospects = []
+        # Check Farm & Third rosters
+        for idx in team.farm_roster + team.third_roster:
+            if 0 <= idx < len(team.players):
+                p = team.players[idx]
+                if p.age <= 25:
+                    prospects.append(p)
+                    
+        # Sort by Overall Rating
+        prospects.sort(key=lambda p: p.overall_rating, reverse=True)
+        return prospects[:limit]
 
     def initialize_schedule(self):
         """全軍の日程を初期化"""
@@ -133,8 +284,13 @@ class GameStateManager:
         self.season_manager = SeasonManager(self.current_year)
 
     def _update_player_status_daily(self):
-        """日付変更時の全選手ステータス更新（回復・怪我・調子）"""
+        """日付変更時の全選手ステータス更新（回復・怪我・調子・練習）"""
+        from training_system import apply_team_training
+        
         for team in self.all_teams:
+            # 練習による成長 (全選手)
+            apply_team_training(team.players, 1)
+            
             for player in team.players:
                 # models.pyに追加したrecover_dailyメソッドを呼び出し
                 if hasattr(player, 'recover_daily'):
@@ -691,6 +847,10 @@ class GameStateManager:
 
             # 1. 全選手のステータス更新 (怪我回復、疲労回復、調子変動)
             self._update_player_status_daily()
+
+            # 1.5. 練習効果適用 (全選手の練習メニューに基づく成長)
+            for team in self.all_teams:
+                apply_team_training(team.players, days=1)
 
             # 2. チーム編成の自動調整 (怪我人対応、調子による入れ替え)
             self._manage_all_teams_rosters()

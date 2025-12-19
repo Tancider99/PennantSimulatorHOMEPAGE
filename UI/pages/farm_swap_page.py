@@ -354,12 +354,13 @@ class FarmSwapPage(QWidget):
                 background-color: {self.theme.bg_card};
                 border: 1px solid {self.theme.border};
                 gridline-color: {self.theme.border_muted};
-                selection-background-color: {self.theme.bg_input};
+                selection-background-color: #ffffff;
+                selection-color: #000000;
                 outline: none;
             }}
             QTableWidget::item:selected {{
-                background-color: {self.theme.bg_input};
-                color: {self.theme.text_primary};
+                background-color: #ffffff;
+                color: #000000;
                 border: none;
                 outline: none;
             }}

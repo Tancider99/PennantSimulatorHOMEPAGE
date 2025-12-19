@@ -361,7 +361,7 @@ class ForeignNegotiationDialog(QDialog):
         self.candidate = candidate
         self.theme = theme
         self.setWindowTitle("契約交渉")
-        self.setFixedSize(400, 350)
+        self.setFixedSize(500, 450)  # Increased size for text visibility
         self.setModal(True)
         self.setStyleSheet(f"""
             QDialog {{ background-color: {self.theme.bg_card}; color: {self.theme.text_primary}; }}
@@ -375,8 +375,8 @@ class ForeignNegotiationDialog(QDialog):
         
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)  # Reduced spacing
         
         # ヘッダー情報
         info_frame = QFrame()
@@ -415,22 +415,23 @@ class ForeignNegotiationDialog(QDialog):
         layout.addWidget(offer_lbl)
         
         offer_grid = QGridLayout()
+        offer_grid.setSpacing(8)
         
         offer_grid.addWidget(QLabel("提示年俸:"), 0, 0)
-        self.salary_spin = QSpinBox()
-        self.salary_spin.setRange(10, 2000)
-        self.salary_spin.setValue(self.candidate.salary_demand // 1000000)
-        self.salary_spin.setSuffix(" 百万円")
-        self.salary_spin.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 4px;")
-        offer_grid.addWidget(self.salary_spin, 0, 1)
+        self.salary_input = QLineEdit()
+        self.salary_input.setText(str(self.candidate.salary_demand // 1000000))
+        self.salary_input.setFixedWidth(100)
+        self.salary_input.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 6px;")
+        offer_grid.addWidget(self.salary_input, 0, 1)
+        offer_grid.addWidget(QLabel("百万円"), 0, 2)
         
         offer_grid.addWidget(QLabel("提示年数:"), 1, 0)
-        self.years_spin = QSpinBox()
-        self.years_spin.setRange(1, 5)
-        self.years_spin.setValue(self.candidate.years_demand)
-        self.years_spin.setSuffix(" 年")
-        self.years_spin.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 4px;")
-        offer_grid.addWidget(self.years_spin, 1, 1)
+        self.years_input = QLineEdit()
+        self.years_input.setText(str(self.candidate.years_demand))
+        self.years_input.setFixedWidth(60)
+        self.years_input.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 6px;")
+        offer_grid.addWidget(self.years_input, 1, 1)
+        offer_grid.addWidget(QLabel("年 (最大15年)"), 1, 2)
         
         layout.addLayout(offer_grid)
         
@@ -458,7 +459,15 @@ class ForeignNegotiationDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def get_values(self):
-        return self.salary_spin.value(), self.years_spin.value()
+        try:
+            salary = int(self.salary_input.text())
+        except:
+            salary = 10
+        try:
+            years = min(15, max(1, int(self.years_input.text())))  # Clamp to 1-15
+        except:
+            years = 1
+        return salary, years
 
 
 # ========================================
@@ -490,17 +499,18 @@ class ContractsTableWidget(QTableWidget):
                 background-color: {self.theme.bg_card};
                 border: 1px solid {self.theme.border};
                 gridline-color: {self.theme.border_muted};
-                selection-background-color: {self.theme.bg_input};
+                selection-background-color: #ffffff;
+                selection-color: #000000;
                 outline: none;
             }}
             QTableWidget::item:selected {{
-                background-color: {self.theme.bg_input};
-                color: {self.theme.text_primary};
+                background-color: #ffffff;
+                color: #000000;
                 border: none;
                 outline: none;
             }}
             QTableWidget::item:focus {{
-                background-color: {self.theme.bg_input};
+                background-color: #ffffff;
                 border: none;
                 outline: none;
             }}
@@ -1043,16 +1053,28 @@ class DraftScoutingPage(QWidget):
             self.potential_label.setText(pot_text)
             self.potential_label.setStyleSheet(f"color: {get_rank_color(pot_text).name()}; font-weight: bold; font-size: 18px;")
 
-            self.progress_bar.setValue(int(p.scout_level))
-
-            self.dispatch_btn.setEnabled(
+            # Check enable conditions FIRST (before widgets that might fail)
+            can_dispatch = (
                 p.scouting_status != ScoutingStatus.IN_PROGRESS and
                 p.scout_level < 100 and
                 any(s.is_available for s in self.scouts)
             )
-            self.recall_btn.setEnabled(p.scouting_status == ScoutingStatus.IN_PROGRESS)
-        except RuntimeError:
-            pass
+            
+            # Enable buttons (these should work)
+            try:
+                self.dispatch_btn.setEnabled(can_dispatch)
+                self.recall_btn.setEnabled(p.scouting_status == ScoutingStatus.IN_PROGRESS)
+            except RuntimeError:
+                pass  # Buttons deleted
+            
+            # Progress bar (might be deleted)
+            try:
+                self.progress_bar.setValue(int(p.scout_level))
+            except RuntimeError:
+                pass  # Progress bar deleted
+                
+        except RuntimeError as e:
+            print(f"[ERROR] _update_detail_panel RuntimeError: {e}")
 
     def _update_scout_combo(self):
         self.scout_combo.clear()
@@ -1081,8 +1103,7 @@ class DraftScoutingPage(QWidget):
         self.selected_prospect.assigned_scout = scout_data
 
         QMessageBox.information(self, "派遣完了",
-            f"{scout_data.name}を{self.selected_prospect.name}の調査に派遣しました。\n"
-            f"1日あたり約{scout_data.daily_progress:.1f}%の進捗が期待できます。")
+            f"{scout_data.name}を{self.selected_prospect.name}の調査に派遣しました。")
 
         self._update_scout_combo()
         self._update_scout_status()
@@ -1108,6 +1129,8 @@ class DraftScoutingPage(QWidget):
         self._refresh_table()
 
     def advance_day(self):
+        self._auto_assign_scouts()
+        
         for prospect in self.prospects:
             if prospect.scouting_status == ScoutingStatus.IN_PROGRESS and prospect.assigned_scout:
                 progress = prospect.assigned_scout.daily_progress
@@ -1127,6 +1150,28 @@ class DraftScoutingPage(QWidget):
         if self.selected_prospect:
             self._update_detail_panel()
 
+    def _auto_assign_scouts(self):
+        """Available scouts work on top unscouted prospects automatically"""
+        free_scouts = [s for s in self.scouts if s.is_available]
+        if not free_scouts:
+            return
+
+        # Find unscouted prospects
+        unscouted = [p for p in self.prospects 
+                     if p.scouting_status == ScoutingStatus.NOT_STARTED 
+                     and not p.assigned_scout]
+        
+        # Assign to first available (assuming list is roughly sorted by value/rank)
+        for scout in free_scouts:
+            if not unscouted:
+                break
+            
+            target = unscouted.pop(0)
+            target.assigned_scout = scout
+            target.scouting_status = ScoutingStatus.IN_PROGRESS
+            scout.is_available = False
+            scout.current_mission_id = target.name
+
 
 # ========================================
 # 2. Foreign Player Scouting Page
@@ -1144,6 +1189,10 @@ class ForeignPlayerScoutingPage(QWidget):
         self.scouts: List[Scout] = []
         self.selected_candidate: Optional[ForeignPlayerCandidate] = None
         self.game_state = None
+        
+        # New features
+        self.negotiated_ids = set() # Set of candidate IDs negotiated with today
+        self.last_reset_year = None # Last year we reset candidates
 
         self._generate_dummy_data()
         self._setup_ui()
@@ -1319,11 +1368,11 @@ class ForeignPlayerScoutingPage(QWidget):
         widget = QWidget()
         widget.setStyleSheet(f"background-color: {self.theme.bg_card};")
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)  # Reduced spacing for better fit
 
         self.detail_header = QLabel("選手を選択してください")
-        self.detail_header.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 16px; font-weight: bold;")
+        self.detail_header.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 14px; font-weight: bold;")
         self.detail_header.setWordWrap(True)
         layout.addWidget(self.detail_header)
         
@@ -1343,25 +1392,33 @@ class ForeignPlayerScoutingPage(QWidget):
         layout.addWidget(self.stats_frame)
 
         potential_frame = QFrame()
-        potential_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 10px;")
+        potential_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 6px;")
         potential_layout = QHBoxLayout(potential_frame)
+        potential_layout.setContentsMargins(6, 4, 6, 4)
 
-        potential_layout.addWidget(QLabel("推定潜在能力:"))
+        pot_lbl = QLabel("潜在:")
+        pot_lbl.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 11px;")
+        potential_layout.addWidget(pot_lbl)
         self.potential_label = QLabel("?")
-        self.potential_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 18px;")
+        self.potential_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 14px;")
         potential_layout.addWidget(self.potential_label)
         potential_layout.addStretch()
 
         layout.addWidget(potential_frame)
 
         progress_frame = QFrame()
-        progress_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 10px;")
+        progress_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 6px;")
         progress_layout = QVBoxLayout(progress_frame)
+        progress_layout.setContentsMargins(6, 4, 6, 4)
+        progress_layout.setSpacing(4)
 
-        progress_layout.addWidget(QLabel("調査進捗"))
+        prog_lbl = QLabel("調査進捗")
+        prog_lbl.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 11px;")
+        progress_layout.addWidget(prog_lbl)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(16)
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
                 background-color: {self.theme.bg_input};
@@ -1369,6 +1426,7 @@ class ForeignPlayerScoutingPage(QWidget):
                 border-radius: 2px;
                 text-align: center;
                 color: {self.theme.text_primary};
+                font-size: 10px;
             }}
             QProgressBar::chunk {{
                 background-color: {self.theme.accent_blue};
@@ -1440,10 +1498,14 @@ class ForeignPlayerScoutingPage(QWidget):
 
         # 契約交渉フレーム
         negotiation_frame = QFrame()
-        negotiation_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 10px;")
+        negotiation_frame.setMinimumWidth(300)  # Prevent text cutoff
+        negotiation_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated}; border-radius: 4px; padding: 12px;")
         negotiation_layout = QVBoxLayout(negotiation_frame)
+        negotiation_layout.setContentsMargins(12, 12, 12, 12)
 
-        negotiation_layout.addWidget(QLabel("契約交渉"))
+        neg_title = QLabel("契約交渉")
+        neg_title.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 14px;")
+        negotiation_layout.addWidget(neg_title)
 
         interest_layout = QHBoxLayout()
         interest_layout.addWidget(QLabel("興味度:"))
@@ -1736,10 +1798,18 @@ class ForeignPlayerScoutingPage(QWidget):
         if not c or c.scout_level < 50:
             return
 
+        # Check negotiation limit
+        if c.id in self.negotiated_ids:
+            QMessageBox.warning(self, "交渉不可", "この選手とは本日すでに交渉済みです。")
+            return
+
         # ★追加: 交渉画面(ダイアログ)を開く
         dlg = ForeignNegotiationDialog(self, c, self.theme)
         if dlg.exec() != QDialog.Accepted:
             return
+            
+        # Add to negotiated set (consumed daily attempt)
+        self.negotiated_ids.add(c.id)
 
         # ダイアログから値を取得
         offered_salary_val, offered_years = dlg.get_values()
@@ -1748,40 +1818,153 @@ class ForeignPlayerScoutingPage(QWidget):
         salary_ratio = offered_salary / c.salary_demand
         years_ratio = offered_years / c.years_demand
 
-        base_chance = c.interest_level
-        if salary_ratio >= 1.2:
-            base_chance += 20
-        elif salary_ratio >= 1.0:
-            base_chance += 10
-        elif salary_ratio >= 0.8:
-            base_chance -= 10
+        # If salary is less than 2/3 of demand, success rate is 0%
+        if salary_ratio < 0.67:
+            success_chance = 0
         else:
-            base_chance -= 30
+            base_chance = c.interest_level
+            if salary_ratio >= 1.2:
+                base_chance += 20
+            elif salary_ratio >= 1.0:
+                base_chance += 10
+            elif salary_ratio >= 0.8:
+                base_chance -= 10
+            else:
+                base_chance -= 30
 
-        if years_ratio >= 1.0:
-            base_chance += 10
-        else:
-            base_chance -= 10
+            if years_ratio >= 1.0:
+                base_chance += 10
+            else:
+                base_chance -= 10
+            
+            # Longer contracts reduce success rate (each year above demand = -3%)
+            if offered_years > c.years_demand:
+                extra_years = offered_years - c.years_demand
+                base_chance -= extra_years * 3
 
-        success_chance = max(5, min(95, base_chance))
+            success_chance = max(5, min(95, base_chance))
 
         result = random.randint(1, 100)
 
         if result <= success_chance:
-            QMessageBox.information(self, "交渉成功",
-                f"{c.name}との契約が成立しました！\n"
-                f"年俸: {offered_salary // 1000000}百万円 / {offered_years}年契約")
-            c.negotiation_started = True
+            # ★ 交渉成功 - 選手を実際にチームに追加
+            if self.game_state and self.game_state.player_team:
+                from models import Player
+                
+                # Create Player from candidate
+                new_player = Player(
+                    name=c.name,
+                    position=c.position,
+                    age=c.age,
+                    stats=c.true_stats,
+                    pitch_type=c.pitch_type,
+                    uniform_number=self._get_available_uniform_number(),
+                    is_foreign=True
+                )
+                new_player.salary = offered_salary
+                new_player.contract_years = offered_years
+                new_player.potential = c.true_potential
+                
+                # Add to player's team
+                self.game_state.player_team.players.append(new_player)
+                
+                QMessageBox.information(self, "契約成功",
+                    f"{c.name}との契約が成立！\n"
+                    f"年俸: {offered_salary // 1000000}百万円 / {offered_years}年契約\n"
+                    f"選手がチームに加わりました！")
+                
+                # Remove from candidates list
+                c.negotiation_started = True
+                self.candidates.remove(c)
+                self.selected_candidate = None
+            else:
+                QMessageBox.warning(self, "エラー", "チームデータがありません。")
         else:
             QMessageBox.warning(self, "交渉失敗",
-                f"{c.name}は提示条件に満足しませんでした。\n"
-                f"(成功率: {success_chance}%)")
+                f"{c.name}は提示条件に満足しませんでした。")
             c.interest_level = max(10, c.interest_level - 5)
 
         self._update_detail_panel()
         self._refresh_table()
+    
+    def _get_available_uniform_number(self) -> int:
+        """Get an available uniform number (1-99)"""
+        if not self.game_state or not self.game_state.player_team:
+            return random.randint(50, 99)
+        used = {p.uniform_number for p in self.game_state.player_team.players}
+        for n in range(1, 100):
+            if n not in used:
+                return n
+        return 99
+
+    def reset_candidates(self):
+        """Reset and regenerate foreign candidates"""
+        self.candidates.clear()
+        self.selected_candidate = None
+        
+        # Regenerate candidates (logic from _generate_dummy_data)
+        countries = ["USA", "Dominican", "Cuba", "Venezuela", "Mexico", "Korea", "Taiwan", "Puerto Rico", "Canada", "Australia"]
+        positions = [Position.PITCHER, Position.FIRST, Position.LEFT,
+                    Position.RIGHT, Position.CENTER, Position.SHORTSTOP, Position.THIRD, Position.SECOND, Position.CATCHER]
+                    
+        for i in range(100):
+            pos = random.choice(positions)
+            gen_player = player_generator.create_foreign_free_agent(pos)
+            
+            # Boost stats
+            if pos == Position.PITCHER:
+                 gen_player.stats.velocity += random.randint(0, 3)
+                 gen_player.stats.stuff = min(99, int(gen_player.stats.stuff * 1.05))
+                 gen_player.stats.control = min(99, int(gen_player.stats.control * 1.05))
+            else:
+                 gen_player.stats.contact = min(99, int(gen_player.stats.contact * 1.05))
+                 gen_player.stats.power = min(99, int(gen_player.stats.power * 1.05))
+
+            country = random.choice(countries)
+            total = random.randint(50, 1000) * 1000000
+            bonus = int(total * random.uniform(0.1, 0.4))
+            bonus = (bonus // 1000000) * 1000000
+            salary = total - bonus
+            salary = (salary // 1000000) * 1000000
+            if salary < 10000000: salary = 10000000
+
+            if gen_player.age < 24: pot_base = 65 
+            elif gen_player.age < 30: pot_base = 55
+            else: pot_base = 40
+            pot = max(1, min(99, int(random.gauss(pot_base, 15))))
+
+            candidate = ForeignPlayerCandidate(
+                id=i,
+                name=gen_player.name,
+                position=gen_player.position,
+                pitch_type=gen_player.pitch_type,
+                age=gen_player.age,
+                country=country,
+                true_stats=gen_player.stats,
+                true_potential=pot,
+                salary_demand=salary,
+                bonus_demand=bonus,
+                years_demand=random.choice([1, 1, 1, 2, 2, 3]),
+                interest_level=random.randint(30, 80)
+            )
+            self.candidates.append(candidate)
+            
+        self._refresh_table()
+        self._update_detail_panel()
+        
+        # Record reset year if needed
+        if self.game_state and self.game_state.current_date:
+            try:
+                self.last_reset_year = int(self.game_state.current_date.split('-')[0])
+            except: pass
 
     def advance_day(self):
+        # Clear daily negotiation limit
+        self.negotiated_ids.clear()
+        
+        # Auto-assign unassigned scouts to best candidates
+        self._auto_assign_scouts()
+        
         for candidate in self.candidates:
             if candidate.scouting_status == ScoutingStatus.IN_PROGRESS and candidate.assigned_scout:
                 progress = candidate.assigned_scout.daily_progress
@@ -1800,6 +1983,35 @@ class ForeignPlayerScoutingPage(QWidget):
         self._refresh_table()
         if self.selected_candidate:
             self._update_detail_panel()
+    
+    def _auto_assign_scouts(self):
+        """Automatically assign free scouts to the best unassigned candidates"""
+        # Get free scouts
+        free_scouts = [s for s in self.scouts if s.is_available]
+        if not free_scouts:
+            return
+        
+        # Get candidates that need scouting (not scouted, not being scouted)
+        unscouted = [c for c in self.candidates 
+                     if c.scouting_status == ScoutingStatus.NOT_STARTED 
+                     and not c.assigned_scout]
+        
+        if not unscouted:
+            return
+        
+        # Sort by interest level (highest first) for best candidates
+        unscouted.sort(key=lambda x: x.interest_level, reverse=True)
+        
+        # Assign scouts to top candidates
+        for scout in free_scouts:
+            if not unscouted:
+                break
+            
+            candidate = unscouted.pop(0)
+            candidate.assigned_scout = scout
+            candidate.scouting_status = ScoutingStatus.IN_PROGRESS
+            scout.is_available = False
+            scout.current_mission_id = candidate.name
 
 
 # ========================================
@@ -2310,6 +2522,7 @@ class ContractsPage(QWidget):
         self.setObjectName("ContractsPage")
         self.theme = get_theme()
         self.setStyleSheet(f"background-color: {self.theme.bg_dark};")
+        self.game_state = None  # Will be set via set_game_state()
 
         self.current_index = self.PAGES["ドラフト候補調査"]
 
@@ -2400,14 +2613,45 @@ class ContractsPage(QWidget):
 
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
+        self.game_state = game_state
         self.trade_page.set_game_state(game_state)
-        # 外国人ページにも日付判定のためにgame_stateを渡す
         self.foreign_page.set_game_state(game_state)
+        self._update_tab_availability()
 
     def advance_day(self):
         """日付を進める (ゲーム進行時に呼び出し)"""
         self.draft_page.advance_day()
         self.foreign_page.advance_day()
+        
+        self._update_tab_availability()
+        
+        # Check for Foreign Candidate Reset (Offseason Start: 11-01)
+        if self.game_state and self.game_state.current_date:
+            try:
+                md = self.game_state.current_date.split('-')
+                if len(md) >= 3 and int(md[1]) == 11 and int(md[2]) == 1:
+                    self.foreign_page.reset_candidates()
+            except: pass
+
+    def _update_tab_availability(self):
+        """日付に応じてタブの有効/無効を切り替え"""
+        if not hasattr(self, 'game_state') or not self.game_state or not self.game_state.current_date:
+            return
+            
+        try:
+            m = int(self.game_state.current_date.split('-')[1])
+            # Foreign Scout (Index 1) Disabled: 8(Aug), 9(Sep), 10(Oct)
+            is_foreign_disabled = (m in [8, 9, 10])
+            
+            # Button 1 is "新外国人調査"
+            if len(self.nav_buttons) > 1:
+                btn = self.nav_buttons[1]
+                btn.setEnabled(not is_foreign_disabled)
+                
+                # If currently selected and disabled, switch to Draft
+                if is_foreign_disabled and self.stacked_widget.currentIndex() == 1:
+                     self.nav_buttons[0].click()
+        except: pass
 
     def load_data(self, data_manager):
         """外部からデータをロード・更新"""

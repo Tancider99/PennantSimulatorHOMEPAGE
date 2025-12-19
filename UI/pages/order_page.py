@@ -300,15 +300,37 @@ class OrderPage(QWidget):
         return page
 
     def _create_table(self, mode) -> DraggableTableWidget:
+        if mode in ["lineup", "rotation", "bullpen"]:
+            table = DraggableTableWidget(mode)
+            table.items_changed.connect(lambda: self._on_table_changed(table))
+            table.position_swapped.connect(self._on_pos_swapped)
+        else:
+            table = DraggableTableWidget(mode) # DraggableTableWidget wrapper seems to be used for all, based on previous code.
+            # Wait, line 303 in previous view: table = DraggableTableWidget(mode)
+            # But line 455 in Step 109 proposal: if table_type in ...Draggable... else QTableWidget
+            # Let's stick to previous working logic but apply style.
+            # Original code used DraggableTableWidget(mode) for ALL tables in this method?
+            # Looking at Step 92 lines 209, 215, 239... `self._create_table("lineup")`.
+            # Step 114 shows `table = DraggableTableWidget(mode)` at line 303.
+            # So I should use DraggableTableWidget(mode).
+            pass
+        
+        # It seems I wanted to use QTableWidget for some? 
+        # But `DraggableTableWidget` is a subclass of QTableWidget. 
+        # Let's use `DraggableTableWidget(mode)` as it was in line 303 of Step 114 to be safe.
         table = DraggableTableWidget(mode)
         table.items_changed.connect(lambda: self._on_table_changed(table))
+        if mode == "lineup":
+             table.position_swapped.connect(self._on_pos_swapped)
         
         table.itemDoubleClicked.connect(self._on_player_double_clicked)
 
+        cols = []
+        widths = []
+        
         if mode == "lineup":
             cols = ["順", "守", "調", "疲", "選手名", "ミ", "パ", "走", "肩", "守", "適正", "総合"]
             widths = [30, 40, 50, 35, 120, 35, 35, 35, 35, 35, 80, 45]
-            table.position_swapped.connect(self._on_pos_swapped)
             for c in [5, 6, 7, 8, 9]:
                 table.setItemDelegateForColumn(c, self.rating_delegate)
             table.setItemDelegateForColumn(10, self.defense_delegate)
@@ -350,27 +372,20 @@ class OrderPage(QWidget):
         table.setHorizontalHeaderLabels(cols)
         for i, w in enumerate(widths):
             table.setColumnWidth(i, w)
-
-        table.setStyleSheet(self._get_table_style())
-        return table
-
-    def _get_table_style(self):
-        return f"""
+            
+        # Apply White/Black selection style
+        table.setStyleSheet(f"""
             QTableWidget {{
                 background-color: {self.theme.bg_card};
                 border: 1px solid {self.theme.border};
                 gridline-color: {self.theme.border_muted};
-                selection-background-color: {self.theme.bg_input};
+                selection-background-color: #ffffff;
+                selection-color: #000000;
                 outline: none;
             }}
             QTableWidget::item:selected {{
-                background-color: {self.theme.bg_input};
-                color: {self.theme.text_primary};
-                border: none;
-                outline: none;
-            }}
-            QTableWidget::item:focus {{
-                background-color: {self.theme.bg_input};
+                background-color: #ffffff;
+                color: #000000;
                 border: none;
                 outline: none;
             }}
@@ -390,7 +405,9 @@ class OrderPage(QWidget):
                 padding: 2px;
                 border-bottom: 1px solid {self.theme.border_muted};
             }}
-        """
+        """)
+
+        return table
     
     def _get_main_tab_style(self):
         return f"""

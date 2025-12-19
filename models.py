@@ -64,6 +64,96 @@ class Hand(Enum):
     LEFT = "左"
     BOTH = "両"
 
+
+class PlayerType(Enum):
+    """選手タイプ - 初期能力と成長傾向に影響"""
+    # 野手タイプ
+    POWER = "パワー型"      # パワー↑、スピード↓
+    CONTACT = "巧打型"      # ミート↑、パワー↓
+    SPEED = "俊足型"        # スピード↑、パワー↓
+    DEFENSE = "守備型"      # 守備↑、パワー↓
+    BALANCED = "万能型"     # 均等
+    # 投手タイプ
+    POWER_PITCHER = "本格派"  # 球速↑、制球↓
+    FINESSE = "技巧派"       # 制球↑、球速↓
+    JUNK = "軟投派"         # 変化球↑、球速↓
+
+
+class TrainingMenu(Enum):
+    """練習メニュー"""
+    # 野手練習
+    CONTACT = "ミート強化"
+    GAP = "ギャップ強化"
+    POWER = "パワー強化"
+    EYE = "選球眼強化"
+    AVOID_K = "三振回避強化"
+    SPEED = "走力強化"
+    STEAL = "盗塁強化"
+    BASERUNNING = "走塁強化"
+    ARM = "肩力強化"
+    FIELDING = "守備強化"
+    ERROR = "捕球強化"
+    BUNT = "バント強化"
+    CHANCE = "チャンス強化"
+    VS_LEFT = "対左強化"
+    # 投手練習
+    VELOCITY = "球速強化"
+    CONTROL = "制球強化"      # 全球種のcontrolを上昇
+    STUFF = "球威強化"        # 全球種のstuffを上昇  
+    MOVEMENT = "変化球強化"   # 全球種のmovementを上昇
+    STAMINA = "スタミナ強化"
+    HOLD_RUNNERS = "クイック強化"
+    VS_PINCH = "対ピンチ強化"
+    STABILITY = "安定感強化"
+    # 共通
+    DURABILITY = "耐久力強化"
+    RECOVERY = "回復力強化"
+    MENTAL = "メンタル強化"
+    INTELLIGENCE = "野球脳強化"
+    # 追加
+    TRAJECTORY = "弾道強化"
+    CATCHER_LEAD = "リード強化"
+    TURN_DP = "併殺処理強化"
+    NEW_PITCH = "新球種習得"
+    REST = "休養"  # スタミナ回復優先
+
+
+# 選手タイプ別の成長倍率定義
+PLAYER_TYPE_GROWTH_MODIFIERS = {
+    PlayerType.POWER: {
+        "strong": ["power", "arm"],  # 1.5x
+        "weak": ["speed", "steal", "baserunning"],  # 0.5x
+    },
+    PlayerType.CONTACT: {
+        "strong": ["contact", "gap", "eye"],
+        "weak": ["power"],
+    },
+    PlayerType.SPEED: {
+        "strong": ["speed", "steal", "baserunning"],
+        "weak": ["power", "arm"],
+    },
+    PlayerType.DEFENSE: {
+        "strong": ["error", "arm", "fielding"],
+        "weak": ["power", "contact"],
+    },
+    PlayerType.BALANCED: {
+        "strong": [],
+        "weak": [],
+    },
+    PlayerType.POWER_PITCHER: {
+        "strong": ["velocity", "stuff"],
+        "weak": ["control", "stability"],
+    },
+    PlayerType.FINESSE: {
+        "strong": ["control", "movement", "stability"],
+        "weak": ["velocity", "stuff"],
+    },
+    PlayerType.JUNK: {
+        "strong": ["movement", "stability", "control"],
+        "weak": ["velocity", "stuff"],
+    },
+}
+
 @dataclass
 class GameResult:
     home_team_name: str
@@ -72,6 +162,18 @@ class GameResult:
     away_score: int
     date: str
     game_number: int
+
+
+@dataclass
+class TeamRecord:
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+    runs: int = 0
+    batting_average: float = 0.0
+    era: float = 0.0
+    fielding_pct: float = 0.0
+
 
 
 @dataclass
@@ -166,13 +268,14 @@ class PlayerStats:
     catcher_lead: int = 50     # 捕手リード
     turn_dp: int = 50          # 併殺処理
 
-    # ===== 投球能力 =====
-    stuff: int = 50            # 球威
-    movement: int = 50         # 変化球
-    control: int = 50          # 制球
+    # ===== 投球能力 ===== (Per-pitch managed in 'pitches')
+    # stuff: int = 50            # 球威 (Removed global)
+    # movement: int = 50         # 変化球 (Removed global)
+    # control: int = 50          # 制球 (Removed global)
 
     # ===== 投手追加能力 =====
     velocity: int = 145        # 球速 (km/h)
+    new_pitch_progress: int = 0 # 新球種習得進行度 (0-100)
     stamina: int = 50          # スタミナ
     hold_runners: int = 50     # クイック
     gb_tendency: int = 50      # ゴロ傾向
@@ -203,19 +306,69 @@ class PlayerStats:
         self.defense_ranges[position.value] = max(1, min(99, value))
 
     def get_pitch_quality(self, pitch_name: str) -> int:
+        """後方互換性: qualityの代わりにstuffを返す"""
         data = self.pitches.get(pitch_name)
-        if isinstance(data, dict): return data.get("quality", 50)
+        if isinstance(data, dict): return data.get("stuff", data.get("quality", 50))
         return data if isinstance(data, int) else 0
 
     def get_pitch_stuff(self, pitch_name: str) -> int:
         data = self.pitches.get(pitch_name)
         if isinstance(data, dict) and "stuff" in data: return data["stuff"]
-        return self.stuff
+        return self.stuff # Uses property average
 
     def get_pitch_movement(self, pitch_name: str) -> int:
         data = self.pitches.get(pitch_name)
         if isinstance(data, dict) and "movement" in data: return data["movement"]
-        return self.movement
+        return self.movement # Uses property average
+    
+    def get_pitch_control(self, pitch_name: str) -> int:
+        data = self.pitches.get(pitch_name)
+        if isinstance(data, dict) and "control" in data: return data["control"]
+        return self.control # Uses property average
+
+    @property
+    def stuff(self) -> int:
+        """全球種の球威の合計値 / 5 (99上限)"""
+        if not self.pitches: return 50
+        total = 0
+        for p in self.pitches.values():
+            if isinstance(p, dict):
+                total += p.get("stuff", 50)
+            elif isinstance(p, int):
+                total += p
+        return min(99, total // 5)
+
+    @property
+    def control(self) -> int:
+        """全球種の制球の合計値 / 5 (99上限)"""
+        if not self.pitches: return 50
+        total = 0
+        for p in self.pitches.values():
+            if isinstance(p, dict):
+                total += p.get("control", 50)
+            elif isinstance(p, int):
+                total += 50
+        return min(99, total // 5)
+
+    @property
+    def movement(self) -> int:
+        """全球種の変化量の合計値 / 5 (99上限)"""
+        if not self.pitches: return 50
+        total = 0
+        for name, p in self.pitches.items():
+            if name in ["ストレート", "Straight"]: continue  # Skip straight
+            if isinstance(p, dict):
+                total += p.get("movement", 50)
+            elif isinstance(p, int):
+                total += p
+        return min(99, total // 5)
+        
+    @stuff.setter
+    def stuff(self, val): pass # Ignored
+    @control.setter
+    def control(self, val): pass 
+    @movement.setter
+    def movement(self, val): pass
 
     @property
     def effective_catcher_lead(self) -> int:
@@ -287,27 +440,30 @@ class PlayerStats:
         def_range = self.get_defense_range(position) if position else 0
         fielding_val = (def_range * 4.0 + self.arm * 1.0 + self.error * 1.0) / 6.0
         
+        # Reduced position adjustments for 100-450 range
         pos_adj = 0
         if position:
-            if position == Position.CATCHER: pos_adj = 40
-            elif position == Position.SHORTSTOP: pos_adj = 30
-            elif position == Position.SECOND: pos_adj = 15
-            elif position == Position.CENTER: pos_adj = 15
-            elif position == Position.THIRD: pos_adj = -10
-            elif position == Position.RIGHT: pos_adj = -10
-            elif position == Position.LEFT: pos_adj = -25
-            elif position == Position.FIRST: pos_adj = -30
-            elif position == Position.DH: pos_adj = -35
+            if position == Position.CATCHER: pos_adj = 15
+            elif position == Position.SHORTSTOP: pos_adj = 10
+            elif position == Position.SECOND: pos_adj = 5
+            elif position == Position.CENTER: pos_adj = 5
+            elif position == Position.THIRD: pos_adj = -5
+            elif position == Position.RIGHT: pos_adj = -5
+            elif position == Position.LEFT: pos_adj = -10
+            elif position == Position.FIRST: pos_adj = -10
+            elif position == Position.DH: pos_adj = -15
         
         raw_score = (batting_val * 6.5 + fielding_val * 3.0 + running_val * 0.5) / 10.0
-        rating = (raw_score - 50) * 8 + 250 + pos_adj
+        # Adjusted for 100-450 range
+        rating = (raw_score - 50) * 6 + 250 + pos_adj
         
         return max(1, min(999, int(rating)))
 
     def overall_pitching(self) -> float:
         vel_rating = self.kmh_to_rating(self.velocity)
         raw_score = (self.stuff * 3.5 + self.control * 3.0 + self.movement * 2.0 + vel_rating * 1.5) / 10.0
-        rating = (raw_score - 50) * 8 + 250
+        # Adjusted for 100-450 range
+        rating = (raw_score - 50) * 6 + 250
         return max(1, min(999, int(rating)))
 
     def speed_to_kmh(self) -> int:
@@ -890,6 +1046,11 @@ class Player:
 
     potential: int = 50 # 潜在能力
 
+    # 選手タイプと練習
+    player_type: Optional['PlayerType'] = None  # 選手タイプ
+    training_menu: Optional['TrainingMenu'] = None  # 現在の練習メニュー
+    training_xp: Dict[str, float] = field(default_factory=dict)  # XP per stat (0-100%)
+
     special_abilities: Optional[object] = None
     player_status: Optional[object] = None
     growth: Optional[object] = None
@@ -1007,21 +1168,6 @@ class Player:
         change = random.choices([-1, 0, 1], weights=[0.25, 0.5, 0.25])[0]
         self.condition = max(1, min(9, self.condition + change))
 
-    def recover_daily(self):
-        if self.injury_days > 0:
-            self.injury_days -= 1
-            if self.injury_days == 0:
-                self.injury_name = ""
-        
-
-            
-        if self.days_until_promotion > 0:
-            self.days_until_promotion -= 1
-            
-        if random.random() < 0.2:
-            change = random.choice([-1, 1])
-            self.condition = max(1, min(9, self.condition + change))
-
     def add_game_record(self, date_str: str, record: PlayerRecord):
         new_rec = PlayerRecord()
         new_rec.merge_from(record) 
@@ -1068,6 +1214,8 @@ class Player:
         return "ー"
 
     def add_game_fatigue(self, at_bats: int = 0, defensive_innings: float = 0.0, pitches_thrown: int = 0):
+        if at_bats == 0 and defensive_innings == 0 and pitches_thrown == 0: return
+
         """試合中の疲労蓄積
         
         打者: 打席数×1 + 守備イニング×0.5
@@ -1080,7 +1228,7 @@ class Player:
                 self.consecutive_days += 1
         else:
             # 野手は打席+守備
-            self.fatigue += at_bats + int(defensive_innings * 0.5)
+            self.fatigue += at_bats + int(defensive_innings * 0.3)
         
         self.fatigue = min(100, self.fatigue)
 
@@ -1091,8 +1239,8 @@ class Player:
         """
         import random
         
-        # 基本リスク: 1プレイあたり0.0001 (0.01%)
-        base_risk = 0.0001
+        # 基本リスク: 1プレイあたり0.00001 (0.001%) - 大幅に低下
+        base_risk = 0.00001
         
         # 疲労補正: 疲労度50で2倍、100で3倍
         fatigue_mult = 1.0 + (self.fatigue / 50)
@@ -1177,6 +1325,10 @@ class Team:
     budget: int = 5000000000
     color: str = None
     abbr: str = None
+    
+    record_farm: 'TeamRecord' = field(default_factory=TeamRecord)
+    record_third: 'TeamRecord' = field(default_factory=TeamRecord)
+    team_record: 'TeamRecord' = field(default_factory=TeamRecord)
 
     rotation: List[int] = field(default_factory=list)
     rotation_index: int = 0
@@ -1448,9 +1600,24 @@ class Team:
         if player_idx in self.farm_roster: self.farm_roster.remove(player_idx)
         elif player_idx in self.third_roster: self.third_roster.remove(player_idx)
         else: return False
+        
         if player_idx not in self.active_roster: self.active_roster.append(player_idx)
+        
         if 0 <= player_idx < len(self.players):
-            self.players[player_idx].team_level = TeamLevel.FIRST
+            p = self.players[player_idx]
+            p.team_level = TeamLevel.FIRST
+            
+            # 育成選手なら支配下登録（背番号変更）
+            if p.is_developmental:
+                p.is_developmental = False
+                
+                # 空き番号を探す (0-99)
+                used_numbers = set(pl.uniform_number for pl in self.players)
+                import random
+                candidates = [n for n in range(0, 100) if n not in used_numbers]
+                if candidates:
+                    p.uniform_number = random.choice(candidates)
+                    
         return True
 
     def move_to_third_roster(self, player_idx: int) -> bool:
@@ -1550,6 +1717,11 @@ class Team:
     def winning_percentage(self) -> float:
         total = self.wins + self.losses
         return self.wins / total if total > 0 else 0.0
+
+    def games_behind(self, leader_team: 'Team') -> float:
+        """ゲーム差計算 = ((首位勝利 - 自軍勝利) + (自軍敗戦 - 首位敗戦)) / 2"""
+        if self == leader_team: return 0.0
+        return ((leader_team.wins - self.wins) + (self.losses - leader_team.losses)) / 2.0
 
 @dataclass
 class DraftProspect:

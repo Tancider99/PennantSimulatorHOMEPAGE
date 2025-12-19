@@ -1887,7 +1887,8 @@ class TVBroadcastGamePage(QWidget):
             "score_history": self.score_history, # {"top": [], "bot": []}
             "hits": (self.live_engine.state.home_hits, self.live_engine.state.away_hits),
             "errors": (self.live_engine.state.home_errors, self.live_engine.state.away_errors),
-            "game_stats": game_result.get("game_stats", {})
+            "game_stats": game_result.get("game_stats", {}),
+            "highlights": game_result.get("highlights", [])
         }
         self.game_finished.emit(res)
 

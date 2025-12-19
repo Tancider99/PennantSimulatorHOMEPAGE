@@ -815,6 +815,11 @@ class FAPage(QWidget):
 
             # Emit signal
             self.player_signed.emit(p, years, salary)
+            
+            # Log News
+            if self.game_state and self.user_team:
+                total_val = years * salary
+                self.game_state.log_news("TRANSACTION", f"{p['name']}選手（{p['prev_team']}）を獲得しました（{years}年契約）", self.user_team.name)
 
             self.selected_player = None
             self._update_player_detail()
