@@ -607,7 +607,7 @@ class InjuriesCard(QFrame):
 
 
 class NewsCard(QFrame):
-    """Recent news card with internal scroll"""
+    """Recent news card with clean modern design"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.theme = get_theme()
@@ -616,15 +616,23 @@ class NewsCard(QFrame):
             QFrame {{
                 background: {self.theme.bg_card};
                 border: none;
+                border-radius: 4px;
             }}
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
         header = QLabel("NEWS")
-        header.setStyleSheet(f"font-size: 9px; color: {self.theme.text_muted}; letter-spacing: 2px; font-weight: 600;")
+        header.setStyleSheet(f"""
+            font-size: 11px; 
+            color: {self.theme.text_muted}; 
+            letter-spacing: 3px; 
+            font-weight: 700;
+            padding-bottom: 4px;
+            border-bottom: 1px solid {self.theme.border};
+        """)
         layout.addWidget(header)
 
         # Scroll area for entries
@@ -632,11 +640,12 @@ class NewsCard(QFrame):
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("border: none; background: transparent;")
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         self.entries_widget = QWidget()
         self.entries_layout = QVBoxLayout(self.entries_widget)
-        self.entries_layout.setContentsMargins(0, 0, 0, 0)
-        self.entries_layout.setSpacing(1)
+        self.entries_layout.setContentsMargins(0, 4, 0, 0)
+        self.entries_layout.setSpacing(6)
         self.entries_layout.addStretch()
         
         scroll.setWidget(self.entries_widget)
@@ -650,37 +659,40 @@ class NewsCard(QFrame):
                 item.widget().deleteLater()
 
         if not news_items:
-            no_news = QLabel("ニュースなし")
-            no_news.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; font-style: italic;")
+            no_news = QLabel("ニュースはありません")
+            no_news.setStyleSheet(f"font-size: 13px; color: {self.theme.text_muted}; font-style: italic; padding: 8px 0;")
             self.entries_layout.insertWidget(0, no_news)
             return
 
+        # Color map for news types
+        type_colors = {
+            "trade": self.theme.accent_blue,
+            "sign": "#4CAF50",  # Green
+            "record": "#FFD700",  # Gold
+            "injury": self.theme.danger,
+            "game": self.theme.primary
+        }
+
         for date, headline, news_type in news_items:
             row = QHBoxLayout()
-            row.setSpacing(4)
+            row.setSpacing(8)
+            row.setContentsMargins(0, 2, 0, 2)
 
-            # Type marker (no emoji)
-            if news_type == "trade":
-                marker = "[移籍]"
-            elif news_type == "sign":
-                marker = "[契約]"
-            elif news_type == "record":
-                marker = "[記録]"
-            elif news_type == "injury":
-                marker = "[故障]"
-            elif news_type == "game":
-                marker = "[試合]"
-            else:
-                marker = "[--]"
+            # Colored indicator dot
+            dot_color = type_colors.get(news_type, self.theme.text_muted)
+            dot = QLabel("●")
+            dot.setFixedWidth(16)
+            dot.setStyleSheet(f"font-size: 8px; color: {dot_color};")
+            row.addWidget(dot)
 
-            marker_lbl = QLabel(marker)
-            marker_lbl.setStyleSheet(f"font-size: 8px; color: {self.theme.primary}; min-width: 30px;")
-            row.addWidget(marker_lbl)
-
-            headline_lbl = QLabel(headline[:25] + ".." if len(headline) > 25 else headline)
-            headline_lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.text_primary};")
-            row.addWidget(headline_lbl)
-            row.addStretch()
+            # Headline text - larger, clearer, with word wrap
+            headline_lbl = QLabel(headline)
+            headline_lbl.setStyleSheet(f"""
+                font-size: 13px; 
+                color: {self.theme.text_primary};
+            """)
+            headline_lbl.setWordWrap(True)
+            row.addWidget(headline_lbl, stretch=1)
 
             container = QWidget()
             container.setLayout(row)
@@ -1022,13 +1034,60 @@ class HomePage(ContentPanel):
         self.games_card.set_sub(f"Progress: {progress:.0f}%")
 
         # Next game from schedule & Button Text Update
-        has_game_today = self._update_next_game(game_state, team)
+        game_status = self._update_next_game(game_state, team)
         
         # Update Button Text based on game availability
-        if has_game_today:
+        if game_status == "watch":
+            self.play_btn.setText("SIMULATE ALL-STAR GAMES")
+            self.play_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {self.theme.accent_orange};
+                    color: white;
+                    border: none;
+                    border-radius: 0px;
+                    padding: 14px 28px;
+                    font-size: 13px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }}
+                QPushButton:hover {{
+                    background: #ff9800;
+                }}
+            """)
+        elif game_status == "play":
             self.play_btn.setText("PLAY NEXT GAME")
+            self.play_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {self.theme.text_primary};
+                    color: {self.theme.bg_dark};
+                    border: none;
+                    border-radius: 0px;
+                    padding: 14px 28px;
+                    font-size: 13px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }}
+                QPushButton:hover {{
+                    background: {self.theme.text_secondary};
+                }}
+            """)
         else:
             self.play_btn.setText("NEXT DAY")
+            self.play_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {self.theme.text_primary};
+                    color: {self.theme.bg_dark};
+                    border: none;
+                    border-radius: 0px;
+                    padding: 14px 28px;
+                    font-size: 13px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }}
+                QPushButton:hover {{
+                    background: {self.theme.text_secondary};
+                }}
+            """)
 
         # Recent results
         self._update_recent_results(game_state, team)
@@ -1043,11 +1102,20 @@ class HomePage(ContentPanel):
         self._update_news(game_state)
 
     def _update_next_game(self, game_state, team):
-        """Update next game display from schedule and return True if game exists today"""
+        """Update next game display and return status ('play', 'watch', 'none')"""
+        today_str = getattr(game_state, 'current_date', '')
+        
+        # 1. Check for All-Star Game TODAY
+        if hasattr(game_state, 'schedule'):
+            for g in game_state.schedule.games:
+                if g.date == today_str and ("ALL-" in g.home_team_name or "ALL-" in g.away_team_name):
+                    self.matchup_card.set_matchup(g.home_team_name, g.away_team_name, today_str, "(AI Broadcast)")
+                    return "watch"
+
+        # 2. Regular Next Game Logic
         next_game = game_state.get_next_game() if hasattr(game_state, 'get_next_game') else None
         
         has_game_today = False
-        today_str = getattr(game_state, 'current_date', '')
         
         if next_game:
             home = next_game.home_team_name
@@ -1070,7 +1138,7 @@ class HomePage(ContentPanel):
         else:
             self.matchup_card.set_matchup("---", "---", "No games scheduled", "")
             
-        return has_game_today
+        return "play" if has_game_today else "none"
 
     def _update_recent_results(self, game_state, team):
         """Update recent results display"""
@@ -1170,7 +1238,13 @@ class HomePage(ContentPanel):
                 highlights = getattr(game, 'highlights', [])
                 if highlights:
                     for h in highlights[:2]:  # Max 2 per game
-                        news_items.insert(0, (game.date, h, "game"))
+                        # Handle both dict format and string format
+                        if isinstance(h, dict):
+                            headline = h.get('message', '')
+                        else:
+                            headline = str(h)
+                        if headline:
+                            news_items.insert(0, (game.date, headline, "game"))
                 elif hasattr(game, 'mvp_name') and game.mvp_name:
                     headline = f"{game.mvp_name}が活躍! {game.away_team_name} vs {game.home_team_name}"
                     news_items.insert(0, (game.date, headline, "game"))

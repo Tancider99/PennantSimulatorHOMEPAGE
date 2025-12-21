@@ -162,39 +162,61 @@ class HighlightsCard(Card):
             if item.widget(): item.widget().deleteLater()
 
         if not hrs:
+            # Recreate empty label since old one may have been deleted
+            self.empty_lbl = QLabel("本塁打なし")
+            self.empty_lbl.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 12px; font-style: italic;")
             self.hr_layout.addWidget(self.empty_lbl)
-            self.empty_lbl.setVisible(True)
             return
 
-        self.empty_lbl.setVisible(False)
+        # Don't add empty label, just show HR data
         
         # Max limit to prevent layout explosion
         MAX_ITEMS = 5
         visible_items = hrs[:MAX_ITEMS]
         remaining = len(hrs) - MAX_ITEMS
         
-        for name, count, team in visible_items:
-            row = QHBoxLayout()
-            n = QLabel(name)
-            n.setStyleSheet(f"font-size: 12px; color: {self.theme.text_primary}; font-weight: 600;")
-            
-            c = QLabel(f"({count}号)")
-            c.setStyleSheet(f"font-size: 11px; color: {self.theme.text_secondary};")
+        for item in visible_items:
+            # Handle both dict format (from _analyze_highlights) and tuple format (legacy)
+            if isinstance(item, dict):
+                # Dict format: {"category": "PERFORMANCE", "message": "...", "team": "...", "score": 100}
+                message = item.get("message", "")
+                team = item.get("team", "")
+                
+                row = QHBoxLayout()
+                msg_label = QLabel(message)
+                msg_label.setStyleSheet(f"font-size: 12px; color: {self.theme.text_primary};")
+                msg_label.setWordWrap(True)
+                
+                row.addWidget(msg_label)
+                row.addStretch()
+            else:
+                # Tuple format: (name, count, team)
+                try:
+                    name, count, team = item
+                except (ValueError, TypeError):
+                    continue
+                    
+                row = QHBoxLayout()
+                n = QLabel(name)
+                n.setStyleSheet(f"font-size: 12px; color: {self.theme.text_primary}; font-weight: 600;")
+                
+                c = QLabel(f"({count}号)")
+                c.setStyleSheet(f"font-size: 11px; color: {self.theme.text_secondary};")
 
-            t = QLabel(team)
-            t.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; background: {self.theme.bg_input}; padding: 1px 4px; border-radius: 3px;")
+                t = QLabel(team)
+                t.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; background: {self.theme.bg_input}; padding: 1px 4px; border-radius: 3px;")
 
-            row.addWidget(n)
-            row.addWidget(c)
-            row.addStretch()
-            row.addWidget(t)
+                row.addWidget(n)
+                row.addWidget(c)
+                row.addStretch()
+                row.addWidget(t)
             
             w = QWidget()
             w.setLayout(row)
             self.hr_layout.addWidget(w)
             
         if remaining > 0:
-            more_lbl = QLabel(f"... 他 {remaining} 本")
+            more_lbl = QLabel(f"... 他 {remaining} 件")
             more_lbl.setAlignment(Qt.AlignCenter)
             more_lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.text_muted}; margin-top: 2px;")
             self.hr_layout.addWidget(more_lbl)
@@ -378,6 +400,7 @@ class GameResultPage(ContentPanel):
     Modern Sci-Fi Dashboard Style Game Result Page
     """
     return_home = Signal()
+    return_schedule = Signal()  # For returning to schedule page from past game view
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -443,11 +466,24 @@ class GameResultPage(ContentPanel):
                 border: 1px solid #AAAAAA;
             }}
         """)
+        # Default behavior (will be overridden by set_mode)
         self.btn_home.clicked.connect(self.return_home.emit)
         btn_box.addWidget(self.btn_home)
         btn_box.addStretch()
         
         dashboard.addLayout(btn_box)
+
+    def set_mode(self, is_past_game: bool):
+        """戻るボタンの挙動を設定"""
+        try: self.btn_home.clicked.disconnect()
+        except: pass
+            
+        if is_past_game:
+            self.btn_home.setText("BACK TO SCHEDULE")
+            self.btn_home.clicked.connect(self.return_schedule.emit)
+        else:
+            self.btn_home.setText("BACK TO HOME")
+            self.btn_home.clicked.connect(self.return_home.emit)
 
     def set_result(self, data):
         # Unpack Data
@@ -461,10 +497,16 @@ class GameResultPage(ContentPanel):
         # Score Card
         self.score_card.set_score(h_team.name, a_team.name, h_score, a_score)
         
-        # Line Score
-        score_hist = data.get("score_history", {"top": [], "bot": []})
-        top_scores = score_hist["top"]
-        bot_scores = score_hist["bot"]
+        # Line Score - Support both score_history (from live games) and home_innings/away_innings (from past games)
+        score_hist = data.get("score_history", None)
+        if score_hist:
+            top_scores = score_hist.get("top", [])
+            bot_scores = score_hist.get("bot", [])
+        else:
+            # Use home_innings/away_innings from past game data
+            # Note: top = away (visitor bats first), bot = home
+            top_scores = data.get("away_innings", [])
+            bot_scores = data.get("home_innings", [])
         
         # Determine max inning (remove trailing zeros/nones?)
         # Use actual length

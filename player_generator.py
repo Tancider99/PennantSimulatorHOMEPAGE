@@ -17,7 +17,7 @@ def generate_foreign_name() -> str:
     types = ["高校", "学園", "実業", "工業", "学院"]
     return random.choice(prefs) + random.choice(types)
 
-def _assign_pitcher_aptitudes(player: Player):
+def _assign_pitcher_aptitudes(player: Player, role_hint: Optional[PitchType] = None):
     """
     投手の適正（先発・中継・抑え）を設定する
     要件:
@@ -42,24 +42,26 @@ def _assign_pitcher_aptitudes(player: Player):
         if roll < 0.95: return 3  # 15%で〇
         return 4                  # 5%で◎
 
-    # メイン役割が未定義の場合は確率で決定 (先発5: 中継4: 抑え1)
-    if player.pitch_type is None:
+    # メイン役割を決定 (hintがあればそれを使う、なければ確率)
+    main_role = role_hint
+    if main_role is None:
         roll = random.random()
         if roll < 0.50:
-            player.pitch_type = PitchType.STARTER
+            main_role = PitchType.STARTER
         elif roll < 0.90:
-            player.pitch_type = PitchType.RELIEVER
+            main_role = PitchType.RELIEVER
         else:
-            player.pitch_type = PitchType.CLOSER
+            main_role = PitchType.CLOSER
 
     # メイン役割の適性は◎(4)、それ以外は確率で設定
-    if player.pitch_type == PitchType.STARTER:
+    # player.pitch_type は設定しない (役割要素を排除)
+    if main_role == PitchType.STARTER:
         player.starter_aptitude = 4
         player.middle_aptitude = get_sub_aptitude()
         player.closer_aptitude = get_sub_aptitude()
         # 先発: スタミナ高め (+15〜25)、回復力普通
         player.stats.stamina = min(99, player.stats.stamina + random.randint(15, 25))
-    elif player.pitch_type == PitchType.RELIEVER:
+    elif main_role == PitchType.RELIEVER:
         player.starter_aptitude = get_sub_aptitude()
         player.middle_aptitude = 4
         player.closer_aptitude = get_sub_aptitude()
@@ -217,6 +219,15 @@ def create_random_player(position: Position,
         stats.stuff = random.randint(1, 10)
         stats.movement = random.randint(1, 10)
         stats.stability = random.randint(1, 10)
+        
+        # 野手用ストレート球種を生成
+        stats.pitches = {
+            "ストレート": {
+                "stuff": random.randint(1, 10),
+                "control": random.randint(1, 10),
+                "movement": random.randint(1, 10)
+            }
+        }
 
     stats.durability = get_stat(50)
     stats.recovery = get_stat(50)
@@ -224,20 +235,69 @@ def create_random_player(position: Position,
     stats.intelligence = get_stat(50)
     stats.mental = get_stat(50)
 
-    if random.random() < 0.7: player_throws = "右"
-    else: player_throws = "左"
+    # Decide Throwing Hand
+    # Catchers and Infielders (2B, SS, 3B) must throw Right
+    force_right_throw = position in [Position.CATCHER, Position.SECOND, Position.SHORTSTOP, Position.THIRD]
     
-    if random.random() < 0.6: player_bats = "右"
-    elif random.random() < 0.85: player_bats = "左"
-    else: player_bats = "両"
-    
-    if position == Position.PITCHER:
-        rating = stats.overall_pitching()
+    if force_right_throw:
+        player_throws = "右"
     else:
-        rating = stats.overall_batting(position)
+        # General Population: ~72% Right, ~28% Left
+        if random.random() < 0.72:
+            player_throws = "右"
+        else:
+            player_throws = "左"
 
-    base = 500
-    salary = int(base * (rating ** 1.5) / 100) * 10000
+    # Decide Batting Hand based on Throwing Hand
+    rand_bat = random.random()
+    if player_throws == "右":
+        # Right Throw: ~70% Right, ~20% Left, ~10% Switch
+        if rand_bat < 0.70: player_bats = "右"
+        elif rand_bat < 0.90: player_bats = "左"
+        else: player_bats = "両"
+    else:
+        # Left Throw: ~5% Right, ~85% Left, ~10% Switch
+        if rand_bat < 0.05: player_bats = "右"
+        elif rand_bat < 0.90: player_bats = "左"
+        else: player_bats = "両"
+    
+    # 総合力を選手詳細画面と同じ計算で取得（1-999スケール）
+    if position == Position.PITCHER:
+        total_ability = stats.overall_pitching()
+    else:
+        total_ability = stats.overall_batting(position)
+
+    # 年俸計算: 指数関数的スケール
+    # 総合力130-300: 5百万～50百万 (線形)
+    # 総合力300以上: 50百万～1000百万 (指数関数的)
+    # base_salary は万円単位で計算
+    
+    if total_ability >= 300:
+        # 高能力 (300+): 50百万～1000百万 (指数関数的上昇)
+        # 300→50M, 450→200M, 600→500M, 750+→1000M
+        excess = min(total_ability - 300, 450)  # 最大750まで
+        ratio = excess / 450  # 0 to 1
+        # 指数関数: 50M から 1000M への曲線
+        base_salary = 5000 + (ratio ** 1.8) * 95000  # 5000万〜100000万
+        randomness = random.uniform(0.9, 1.1)
+    elif total_ability >= 200:
+        # 中堅 (200-299): 15百万～50百万
+        excess = total_ability - 200
+        base_salary = 1500 + excess * 35  # 1500万〜5000万
+        randomness = random.uniform(0.85, 1.15)
+    else:
+        # 一般 (1-199): 5百万～15百万
+        base_salary = 500 + total_ability * 5  # 500万〜1500万
+        randomness = random.uniform(0.8, 1.2)
+    
+    # 年齢係数（高齢ほど高い＝実績ある選手は年俸が高い）
+    if age >= 26:
+        # 26歳=1.0, 30歳=1.28, 35歳=1.63
+        age_factor = 1.0 + (age - 26) * 0.07
+        base_salary = int(base_salary * age_factor)
+    
+    salary = int(base_salary * randomness) * 10000  # 万円を円に変換
+    salary = max(5000000, min(1000000000, salary))  # 5百万～1000百万にクランプ
 
     # Generate potential based on age (younger = higher potential)
     # Base potential decreases with age: ~75 at 18, ~50 at 28, ~30 at 38
@@ -246,13 +306,13 @@ def create_random_player(position: Position,
     potential = max(1, min(99, int(random.gauss(base_potential, 12))))
 
     player = Player(
-        name=name, position=position, pitch_type=pitch_type, stats=stats,
+        name=name, position=position, pitch_type=None, stats=stats,
         age=age, status=status, uniform_number=number, is_foreign=is_foreign, salary=salary,
         bats=player_bats, throws=player_throws, potential=potential
     )
     
     if position == Position.PITCHER:
-        _assign_pitcher_aptitudes(player)
+        _assign_pitcher_aptitudes(player, role_hint=pitch_type)
 
     return player
 
@@ -264,7 +324,9 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
     elif roll < 0.80: origin = "社会人"; age = random.randint(23, 26); target_total = 240
     else: origin = "独立リーグ"; age = random.randint(19, 26); age_factor = (age - 19) / 7.0; target_total = 190 + int(50 * age_factor)
 
-    target_total += random.randint(-15, 15) 
+    # 投手は総合力を少し上げる (+15)
+    pitcher_boost = 15 if position == Position.PITCHER else 0
+    target_total += random.randint(-15, 15) + pitcher_boost 
     stats = PlayerStats()
     name = generate_japanese_name()
 
@@ -374,6 +436,15 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
         stats.breaking = random.randint(1, 10)
         stats.movement = random.randint(1, 10)
         stats.stability = random.randint(1, 10)
+        
+        # ドラフト野手用ストレート球種
+        stats.pitches = {
+            "ストレート": {
+                "stuff": random.randint(1, 10),
+                "control": random.randint(1, 10),
+                "movement": random.randint(1, 10)
+            }
+        }
 
     stats.durability = get_stat_gauss(50, 15)
     stats.recovery = get_stat_gauss(50, 15)
@@ -390,7 +461,8 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
     potential = int((target_total / (3 if position == Position.PITCHER else 5)) + pot_bonus)
     potential = max(1, min(99, potential))
 
-    prospect = DraftProspect(name, position, pitch_type, stats, age, origin, potential)
+    # pitch_type要素を生成しないため None を渡す
+    prospect = DraftProspect(name, position, None, stats, age, origin, potential)
     
     # ドラフト候補の適正も設定（DraftProspectがPlayerを継承していない場合、別途考慮が必要だが、
     # ここではPlayerオブジェクトに変換された後に設定されることが多い。
@@ -407,135 +479,192 @@ def create_draft_prospect(position: Position, pitch_type: Optional[PitchType] = 
 
 def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType] = None) -> Player:
     """
-    外国人選手生成ロジック (球種別能力対応・能力底上げ・年齢相関強化・年俸適正化)
-    """
-    age = random.randint(18, 35)
-    name = generate_foreign_name()
+    外国人選手生成ロジック (2層システム: 育成可能/支配下専用)
+    総合力を先に決めてから逆算で能力を生成
     
-    # 修正: 年齢が高いほど能力が高くなる傾向を強化 (衰えではなく全盛期として扱う)
-    # ベースターゲット値を全体的に引き上げ
-    if age < 23:
-        base_target = 200 + (age - 18) * 10  # 200 ~ 250 (若手有望株)
-    elif age <= 30:
-        base_target = 250 + (age - 23) * 6   # 250 ~ 292 (全盛期)
-    else:
-        # 30歳以上は実績あるベテランとして高めに設定 (以前は減衰していた)
-        base_target = 292 + (age - 30) * 4   # 292 ~ 312 (超大物)
-
-    # 分散を持たせて「当たり外れ」を演出
-    target_total = int(random.gauss(base_target, 35))
-    target_total = max(180, min(420, target_total)) # 下限180, 上限420 (Sランク級も出るように)
-
-    stats = PlayerStats()
+    - 育成可能助っ人: 18〜25歳、総合力150〜300、年俸3〜15百万
+    - 支配下専用助っ人: 26〜35歳、総合力330〜450、年俸30百万〜
+    """
+    
+    def overall_to_normalized(overall: int, pos_adj: int = 0) -> float:
+        """総合力から正規化能力値(1-99スケール)を逆算"""
+        rating = overall - pos_adj
+        
+        if rating <= 250:
+            # 130-250 → normalized 1-50
+            normalized = ((rating - 130) / 120) * 50
+        elif rating <= 450:
+            # 250-450 → normalized 50-70
+            normalized = ((rating - 250) / 200) * 20 + 50
+        else:
+            # 450-999 → normalized 70-99 (べき乗逆算)
+            excess_ratio = (rating - 450) / 549
+            normalized = (excess_ratio ** (1/1.5)) * 29 + 70
+        
+        return max(1, min(99, normalized))
     
     def get_stat_gauss(mu, sigma=15):
         val = int(random.gauss(mu, sigma))
         return max(1, min(99, val))
-
+    
+    # 年齢層と総合力目標を決定 (50% 若手育成候補、50% 即戦力)
+    if random.random() < 0.5:
+        # 若手育成候補 (developmental eligible)
+        age = random.randint(18, 25)
+        base_overall = 150 + (age - 18) * 18  # 150 ~ 276
+        target_overall = int(random.gauss(base_overall, 30))
+        target_overall = max(150, min(300, target_overall))  # 下限150, 上限300
+        is_developmental_candidate = True
+    else:
+        # 即戦力 (main roster only) - 高能力層 総合力330〜450
+        age = random.randint(26, 35)
+        if age <= 30:
+            base_overall = 330 + (age - 26) * 20  # 330 ~ 410
+        else:
+            base_overall = 410 + (age - 30) * 8   # 410 ~ 450
+        target_overall = int(random.gauss(base_overall, 25))
+        target_overall = max(330, min(450, target_overall))  # 下限330, 上限450
+        is_developmental_candidate = False
+    
+    name = generate_foreign_name()
+    stats = PlayerStats()
+    
     if position == Position.PITCHER:
-        # 投手: 球威重視の傾向
-        avg = target_total / 3
-        v1 = random.gauss(avg + 8, 15) # 球威強め
-        v2 = random.gauss(avg - 5, 15) # 制球はバラつく
-        v3 = random.gauss(avg, 15)     # スタミナ
+        # 投手: ポジション調整なし
+        target_normalized = overall_to_normalized(target_overall, 0)
         
-        current_sum = v1 + v2 + v3
-        ratio = target_total / current_sum if current_sum > 0 else 1
+        # 投手の主要能力: stuff(3.5), control(3.5), movement(2.5), vel(1.5), stamina(2.0)
+        # 合計重み9.5 + 3.5 = 13.0 (主要)
+        # 全体重み15.5なので、残り2.5は共通能力
         
-        stats.stuff = max(1, min(99, int(v1 * ratio)))
-        stats.control = max(1, min(99, int(v2 * ratio)))
-        stats.stamina = max(1, min(99, int(v3 * ratio)))
+        # 主要能力を目標に合わせて生成
+        stuff = get_stat_gauss(target_normalized, 12)
+        control = get_stat_gauss(target_normalized - 5, 12)  # 制球はやや低め
+        movement = get_stat_gauss(target_normalized, 10)
+        stamina = get_stat_gauss(target_normalized, 10)
         
-        # 球速は速め (140~160km/h)
-        stats.velocity = random.randint(140, 160)
+        # 調整: 重み付き平均が target_normalized に近づくように補正
+        # weighted = (stuff*3.5 + control*3.5 + movement*2.5 + vel_rating*1.5 + stamina*2.0) / 13.0
+        vel_rating = get_stat_gauss(target_normalized + 5, 12)  # 速球派傾向
+        
+        weighted_sum = stuff*3.5 + control*3.5 + movement*2.5 + vel_rating*1.5 + stamina*2.0
+        current_normalized = weighted_sum / 13.0
+        
+        # 補正係数
+        if current_normalized > 0:
+            correction = target_normalized / current_normalized
+            stuff = max(1, min(99, int(stuff * correction)))
+            control = max(1, min(99, int(control * correction)))
+            movement = max(1, min(99, int(movement * correction)))
+            stamina = max(1, min(99, int(stamina * correction)))
+        
+        stats.stuff = stuff
+        stats.control = control
+        stats.movement = movement
+        stats.stamina = stamina
+        
+        # 球速: vel_rating から逆算 (rating = (kmh - 130) * 2 + 30)
+        stats.velocity = max(130, min(165, int((vel_rating - 30) / 2 + 130)))
         
         # その他能力
-        stats.movement = get_stat_gauss(55, 15)
+        stats.stability = get_stat_gauss(target_normalized, 15)
+        stats.vs_pinch = get_stat_gauss(target_normalized, 15)
+        stats.hold_runners = get_stat_gauss(target_normalized - 5, 15)
+        stats.gb_tendency = get_stat_gauss(50, 20)
         stats.set_defense_range(Position.PITCHER, get_stat_gauss(45, 15))
         stats.arm = get_stat_gauss(55, 15)
         stats.error = get_stat_gauss(45, 15)
         
-        # 変化球 (球種別詳細パラメータ: stuff/control/movement)
+        # 変化球
         balls = ["ストレート", "スライダー", "カーブ", "チェンジアップ", "ツーシーム", "カットボール", "SFF", "ナックルカーブ"]
         num_pitches = random.randint(2, 4)
         selected_balls = random.sample(balls, num_pitches)
         
-        # 基準値
-        base_stuff = stats.stuff  # すでに設定済み
-        base_control = stats.control  # すでに設定済み
-        
         stats.pitches = {}
         for ball in selected_balls:
-            p_stuff = get_stat_gauss(base_stuff, 12)
-            p_control = get_stat_gauss(base_control, 12)
+            p_stuff = get_stat_gauss(stats.stuff, 12)
+            p_control = get_stat_gauss(stats.control, 12)
             p_move = get_stat_gauss(55, 12) if ball not in ["ストレート", "Straight"] else get_stat_gauss(40, 10)
-            
-            stats.pitches[ball] = {
-                "stuff": p_stuff,
-                "control": p_control,
-                "movement": p_move
-            }
+            stats.pitches[ball] = {"stuff": p_stuff, "control": p_control, "movement": p_move}
             
         if "ストレート" not in stats.pitches:
             stats.pitches["ストレート"] = {
-                "stuff": get_stat_gauss(base_stuff, 12),
-                "control": get_stat_gauss(base_control, 12),
+                "stuff": get_stat_gauss(stats.stuff, 12),
+                "control": get_stat_gauss(stats.control, 12),
                 "movement": get_stat_gauss(40, 10)
             }
 
-        # --- Foreign: Pitcher Batting (Weak 1-20, Traj 1) ---
+        # 投手の打撃 (弱い)
         stats.trajectory = 1
         stats.contact = random.randint(1, 20)
         stats.gap = random.randint(1, 20)
         stats.power = random.randint(1, 20)
         stats.eye = random.randint(1, 20)
         stats.avoid_k = random.randint(1, 20)
-        
         stats.speed = get_stat_gauss(50, 15)
         stats.steal = get_stat_gauss(50, 15)
         stats.baserunning = get_stat_gauss(50, 15)
-        
-        stats.set_defense_range(Position.PITCHER, get_stat_gauss(50, 15))
-        stats.error = get_stat_gauss(50, 15)
 
     else:
-        # 野手: パワー重視の傾向
-        avg = target_total / 5
+        # 野手: ポジション調整を考慮
+        pos_adj = 0
+        if position == Position.CATCHER: pos_adj = 15
+        elif position == Position.SHORTSTOP: pos_adj = 10
+        elif position == Position.SECOND: pos_adj = 5
+        elif position == Position.CENTER: pos_adj = 5
+        elif position == Position.THIRD: pos_adj = -5
+        elif position == Position.RIGHT: pos_adj = -5
+        elif position == Position.LEFT: pos_adj = -10
+        elif position == Position.FIRST: pos_adj = -10
+        elif position == Position.DH: pos_adj = -20
         
-        v1 = random.gauss(avg - 2, 15)  # ミート
-        v2 = random.gauss(avg + 12, 15) # パワー特化
-        v3 = random.gauss(avg, 15)      # 走力
-        v4 = random.gauss(avg + 5, 15)  # 肩強め
-        v5 = random.gauss(avg - 5, 15)  # 守備粗め
+        target_normalized = overall_to_normalized(target_overall, pos_adj)
         
-        current_sum = v1 + v2 + v3 + v4 + v5
-        ratio = target_total / current_sum if current_sum > 0 else 1
+        # 野手の主要能力: contact(3.5), power(3.0), speed(1.5), fielding(3.0), arm(1.5)
+        # 外国人は特にパワー重視
+        contact = get_stat_gauss(target_normalized - 2, 12)
+        power = get_stat_gauss(target_normalized + 10, 12)  # パワー特化
+        speed = get_stat_gauss(target_normalized, 12)
+        arm = get_stat_gauss(target_normalized + 5, 12)
+        fielding = get_stat_gauss(target_normalized - 5, 12)  # 守備はやや粗め
         
-        stats.contact = max(1, min(99, int(v1 * ratio)))
-        stats.power = max(1, min(99, int(v2 * ratio)))
-        stats.speed = max(1, min(99, int(v3 * ratio)))
-        stats.arm = max(1, min(99, int(v4 * ratio)))
-        def_val = max(1, min(99, int(v5 * ratio)))
+        # 重み付き平均で補正
+        weighted_sum = contact*3.5 + power*3.0 + speed*1.5 + fielding*3.0 + arm*1.5
+        current_normalized = weighted_sum / 12.5
         
-        # 守備位置適性
-        if position in [Position.LEFT, Position.CENTER, Position.RIGHT]:
-            stats.set_defense_range(position, def_val)
-        elif position == Position.FIRST:
-            stats.set_defense_range(position, def_val)
-        else:
-            stats.set_defense_range(position, def_val)
+        if current_normalized > 0:
+            correction = target_normalized / current_normalized
+            contact = max(1, min(99, int(contact * correction)))
+            power = max(1, min(99, int(power * correction)))
+            speed = max(1, min(99, int(speed * correction)))
+            arm = max(1, min(99, int(arm * correction)))
+            fielding = max(1, min(99, int(fielding * correction)))
+        
+        stats.contact = contact
+        stats.power = power
+        stats.speed = speed
+        stats.arm = arm
+        stats.set_defense_range(position, fielding)
 
         stats.gap = stats.power 
-        stats.eye = get_stat_gauss(48, 15)
-        stats.avoid_k = get_stat_gauss(42, 15) 
-        stats.error = get_stat_gauss(45, 15)
+        stats.eye = get_stat_gauss(target_normalized - 5, 15)
+        stats.avoid_k = get_stat_gauss(target_normalized - 8, 15)  # 外国人は三振多め
+        stats.error = get_stat_gauss(target_normalized - 5, 15)
+        stats.steal = get_stat_gauss(target_normalized, 15)
+        stats.baserunning = get_stat_gauss(target_normalized, 15)
+        stats.bunt_sac = get_stat_gauss(30, 15)
+        stats.bunt_hit = get_stat_gauss(30, 15)
+        stats.vs_left_batter = get_stat_gauss(target_normalized, 15)
+        stats.chance = get_stat_gauss(target_normalized, 15)
+        stats.turn_dp = get_stat_gauss(45, 15)
+        stats.catcher_lead = get_stat_gauss(target_normalized, 15) if position == Position.CATCHER else get_stat_gauss(30, 15)
         
-        # 弾道 (パワーに応じて高めに)
+        # 弾道 (パワーに応じて)
         if stats.power > 75: stats.trajectory = 4
         elif stats.power > 60: stats.trajectory = 3
         else: stats.trajectory = 2
         
-        # --- Foreign: Fielder Pitching (Weak 1-10, Vel 120) ---
+        # 野手の投球能力 (弱い)
         stats.velocity = 120
         stats.control = random.randint(1, 10)
         stats.stuff = random.randint(1, 10)
@@ -543,11 +672,29 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
         stats.breaking = random.randint(1, 10)
         stats.movement = random.randint(1, 10)
         stats.stability = random.randint(1, 10)
+        
+        stats.pitches = {
+            "ストレート": {
+                "stuff": random.randint(1, 10),
+                "control": random.randint(1, 10),
+                "movement": random.randint(1, 10)
+            }
+        }
 
-    # 共通メンタル・回復など
+    # 共通メンタル・回復など (全選手)
     stats.durability = get_stat_gauss(65, 15) # 外国人は体が強い傾向
     stats.recovery = get_stat_gauss(55, 15)
     stats.work_ethic = get_stat_gauss(50, 20)
+    stats.mental = get_stat_gauss(50, 15)
+    stats.intelligence = get_stat_gauss(45, 15)
+    
+    # 投手追加能力
+    if position == Position.PITCHER:
+        stats.hold_runners = get_stat_gauss(50, 15)
+        stats.gb_tendency = get_stat_gauss(50, 20)
+        stats.vs_pinch = get_stat_gauss(50, 15)
+        stats.stability = get_stat_gauss(50, 15)
+        stats.vs_left_pitcher = get_stat_gauss(50, 15)
     
     if random.random() < 0.75: player_throws = "右"
     else: player_throws = "左"
@@ -556,36 +703,63 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
     elif random.random() < 0.85: player_bats = "左"
     else: player_bats = "両"
 
-    # 修正: 年俸・契約金計算ロジック
-    # 能力(target_total)に応じて指数関数的に増加させる
-    # 基準: Rating 200 -> 5,000万, 300 -> 2億5000万, 400 -> 6億
-    
-    base_salary_min = 5000 # 5000万
-    if target_total <= 200:
-        salary_man = base_salary_min
+    # 総合力を計算（選手詳細画面と同じ）
+    if position == Position.PITCHER:
+        total_ability = stats.overall_pitching()
     else:
-        # 200を超えた分について上乗せ
-        excess = target_total - 200
-        # 係数を調整して高騰させる
-        # excess=100 (total=300) -> 100 * 200 = 20000 (2億) + 5000 = 2.5億
-        # excess=200 (total=400) -> 200 * 300 = 60000 (6億) + 5000 = 6.5億
-        multiplier = 200 + (excess * 1.5) # 能力が高いほど単価も上がる
-        salary_man = base_salary_min + (excess * multiplier)
+        total_ability = stats.overall_batting(position)
     
-    annual_salary = int(salary_man) * 10000
+    # 二層年俸システム（総合力300を境界とする）
+    # 層1: 総合力300以上 → 年俸30百万以上（育成不可）+ 若いほど高い
+    # 層2: 総合力300未満 → 年俸15百万以下（育成可）
     
-    # 契約金 (Contract Bonus): 年俸の30%〜50%程度
-    bonus_ratio = random.uniform(0.3, 0.5)
+    if total_ability >= 300:
+        # 高能力層: 30百万～1000百万（総合力と若さで上昇）
+        is_developmental_candidate = False
+        
+        # 基本年俸: 総合力300→30M, 400→100M, 450→300M
+        if total_ability >= 400:
+            # エリート (400-450): 100百万～300百万
+            excess = min(total_ability - 400, 50)
+            ratio = excess / 50
+            base_salary_man = 10000 + (ratio ** 1.5) * 90000  # 100M～300M
+        else:
+            # 高能力 (300-399): 30百万～100百万
+            excess = total_ability - 300
+            base_salary_man = 3000 + excess * 70  # 30M～100M
+        
+        # 若さプレミアム: 26歳=1.3, 30歳=1.0, 35歳=0.8
+        if age <= 30:
+            youth_factor = 1.0 + (30 - age) * 0.08  # 26歳=1.32, 30歳=1.0
+        else:
+            youth_factor = max(0.75, 1.0 - (age - 30) * 0.05)  # 35歳=0.75
+        base_salary_man = int(base_salary_man * youth_factor)
+    else:
+        # 育成可能層: 3百万～15百万
+        is_developmental_candidate = True
+        base_salary_man = 300 + (total_ability - 130) * 7  # 300万～1490万
+        base_salary_man = max(300, min(1500, base_salary_man))
+    
+    annual_salary = int(base_salary_man) * 10000
+    annual_salary = max(5000000, min(1000000000, annual_salary))  # 5M～1000Mにクランプ
+    
+    # 契約金 (Contract Bonus): 年俸の30%〜60%（若いほど高い）
+    bonus_base_ratio = 0.3 + (35 - age) * 0.015  # 35歳=0.3, 26歳=0.435
+    bonus_ratio = random.uniform(bonus_base_ratio * 0.9, bonus_base_ratio * 1.1)
     contract_bonus = int(annual_salary * bonus_ratio)
 
+    # pitch_typeは生成しない
     player = Player(
-        name=name, position=position, pitch_type=pitch_type, stats=stats,
+        name=name, position=position, pitch_type=None, stats=stats,
         age=age, status=PlayerStatus.ACTIVE, uniform_number=0, is_foreign=True, 
-        salary=annual_salary, contract_bonus=contract_bonus, # 契約金を設定
+        salary=annual_salary, contract_bonus=contract_bonus,
         bats=player_bats, throws=player_throws
     )
     
+    # 育成候補フラグを追加属性として設定
+    player.is_developmental_candidate = is_developmental_candidate
+    
     if position == Position.PITCHER:
-        _assign_pitcher_aptitudes(player)
+        _assign_pitcher_aptitudes(player, role_hint=pitch_type)
     
     return player

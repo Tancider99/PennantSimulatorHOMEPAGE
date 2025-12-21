@@ -706,11 +706,11 @@ class StrikeZoneWidget(QWidget):
             shoots = ["シュート", "シンカー"]
             
             if self.pitcher_hand == "右":
-                if p_type in sliders: is_pointing_left = True  
-                elif p_type in shoots: is_pointing_left = False 
-            else: 
                 if p_type in sliders: is_pointing_left = False 
-                elif p_type in shoots: is_pointing_left = True  
+                elif p_type in shoots: is_pointing_left = True 
+            else: 
+                if p_type in sliders: is_pointing_left = True 
+                elif p_type in shoots: is_pointing_left = False
             
             if is_pointing_left:
                 poly = QPolygonF([QPointF(x+size*0.8, y-size), QPointF(x+size*0.8, y+size), QPointF(x-size*0.8, y)])
@@ -1182,6 +1182,7 @@ class TVBroadcastGamePage(QWidget):
         self.is_animating = False 
         self.need_zone_reset = False 
         self.date_str = "2027-01-01"
+        self.game_type = "normal"  # normal, ai_vs_ai
         
         # 采配関連
         self.is_fast_forwarding = False
@@ -1260,7 +1261,7 @@ class TVBroadcastGamePage(QWidget):
         self.bat_buttons = {}
         btn_style = f"QPushButton {{ background:{THEME.bg_card_elevated}; color:{THEME.text_primary}; border:1px solid {THEME.border}; border-radius:3px; padding:4px 6px; font-size:10px; }} QPushButton:checked {{ background:{THEME.primary}; color:black; }} QPushButton:disabled {{ background:{THEME.bg_card}; color:#666; }}"
         
-        for strat in ["AUTO", "通常", "強振", "流し", "バント", "盗塁", "H&R", "SQZ"]:
+        for strat in ["AUTO", "通常", "強振", "流し", "バント", "盗塁"]:
             btn = QPushButton(strat)
             btn.setCheckable(True)
             btn.setChecked(strat == "AUTO")
@@ -1657,6 +1658,11 @@ class TVBroadcastGamePage(QWidget):
             self.is_animating = False
             self.btn_pitch.setEnabled(True)
             self._update_display()
+            
+            # AI vs AI: Auto Advance
+            if getattr(self, 'game_type', 'normal') == 'ai_vs_ai' and not self.live_engine.is_game_over():
+                if not self.is_fast_forwarding:
+                     QTimer.singleShot(800, self._on_pitch)
 
             if self.live_engine.is_game_over(): self._finish()
         except Exception as e:
@@ -1738,6 +1744,13 @@ class TVBroadcastGamePage(QWidget):
         
         self.attack_panel.setVisible(user_is_attacking)
         self.defense_panel.setVisible(user_is_defending)
+        
+        # AI観戦モードなら采配パネル全体を隠す
+        if getattr(self, 'game_type', 'normal') == 'ai_vs_ai':
+            self.manager_frame.setVisible(False)
+        else:
+            self.manager_frame.setVisible(True)
+            
         if hasattr(self, 'cmb_ff_attack'): self.cmb_ff_attack.setVisible(True) # 常に表示
         if hasattr(self, 'cmb_ff_defense'): self.cmb_ff_defense.setVisible(True) # 常に表示
         # ボタンの有効無効制御
@@ -1820,16 +1833,19 @@ class TVBroadcastGamePage(QWidget):
         b_team_name = a.name if st.is_top else h.name
 
         if p:
-            self.pitcher_card.update_player(p, f"[{p_team_name}] #{p.uniform_number} {p.pitch_type.value[:1]}", [
-                ("ERA", f"{p.record.era:.2f}", VisualStyle.TEXT_MAIN),
-                ("SO", p.record.strikeouts_pitched, VisualStyle.COLOR_HIT),
+            rt_p = self.live_engine.get_realtime_stats(p)
+            p_type_char = p.pitch_type.value[:1] if hasattr(p.pitch_type, "value") else "投"
+            self.pitcher_card.update_player(p, f"[{p_team_name}] #{p.uniform_number} {p_type_char}", [
+                ("ERA", f"{rt_p['era']:.2f}", VisualStyle.TEXT_MAIN),
+                ("SO", rt_p['so'], VisualStyle.COLOR_HIT),
                 ("STM", int(st.current_pitcher_stamina()), VisualStyle.COLOR_BALL)
             ])
         if b:
+            rt_b = self.live_engine.get_realtime_stats(b)
             self.batter_card.update_player(b, f"[{b_team_name}] #{b.uniform_number} {b.position.value[:2]}", [
-                ("AVG", f"{b.record.batting_average:.3f}", VisualStyle.TEXT_MAIN),
-                ("HR", b.record.home_runs, VisualStyle.COLOR_STRIKE),
-                ("RBI", b.record.rbis, VisualStyle.COLOR_OUT)
+                ("AVG", f"{rt_b['avg']:.3f}", VisualStyle.TEXT_MAIN),
+                ("HR", rt_b['hr'], VisualStyle.COLOR_STRIKE),
+                ("RBI", rt_b['rbi'], VisualStyle.COLOR_OUT)
             ])
             
         if not self.is_animating:
@@ -1902,8 +1918,8 @@ class TVBroadcastGamePage(QWidget):
         """打撃戦略を設定"""
         # UIの戦略名をエンジン用に変換
         strategy_map = {
-            "AUTO": "AUTO", "通常": "SWING", "強振": "POWER", "流し": "MEET",
-            "バント": "BUNT", "盗塁": "STEAL", "H&R": "HIT_AND_RUN", "SQZ": "SQUEEZE"
+            "AUTO": "AUTO", "通常": "SWING", "強振": "POWER", "流し": "NAGASHI",
+            "バント": "BUNT", "盗塁": "STEAL"
         }
         self.batting_strategy = strategy_map.get(strategy, "AUTO")
         for s, btn in self.bat_buttons.items():

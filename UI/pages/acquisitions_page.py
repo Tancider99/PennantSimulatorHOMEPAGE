@@ -125,8 +125,9 @@ class AcquisitionsTable(PlayerTable):
         stats = player.stats
         record = player.record
         
-        # Salary
-        salary_text = f"{player.salary // 10000}万円"
+        # Salary (百万円単位で表示)
+        salary_mil = player.salary // 1000000
+        salary_text = f"{salary_mil}百万"
         salary_val = player.salary
         
         # Determine Role
@@ -217,7 +218,7 @@ class AcquisitionsTable(PlayerTable):
                 item.setText(str(value))
                 if "km" in str(value): # Vel
                      item.setData(Qt.UserRole, vel_val)
-                elif "万円" in str(value): # Salary
+                elif "百万" in str(value): # Salary
                      item.setData(Qt.UserRole, salary_val)
                 elif "★" in str(value): # Total Stars
                      # Order Style: Gold Text

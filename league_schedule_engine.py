@@ -180,6 +180,30 @@ class LeagueScheduleEngine:
         # 3. 日程に配置
         self._assign_cards_to_calendar(north_cards, south_cards, interleague_cards)
 
+        # 4. オールスターゲームをスケジュールに追加（初期は未定）
+        # Game 1
+        as_game1 = ScheduledGame(
+            game_number=1,
+            date=self.calendar.allstar_day1.strftime("%Y-%m-%d"),
+            home_team_name="ALL-NORTH",
+            away_team_name="ALL-SOUTH",
+            status=GameStatus.SCHEDULED
+        )
+        self.schedule.games.append(as_game1)
+
+        # Game 2
+        as_game2 = ScheduledGame(
+            game_number=2,
+            date=self.calendar.allstar_day2.strftime("%Y-%m-%d"),
+            home_team_name="ALL-SOUTH",
+            away_team_name="ALL-NORTH",
+            status=GameStatus.SCHEDULED
+        )
+        self.schedule.games.append(as_game2)
+        
+        # Sort by date to be safe
+        self.schedule.games.sort(key=lambda x: x.date)
+
         return self.schedule
 
     def _generate_league_cards(self, teams: List[str]) -> List[SeriesCard]:
@@ -930,6 +954,8 @@ class AllStarGameEngine:
         self.south_roster: List[AllStarSelection] = []
         self.game1_result: Optional[Tuple[int, int]] = None
         self.game2_result: Optional[Tuple[int, int]] = None
+        self.game1_detail: Optional[dict] = None
+        self.game2_detail: Optional[dict] = None
 
     def select_allstar_players(self) -> Tuple[List[AllStarSelection], List[AllStarSelection]]:
         """オールスター選手を選出（成績ベース）"""
@@ -955,13 +981,40 @@ class AllStarGameEngine:
                     all_players.append((player, team.name))
 
         # 投手（12名）
+        # 投手選出 (先発6名、救援6名)
         pitchers = [(p, t) for p, t in all_players if p.position == Position.PITCHER]
-        pitchers.sort(key=lambda x: (x[0].record.wins, -x[0].record.era), reverse=True)
-        for i, (p, t) in enumerate(pitchers[:12]):
+        
+        # 先発候補 (先発適性あり)
+        starters_cand = [x for x in pitchers if x[0].starter_aptitude >= 3]
+        starters_cand.sort(key=lambda x: (x[0].record.wins, -x[0].record.era), reverse=True)
+        
+        # 救援候補 (抑え/中継ぎ適性あり)
+        relievers_cand = [x for x in pitchers if x[0].closer_aptitude >= 3 or x[0].middle_aptitude >= 3]
+        relievers_cand.sort(key=lambda x: (x[0].record.saves, x[0].record.holds, -x[0].record.era), reverse=True)
+        
+        # 重複排除用
+        selected_pids = set()
+        
+        # 先発6名
+        for i, (p, t) in enumerate(starters_cand[:6]):
+            if p in selected_pids: continue
             roster.append(AllStarSelection(
                 player=p, team_name=t, position=p.position,
-                votes=1000 - i * 50, is_starter=(i < 1)
+                votes=1000 - i * 50, is_starter=(i < 3) # Top 3 start
             ))
+            selected_pids.add(p)
+            
+        # 救援6名 -> 7名
+        count_r = 0
+        for i, (p, t) in enumerate(relievers_cand):
+            if count_r >= 7: break
+            if p in selected_pids: continue
+            roster.append(AllStarSelection(
+                player=p, team_name=t, position=p.position,
+                votes=800 - i * 50, is_starter=False
+            ))
+            selected_pids.add(p)
+            count_r += 1
 
         # 捕手（3名）
         catchers = [(p, t) for p, t in all_players if p.position == Position.CATCHER]
@@ -972,12 +1025,12 @@ class AllStarGameEngine:
                 votes=800 - i * 50, is_starter=(i == 0)
             ))
 
-        # 内野手（7名）
+        # 内野手（7名 -> 9名）
         infielders = [(p, t) for p, t in all_players if p.position in [
             Position.FIRST, Position.SECOND, Position.THIRD, Position.SHORTSTOP
         ]]
         infielders.sort(key=lambda x: x[0].record.ops, reverse=True)
-        for i, (p, t) in enumerate(infielders[:7]):
+        for i, (p, t) in enumerate(infielders[:9]):
             roster.append(AllStarSelection(
                 player=p, team_name=t, position=p.position,
                 votes=900 - i * 40, is_starter=(i < 4)
@@ -996,13 +1049,91 @@ class AllStarGameEngine:
 
         return roster
 
-    def simulate_allstar_games(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
-        """オールスター2試合をシミュレート"""
-        # 簡易シミュレーション
-        self.game1_result = (random.randint(2, 8), random.randint(2, 8))
-        self.game2_result = (random.randint(2, 8), random.randint(2, 8))
+    def simulate_single_allstar_game(self, game_number: int):
+        """指定された試合番号(1 or 2)のみシミュレート (LiveGameEngine使用)"""
+        from live_game_engine import LiveGameEngine
+        
+        # チームオブジェクト作成
+        team_n, team_s = self.create_team_objects()
+        
+        target_engine = None
+        
+        if game_number == 1:
+            # Game 1: North (Home) vs South (Away)
+            eng1 = LiveGameEngine(team_n, team_s, is_all_star=True)
+            while not eng1.is_game_over():
+                eng1.simulate_pitch(manual_strategy="AUTO")
+            
+            # Capture metadata (Win/Loss/Save)
+            meta = eng1.finalize_game_stats()
+            self.game1_result = (eng1.state.home_score, eng1.state.away_score)
+            
+            # 詳細データの作成
+            mvp1 = self._determine_mvp(eng1)
+            self.game1_detail = {
+                'north_innings': self._get_inning_scores(eng1, True), # Home=North
+                'south_innings': self._get_inning_scores(eng1, False),
+                'mvp': mvp1,
+                'box_score': self._create_box_score(eng1),
+                'engine': eng1,
+                'pitcher_result': {
+                    'win': meta.get('win'),
+                    'loss': meta.get('loss'),
+                    'save': meta.get('save')
+                }
+            }
+            target_engine = eng1
+            
+        elif game_number == 2:
+            # Game 2: South (Home) vs North (Away)
+            eng2 = LiveGameEngine(team_s, team_n, is_all_star=True)
+            while not eng2.is_game_over():
+                eng2.simulate_pitch(manual_strategy="AUTO")
+                
+            meta = eng2.finalize_game_stats()
+            self.game2_result = (eng2.state.home_score, eng2.state.away_score) # Home=South
+            
+            mvp2 = self._determine_mvp(eng2)
+            self.game2_detail = {
+                'north_innings': self._get_inning_scores(eng2, False), # Away=North
+                'south_innings': self._get_inning_scores(eng2, True),  # Home=South
+                'mvp': mvp2,
+                'box_score': self._create_box_score(eng2),
+                'engine': eng2,
+                'pitcher_result': {
+                    'win': meta.get('win'),
+                    'loss': meta.get('loss'),
+                    'save': meta.get('save')
+                }
+            }
+            target_engine = eng2
 
-        return self.game1_result, self.game2_result
+        return target_engine
+
+    def _get_inning_scores(self, engine, is_home):
+        scores = engine.state.home_inning_scores if is_home else engine.state.away_inning_scores
+        # Ensure at least 9 innings
+        res = scores[:]
+        while len(res) < 9:
+            res.append(0)
+        return res
+
+    def _determine_mvp(self, engine):
+        home_win = engine.state.home_score > engine.state.away_score
+        win_team = engine.home_team if home_win else engine.away_team
+        
+        candidates = [p for p in win_team.players if engine.game_stats[p]['rbis'] > 0 or engine.game_stats[p]['earned_runs'] == 0] 
+        if not candidates: candidates = win_team.players
+        
+        import random
+        mvp_p = random.choice(candidates)
+        return f"{mvp_p.name} ({win_team.name})"
+
+    def _create_box_score(self, engine):
+        # Convert engine.game_stats to dict usable by UI
+        # But UI Logic (BoxScoreCard) re-extracts from game_stats object.
+        # So we just pass game_stats raw or wrapped.
+        return engine.game_stats # returning raw defaultdict is safest implementation for now
 
     def get_winner(self) -> str:
         """オールスター勝利リーグを取得"""
@@ -1026,7 +1157,96 @@ class AllStarGameEngine:
             return "North League"
         elif south_wins > north_wins:
             return "South League"
-        return "引き分け"
+    def create_team_objects(self) -> Tuple[object, object]:
+        """オールスター対戦用のチームオブジェクト（一時的）を作成"""
+        from models import Team, League, Position, TeamLevel
+
+        def build_team(name, league, roster: List[AllStarSelection]):
+            team = Team(name, league)
+            team.color = "#FFD700"  # All-Star Gold
+            
+            # 分類
+            pitchers_sel = [x for x in roster if x.position == Position.PITCHER]
+            fielders_sel = [x for x in roster if x.position != Position.PITCHER]
+            
+            # 選手を追加 (オリジナルを変更しないように注意が必要だが、
+            # LiveGameEngineがPlayerオブジェクトをキーにする場合、参照を維持する)
+            # ここではシンプルにリストに追加し、インデックスで管理する
+            
+            # 1. 投手を追加
+            for sel in pitchers_sel:
+                team.players.append(sel.player)
+            
+            # 2. 野手を追加
+            offset = len(team.players)
+            for sel in fielders_sel:
+                team.players.append(sel.player)
+                
+            # スタメン設定 (野手から選出)
+            # is_starterフラグがある選手を優先、足りなければ適当に
+            starters = [x for x in fielders_sel if x.is_starter]
+            if len(starters) < 9:
+                # 足りない場合は補充
+                others = [x for x in fielders_sel if not x.is_starter]
+                starters.extend(others[:9-len(starters)])
+            
+            # 打順決定 (OPS順)
+            starters.sort(key=lambda x: x.player.record.ops, reverse=True)
+            
+            # ポジション重複の解消は簡易的 (本来は厳密にやるべきだが)
+            # 単純に roster の position を使う
+            used_pos = set()
+            lineup = [-1] * 9  # 1-9番
+            
+            # ラインアップ配列は [1番のindex, 2番の実体index...]
+            # スタメン選手の team.players におけるインデックスを特定する必要がある
+            
+            current_lineup_indices = [-1] * 9
+            
+            for i, sel in enumerate(starters[:9]):
+                # team.players内のインデックスを探す
+                pidx = -1
+                for idx, p in enumerate(team.players):
+                    if p == sel.player:
+                        pidx = idx
+                        break
+                current_lineup_indices[i] = pidx
+                
+                # ポジション割り当て (データ上)
+                # LiveGameEngineは team.lineup_positions を使う場合があるか確認
+                pass
+
+            team.current_lineup = current_lineup_indices
+            
+            # 投手設定
+            team.rotation = []
+            team.bullpen = []
+            for i, sel in enumerate(pitchers_sel):
+                pidx = -1
+                for idx, p in enumerate(team.players):
+                    if p == sel.player:
+                        pidx = idx
+                        break
+                
+                if i < 3: team.rotation.append(pidx)
+                else: team.bullpen.append(pidx)
+                
+            # lineup_positions (リスト) の作成
+            # team.current_lineup に対応する守備位置
+            team.lineup_positions = []
+            for idx in team.current_lineup:
+                if idx != -1:
+                    p = team.players[idx]
+                    team.lineup_positions.append(p.position.value)
+                else:
+                    team.lineup_positions.append("DH")
+            
+            return team
+
+        t_north = build_team("ALL-NORTH", League.NORTH, self.north_roster)
+        t_south = build_team("ALL-SOUTH", League.SOUTH, self.south_roster)
+        
+        return t_north, t_south
 
 
 # ========================================

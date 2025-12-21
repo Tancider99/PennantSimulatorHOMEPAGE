@@ -90,8 +90,12 @@ class OrderPage(QWidget):
     def showEvent(self, event):
         """タブが表示されたときにデータを更新する"""
         super().showEvent(event)
-        # 操作せずとも最新のデータを反映させる
+        self.refresh()
+
+    def refresh(self):
+        """外部から呼び出し可能なリフレッシュメソッド"""
         if self.current_team:
+            self._ensure_lists_initialized()
             self._load_team_data()
             self._refresh_all()
 
@@ -483,6 +487,7 @@ class OrderPage(QWidget):
             'setup_pitchers': list(self.current_team.setup_pitchers),
             'closers': list(self.current_team.closers)
         }
+        
         self.has_unsaved_changes = False
         self.save_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
@@ -973,7 +978,12 @@ class OrderPage(QWidget):
         for i, p in enumerate(team.players):
             if p.position.value == "投手" and i not in active_ids:
                 if p.is_developmental: continue
-                if type_filter != "全タイプ" and p.pitch_type.value != type_filter:
+                # None check for pitch_type
+                p_type_val = p.pitch_type.value if p.pitch_type else "不明"
+                if type_filter != "全タイプ" and p_type_val != type_filter:
+                    # Fallback: check aptitudes if None? For now just skip logic or allow match if "All"
+                    # If type_filter is specific (e.g. "Start"), and p_type is None, we might look at aptitude?
+                    # But simpler: if None, valid only for "全タイプ" (already checked)
                     continue
                 candidates.append((i, p))
                 
@@ -986,7 +996,7 @@ class OrderPage(QWidget):
             if hasattr(p, 'days_until_promotion') and p.days_until_promotion > 0:
                 row_color = QColor("#7f8c8d")
 
-            role = p.pitch_type.value[:2]
+            role = p.pitch_type.value[:2] if p.pitch_type else "－"
             table.setItem(i, 0, self._create_item(role, text_color=row_color))
             table.setItem(i, 1, self._create_condition_item(p))
             table.setItem(i, 2, self._create_item(p.name, Qt.AlignLeft, text_color=row_color))

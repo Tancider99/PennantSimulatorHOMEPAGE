@@ -292,6 +292,10 @@ class GameStateManager:
             apply_team_training(team.players, 1)
             
             for player in team.players:
+                # 明示的な疲労増加防止 (練習も休息も疲労は減る方向のみ)
+                # 万が一のバグによる疲労増加を防ぐ
+                old_fatigue = getattr(player, 'fatigue', 0)
+
                 # models.pyに追加したrecover_dailyメソッドを呼び出し
                 if hasattr(player, 'recover_daily'):
                     player.recover_daily()
@@ -299,12 +303,14 @@ class GameStateManager:
                     # 互換性維持のためのフォールバック
                     if player.position == Position.PITCHER:
                         player.days_rest += 1
+                
+                # 疲労が増加していたら元に戻す (日次更新で疲労は増えないはず)
+                new_fatigue = getattr(player, 'fatigue', 0)
+                if new_fatigue > old_fatigue:
+                    player.fatigue = old_fatigue
 
     def _manage_all_teams_rosters(self):
-        """全チームのロースター管理（自動オーダー編成＋保存）
-        
-        ※スコアベースの自動入れ替えは廃止。オーダータブの自動編成→保存と同等の処理を実行。
-        """
+        """全チームのロースター管理（自動オーダー編成＋保存）"""
         
         # WAR計算のために一度統計を更新
         update_league_stats(self.all_teams)
@@ -313,12 +319,13 @@ class GameStateManager:
             # 常にロースター枠を補充（投手15人/野手16人を維持）
             self._fill_roster_gaps(team)
             
-            # 自動オーダー編成＋保存（AIチームのみ。プレイヤーチームはスキップ）
-            if team != self.player_team:
-                self._auto_fill_and_save_order(team)
-            
-            # 全チーム共通: ベンチ枠の整合性確保 (ローテ投手がベンチに入らないように)
-            self._cleanup_roster_consistency(team)
+            # 自動オーダー編成＋保存（全チーム対象）
+            # プレイヤーチームも含めて自動編成を実行（スキップ時に空き枠ができないように）
+            self._auto_fill_and_save_order(team)
+        
+        # 全チーム共通: ベンチ枠の整合性確保 (ローテ投手がベンチに入らないように)
+        for team in self.all_teams:
+             self._cleanup_roster_consistency(team)
 
     def _cleanup_roster_consistency(self, team):
         """ロースター、役割、ベンチの整合性を確保"""
@@ -509,6 +516,38 @@ class GameStateManager:
                     p_idx = remaining.pop(0)
                     setup_pitchers[slot_idx] = p_idx
                     used_pitchers.add(p_idx)
+        
+        # ========== 投手枠補充（二軍から昇格） ==========
+        # 一軍投手枠: 15人目標
+        TARGET_PITCHERS = 15
+        current_pitcher_count = len(used_pitchers)
+        
+        if current_pitcher_count < TARGET_PITCHERS:
+            needed = TARGET_PITCHERS - current_pitcher_count
+            # 二軍から投手を補充
+            farm_pitchers = [i for i, p in enumerate(team.players)
+                            if p.position.value == "投手"
+                            and not getattr(p, 'is_developmental', False)
+                            and not p.is_injured
+                            and i not in used_pitchers
+                            and i in team.farm_roster]
+            farm_pitchers.sort(key=lambda i: get_pitcher_score(team.players[i], 'relief'), reverse=True)
+            
+            for i in range(min(needed, len(farm_pitchers))):
+                promoted_idx = farm_pitchers[i]
+                # Move to active roster
+                if promoted_idx in team.farm_roster:
+                    team.farm_roster.remove(promoted_idx)
+                if promoted_idx not in team.active_roster:
+                    team.active_roster.append(promoted_idx)
+                team.players[promoted_idx].team_level = TeamLevel.FIRST
+                team.players[promoted_idx].days_until_promotion = 0
+                
+                # 中継ぎ枠に追加
+                empty_setup = [j for j, x in enumerate(setup_pitchers) if x == -1]
+                if empty_setup:
+                    setup_pitchers[empty_setup[0]] = promoted_idx
+                    used_pitchers.add(promoted_idx)
 
         # ========== 野手編成 ==========
         
@@ -562,15 +601,70 @@ class GameStateManager:
         while lineup_idx < 9:
             remaining = [(i, get_batting_score(team.players[i])) 
                         for i in batters if i not in used_indices]
-            if not remaining: break
-            remaining.sort(key=lambda x: x[1], reverse=True)
-            current_lineup[lineup_idx] = remaining[0][0]
-            lineup_positions[lineup_idx] = "指"
-            used_indices.add(remaining[0][0])
-            lineup_idx += 1
+            if remaining:
+                remaining.sort(key=lambda x: x[1], reverse=True)
+                current_lineup[lineup_idx] = remaining[0][0]
+                lineup_positions[lineup_idx] = "指"
+                used_indices.add(remaining[0][0])
+                lineup_idx += 1
+            else:
+                # Fallback: pull batters from farm roster if needed
+                farm_batters = [i for i, p in enumerate(team.players)
+                               if p.position.value != "投手"
+                               and not getattr(p, 'is_developmental', False)
+                               and not p.is_injured
+                               and i not in used_indices
+                               and i in team.farm_roster]
+                
+                if farm_batters:
+                    # Promote best farm batter
+                    farm_batters.sort(key=lambda i: get_batting_score(team.players[i]), reverse=True)
+                    promoted_idx = farm_batters[0]
+                    # Move to active roster
+                    if promoted_idx in team.farm_roster:
+                        team.farm_roster.remove(promoted_idx)
+                    if promoted_idx not in team.active_roster:
+                        team.active_roster.append(promoted_idx)
+                    team.players[promoted_idx].team_level = TeamLevel.FIRST
+                    team.players[promoted_idx].days_until_promotion = 0
+                    
+                    current_lineup[lineup_idx] = promoted_idx
+                    lineup_positions[lineup_idx] = "指"
+                    used_indices.add(promoted_idx)
+                    lineup_idx += 1
+                else:
+                    break  # No more players available
 
         # ベンチ
         bench_batters = [i for i in batters if i not in used_indices]
+        
+        # ========== ベンチ野手補充（一軍枠に空きがある場合） ==========
+        # 一軍野手枠: 16人目標
+        TARGET_BATTERS = 16
+        current_batter_count = len(used_indices) + len(bench_batters)
+        
+        if current_batter_count < TARGET_BATTERS:
+            needed = TARGET_BATTERS - current_batter_count
+            # 二軍から補充
+            farm_batters = [i for i, p in enumerate(team.players)
+                           if p.position.value != "投手"
+                           and not getattr(p, 'is_developmental', False)
+                           and not p.is_injured
+                           and i not in used_indices
+                           and i not in bench_batters
+                           and i in team.farm_roster]
+            farm_batters.sort(key=lambda i: get_batting_score(team.players[i]), reverse=True)
+            
+            for i in range(min(needed, len(farm_batters))):
+                promoted_idx = farm_batters[i]
+                # Move to active roster
+                if promoted_idx in team.farm_roster:
+                    team.farm_roster.remove(promoted_idx)
+                if promoted_idx not in team.active_roster:
+                    team.active_roster.append(promoted_idx)
+                team.players[promoted_idx].team_level = TeamLevel.FIRST
+                team.players[promoted_idx].days_until_promotion = 0
+                bench_batters.append(promoted_idx)
 
         # ========== 降格処理 ==========
         new_order_set = set()
@@ -597,9 +691,7 @@ class GameStateManager:
         team.setup_pitchers = setup_pitchers
         team.closers = closers
         team.closer_idx = closers[0] if closers[0] != -1 else -1
-        
-        # 投手役割を正式に設定（ローテ・中継ぎ・抑えの適性に基づく）
-        team.auto_assign_pitching_roles(TeamLevel.FIRST)
+
 
     def _fill_roster_gaps(self, team: Team):
         """不足しているロースター枠を埋める (投手15人/野手16人配分)"""
@@ -840,8 +932,35 @@ class GameStateManager:
                     self.current_date = date_str
                     return
                 elif phase == SeasonPhase.ALLSTAR_BREAK:
-                    # オールスター期間は試合なし（オールスターゲーム自体は別処理）
+                    # オールスター期間の処理
                     self._update_player_status_daily()
+                    
+                    # Check for All-Star Game and Simulate using LiveGameEngine
+                    if self.schedule and hasattr(self.season_manager, 'allstar_engine') and self.season_manager.allstar_engine:
+                        ase = self.season_manager.allstar_engine
+                        todays_games = [g for g in self.schedule.games if g.date == date_str and not g.is_completed]
+                        for game in todays_games:
+                            if game.home_team_name in ["ALL-NORTH", "ALL-SOUTH"]:
+                                # Use LiveGameEngine via AllStarGameEngine
+                                game_num = game.game_number if hasattr(game, 'game_number') else 1
+                                engine = ase.simulate_single_allstar_game(game_num)
+                                
+                                if engine:
+                                    # Update scheduled game with results
+                                    game.home_score = engine.state.home_score
+                                    game.away_score = engine.state.away_score
+                                    game.status = GameStatus.COMPLETED
+                                    
+                                    # Record inning-by-inning scores
+                                    game.home_inning_scores = list(engine.state.home_inning_scores)
+                                    game.away_inning_scores = list(engine.state.away_inning_scores)
+                                    
+                                    # Record hits and errors
+                                    game.home_hits = engine.state.home_hits
+                                    game.away_hits = engine.state.away_hits
+                                    game.home_errors = engine.state.home_errors
+                                    game.away_errors = engine.state.away_errors
+
                     self.current_date = date_str
                     return
 
@@ -882,17 +1001,58 @@ class GameStateManager:
                         self._ensure_valid_roster(away)
 
                         try:
+                            # Check for Postseason
+                            ps_series = None
+                            ps_engine = getattr(self.season_manager, 'postseason_engine', None) if self.season_manager else None
+                            if ps_engine:
+                                for s in [ps_engine.cs_north_first, ps_engine.cs_south_first, ps_engine.cs_north_final, ps_engine.cs_south_final, ps_engine.japan_series]:
+                                    if s and game in s.schedule:
+                                        ps_series = s
+                                        break
+                            
+                            is_ps = (ps_series is not None)
+
                             # 試合実行
-                            engine = LiveGameEngine(home, away)
+                            engine = LiveGameEngine(home, away, is_postseason=is_ps)
                             while not engine.is_game_over():
                                 engine.simulate_pitch()
 
-                            engine.finalize_game_stats(date_str)
-                            self.record_game_result(home, away, engine.state.home_score, engine.state.away_score)
+                            final_result = engine.finalize_game_stats(date_str)
+                            
+                            if is_ps:
+                                ps_engine.record_game_result(ps_series, engine.state.home_score, engine.state.away_score)
+                            else:
+                                self.record_game_result(home, away, engine.state.home_score, engine.state.away_score)
 
                             game.status = GameStatus.COMPLETED
                             game.home_score = engine.state.home_score
                             game.away_score = engine.state.away_score
+                            
+                            # Record inning-by-inning scores for viewing past results
+                            game.home_inning_scores = list(engine.state.home_inning_scores)
+                            game.away_inning_scores = list(engine.state.away_inning_scores)
+                            
+                            # Record hits and errors
+                            game.home_hits = engine.state.home_hits
+                            game.away_hits = engine.state.away_hits
+                            game.home_errors = engine.state.home_errors
+                            game.away_errors = engine.state.away_errors
+                            
+                            # Use the finalized stats from the return value
+                            if final_result:
+                                game.game_stats = final_result.get('game_stats', {})
+                                # Store pitcher results
+                                game.pitcher_win = final_result.get('win')
+                                game.pitcher_loss = final_result.get('loss')
+                                game.pitcher_save = final_result.get('save')
+                                # Store highlights (home runs, etc.)
+                                game.highlights = final_result.get('highlights', [])
+                            else:
+                                game.game_stats = dict(engine.game_stats)
+                                game.pitcher_win = None
+                                game.pitcher_loss = None
+                                game.pitcher_save = None
+                                game.highlights = []
 
                             if engine.state.home_pitchers_used:
                                 for p in engine.state.home_pitchers_used:
@@ -1061,8 +1221,74 @@ class GameStateManager:
             current_qdate = QDate(y, m, d)
             next_date = current_qdate.addDays(1)
             self.current_date = next_date.toString("yyyy-MM-dd")
-        except:
-            pass
+            
+            # Check for schedule events (All-Star, Postseason)
+            self._check_schedule_events()
+            
+        except Exception as e:
+            print(f"Error in finish_day_and_advance: {e}")
+            traceback.print_exc()
+
+    def _check_schedule_events(self):
+        """日付更新時に特別なイベント（オールスター、CS、日本シリーズ）の開始をチェック"""
+        if not self.season_manager: return
+        
+        cal = self.season_manager.calendar
+        today_date = datetime.datetime.strptime(self.current_date, "%Y-%m-%d").date()
+        
+        # All-Star Generation
+        # Roster selection only. Games are already in schedule from Season Start.
+        if today_date == cal.allstar_day1:
+            if not self.season_manager.allstar_engine:
+                print("Generating All-Star Rosters...")
+                self.season_manager.initialize_allstar(self.all_teams)
+                
+        # Postseason: Climax Series First Stage
+        if today_date == cal.cs_first_start:
+            if not self.postseason_schedule:
+                print("Generating CS First Stage...")
+                self.start_postseason()
+                # Postseason games are generated in start_postseason -> PostseasonScheduleEngine
+                if self.season_manager.postseason_engine:
+                    self._merge_postseason_games(self.season_manager.postseason_engine)
+
+        # Postseason: Climax Series Final Stage
+        if today_date == cal.cs_final_start:
+            if self.season_manager.postseason_engine:
+                 # Ensure Final Stage games are merged if they weren't already
+                 self._merge_postseason_games(self.season_manager.postseason_engine)
+                 
+    def _merge_postseason_games(self, ps_engine):
+        """PostseasonEngineから試合を取り出してスケジュールに統合"""
+        # 既存のPS試合（同一日付・同一カード）があれば重複しないようにする
+        existing_keys = set()
+        for g in self.schedule.games:
+            existing_keys.add(f"{g.date}_{g.home_team_name}_{g.away_team_name}")
+            
+        series_list = [
+            ps_engine.cs_north_first, ps_engine.cs_south_first,
+            ps_engine.cs_north_final, ps_engine.cs_south_final,
+            ps_engine.japan_series
+        ]
+        
+        for series in series_list:
+            if series and series.schedule:
+                for g in series.schedule:
+                    key = f"{g.date}_{g.home_team_name}_{g.away_team_name}"
+                    if key not in existing_keys:
+                        self.schedule.games.append(g)
+                        existing_keys.add(key)
+        
+        # Sort schedule by date
+        self.schedule.games.sort(key=lambda x: x.date) 
+                
+        # Note: Japan Series generation is handled by `advance_cs_stage` logic usually called when CS ends.
+        # We need to make sure `finish_day_and_advance` or `process_date` handles postseason progress.
+        
+        # If we are in Postseason, we should check if a series ended yesterday and we need to Advance.
+        if self.season_manager.postseason_engine:
+             # Check logic to auto-advance stages if series finished
+             pass
 
     def _manage_ai_teams(self, date_str):
         """AIチームおよび自チーム二軍三軍の管理"""

@@ -116,6 +116,9 @@ class FarmLeagueManager:
         年齢（若手優先）・能力・ランダム性を加味して出場選手を決定
         """
         roster = team.get_players_by_level(level)
+        # 厳密なレベルチェック (データ不整合対策)
+        roster = [p for p in roster if p.team_level == level]
+        
         # 野手リスト（投手以外）- 怪我人を除く
         candidates = [p for p in roster if p.position != Position.PITCHER and not p.is_injured]
         
@@ -133,6 +136,10 @@ class FarmLeagueManager:
             age_bonus = max(0, 28 - p.age) * 4.0
             if p.age <= 22: age_bonus += 10
             
+            # 既に今日出場している選手は除外
+            if getattr(p, 'has_played_today', False):
+                return -9999
+
             # ランダム性: 毎回大きく変動させることで固定化を防ぐ (0-60に拡大)
             # これにより能力が低くてもチャンスが回ってくる確率を上げる
             rand = random.uniform(0, 60)
@@ -196,7 +203,30 @@ class FarmLeagueManager:
     def _check_and_fix_rotation(self, team: Team, level: TeamLevel):
         """指定レベルのローテーションが不備なら自動設定"""
         current_rotation = team.farm_rotation if level == TeamLevel.SECOND else team.third_rotation
+        
+        # Check if any player in rotation belongs to a different level
+        is_invalid = False
         if not current_rotation:
+             is_invalid = True
+        else:
+             for p_idx in current_rotation:
+                 if p_idx == -1: continue
+                 if p_idx >= len(team.players):
+                     is_invalid = True; break
+                 p = team.players[p_idx]
+                 # If player's level doesn't match, the rotation is stale
+                 if p.team_level != level:
+                     is_invalid = True; break
+                 # If player has already played today, rotation is invalid for today (force reshuffle or just handle in engine)
+                 # Ideally engine handles it, but here we can force a skip if needed.
+                 # Actually, rotation definition shouldn't change just because they played.
+                 # BUT if we want to prevent double headers, we should maybe not invalidate rotation but ensure simulator skips them.
+                 # However, user asked to FIX double appearances.
+                 if getattr(p, 'has_played_today', False):
+                     # If a starter played already (e.g. as reliever in 1st team?), they can't start here.
+                     is_invalid = True; break
+        
+        if is_invalid:
             team.auto_assign_pitching_roles(level)
 
 def simulate_farm_games_for_day(teams: List[Team], date: str, player_team_name: str = None):

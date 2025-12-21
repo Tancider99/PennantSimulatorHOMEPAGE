@@ -435,12 +435,61 @@ class PlayerStats:
         return max(0.5, min(5.0, value / 100))
 
     def overall_batting(self, position: Optional[Position] = None) -> float:
-        batting_val = (self.contact * 3.5 + self.power * 3.0 + self.eye * 2.0 + self.gap * 1.0 + self.avoid_k * 0.5) / 10.0
-        running_val = (self.speed * 2.0 + self.steal * 1.0 + self.baserunning * 1.0) / 4.0
-        def_range = self.get_defense_range(position) if position else 0
-        fielding_val = (def_range * 4.0 + self.arm * 1.0 + self.error * 1.0) / 6.0
+        """
+        野手の総合力を計算（WAR連動型、全能力使用）
+        平均250、ボリュームゾーン230-270、1-999スケール
         
-        # Reduced position adjustments for 100-450 range
+        重み付け（WAR貢献度に基づく）:
+        - 打撃系: ミート(3.5), パワー(3.0), ギャップ(1.5), 選球眼(2.0), 三振回避(1.0)
+        - 走塁系: 走力(1.5), 盗塁(0.8), 走塁(0.7)
+        - 守備系: 守備範囲(3.0), 肩力(1.0), 捕球(1.5), 併殺処理(0.5)
+        - 共通: 精神力(0.5), 対左打者(0.3), チャンス(0.3)
+        """
+        # 打撃系能力 (重み合計: 11.0)
+        batting_raw = (
+            self.contact * 3.5 +
+            self.power * 3.0 +
+            self.gap * 1.5 +
+            self.eye * 2.0 +
+            self.avoid_k * 1.0
+        )
+        
+        # 走塁系能力 (重み合計: 3.0)
+        running_raw = (
+            self.speed * 1.5 +
+            self.steal * 0.8 +
+            self.baserunning * 0.7
+        )
+        
+        # 守備系能力 (重み合計: 6.0)
+        def_range = self.get_defense_range(position) if position else 50
+        fielding_raw = (
+            def_range * 3.0 +
+            self.arm * 1.0 +
+            self.error * 1.5 +
+            self.turn_dp * 0.5
+        )
+        
+        # 共通能力 (重み合計: 1.1)
+        misc_raw = (
+            self.mental * 0.5 +
+            self.vs_left_batter * 0.3 +
+            self.chance * 0.3
+        )
+        
+        # 捕手ボーナス
+        catcher_bonus = 0
+        if position == Position.CATCHER:
+            catcher_bonus = self.catcher_lead * 0.8
+        
+        # 重み付き合計 (合計重み約21.1)
+        total_weighted = batting_raw + running_raw + fielding_raw + misc_raw + catcher_bonus
+        total_weight = 21.1 + (0.8 if position == Position.CATCHER else 0)
+        
+        # 平均50の能力 → 合計約1055 → 正規化して50に
+        normalized = total_weighted / total_weight
+        
+        # ポジション調整（WAR基準: 捕手+15, SS+10, 2B+5, CF+5, 3B/RF-5, LF/1B-10, DH-20）
         pos_adj = 0
         if position:
             if position == Position.CATCHER: pos_adj = 15
@@ -451,19 +500,85 @@ class PlayerStats:
             elif position == Position.RIGHT: pos_adj = -5
             elif position == Position.LEFT: pos_adj = -10
             elif position == Position.FIRST: pos_adj = -10
-            elif position == Position.DH: pos_adj = -15
+            elif position == Position.DH: pos_adj = -20
         
-        raw_score = (batting_val * 6.5 + fielding_val * 3.0 + running_val * 0.5) / 10.0
-        # Adjusted for 100-450 range
-        rating = (raw_score - 50) * 6 + 250 + pos_adj
+        # スケール変換: 傾斜をかけた非線形スケール
+        # 通常生成 (能力30-70) → 総合力130-450
+        # 超一流 (能力99) → 総合力999
+        # 
+        # 線形部分: 能力50を基準に250、能力70で450相当
+        # 曲線部分: 能力70以上は急激に上昇
         
+        if normalized <= 50:
+            # 能力50以下: 線形で130-250
+            rating = (normalized / 50) * 120 + 130  # 1→130, 50→250
+        elif normalized <= 70:
+            # 能力50-70: 線形で250-450
+            rating = ((normalized - 50) / 20) * 200 + 250  # 50→250, 70→450
+        else:
+            # 能力70以上: 曲線で450-999 (指数関数的に上昇)
+            # normalized 70→450, 99→999
+            excess = (normalized - 70) / 29  # 0 to 1
+            rating = 450 + (excess ** 1.5) * 549  # 70→450, 99→999
+        
+        rating = rating + pos_adj
         return max(1, min(999, int(rating)))
 
     def overall_pitching(self) -> float:
+        """
+        投手の総合力を計算（WAR連動型、全能力使用）
+        平均250、ボリュームゾーン230-270、1-999スケール
+        
+        重み付け（WAR貢献度に基づく）:
+        - 球種系: 球威(3.5), 制球(3.5), 変化(2.5)
+        - 球速系: 球速(1.5)
+        - スタミナ系: スタミナ(2.0)
+        - 共通: 安定感(1.0), 対ピンチ(0.5), 精神力(0.5), クイック(0.3), ゴロ傾向(0.2)
+        """
+        # 球速を能力値に変換 (130km=30, 145km=60, 160km=90)
         vel_rating = self.kmh_to_rating(self.velocity)
-        raw_score = (self.stuff * 3.5 + self.control * 3.0 + self.movement * 2.0 + vel_rating * 1.5) / 10.0
-        # Adjusted for 100-450 range
-        rating = (raw_score - 50) * 6 + 250
+        
+        # 球種系能力 (重み合計: 9.5)
+        pitch_raw = (
+            self.stuff * 3.5 +
+            self.control * 3.5 +
+            self.movement * 2.5
+        )
+        
+        # 球速・スタミナ (重み合計: 3.5)
+        physical_raw = (
+            vel_rating * 1.5 +
+            self.stamina * 2.0
+        )
+        
+        # 共通能力 (重み合計: 2.5)
+        misc_raw = (
+            self.stability * 1.0 +
+            self.vs_pinch * 0.5 +
+            self.mental * 0.5 +
+            self.hold_runners * 0.3 +
+            self.gb_tendency * 0.2
+        )
+        
+        # 重み付き合計 (合計重み15.5)
+        total_weighted = pitch_raw + physical_raw + misc_raw
+        total_weight = 15.5
+        
+        # 正規化
+        normalized = total_weighted / total_weight
+        
+        # スケール変換: 傾斜をかけた非線形スケール
+        # 通常生成 (能力30-70) → 総合力130-450
+        # 超一流 (能力99) → 総合力999
+        
+        if normalized <= 50:
+            rating = (normalized / 50) * 120 + 130
+        elif normalized <= 70:
+            rating = ((normalized - 50) / 20) * 200 + 250
+        else:
+            excess = (normalized - 70) / 29
+            rating = 450 + (excess ** 1.5) * 549
+        
         return max(1, min(999, int(rating)))
 
     def speed_to_kmh(self) -> int:
@@ -626,6 +741,7 @@ class PlayerRecord:
     fip_val: float = 0.0
     xfip_val: float = 0.0
     drs_val: float = 0.0
+    uzr_val: float = 0.0
     wsb_val: float = 0.0
     ubr_val: float = 0.0
     
@@ -1079,6 +1195,9 @@ class Player:
     # 疲労システム
     fatigue: int = 0  # 疲労度 (0-100, 100=限界)
     consecutive_days: int = 0  # 連投日数（投手用）
+    
+    # 当日出場フラグ (1日2試合出場防止用)
+    has_played_today: bool = False
 
     def __post_init__(self):
         if self.team_level is None:
@@ -1222,13 +1341,14 @@ class Player:
         投手: 投球数×0.3
         """
         if self.position == Position.PITCHER:
-            # 投手は投球数ベース
-            self.fatigue += int(pitches_thrown * 0.3)
+            # 投手は投球数ベース (疲労蓄積を大幅増: 1球=1疲労)
+            self.fatigue += int(pitches_thrown * 1.0)
             if pitches_thrown > 0:
                 self.consecutive_days += 1
         else:
-            # 野手は打席+守備
-            self.fatigue += at_bats + int(defensive_innings * 0.3)
+            # 野手は打席+守備 (疲労蓄積を大幅増: 1打席=3, 1回=1)
+            # 1試合(4打席+9回)で約21疲労蓄積 -> 回復(約15)を上回り、連戦で疲労する設定
+            self.fatigue += (at_bats * 3) + int(defensive_innings * 1.0)
         
         self.fatigue = min(100, self.fatigue)
 
@@ -1309,6 +1429,9 @@ class Player:
         recovery_stat = getattr(self.stats, 'recovery', 50)
         fatigue_recovery = int(15 + (recovery_stat - 50) * 0.3)  # 10-20/日
         self.fatigue = max(0, self.fatigue - fatigue_recovery)
+        
+        # 6. 当日出場フラグリセット
+        self.has_played_today = False
 
 
 @dataclass(eq=False)
@@ -1329,6 +1452,11 @@ class Team:
     record_farm: 'TeamRecord' = field(default_factory=TeamRecord)
     record_third: 'TeamRecord' = field(default_factory=TeamRecord)
     team_record: 'TeamRecord' = field(default_factory=TeamRecord)
+    
+    # チーム合計成績 (詳細スタッツ表示用)
+    stats_total: PlayerRecord = field(default_factory=PlayerRecord)
+    stats_total_farm: PlayerRecord = field(default_factory=PlayerRecord)
+    stats_total_third: PlayerRecord = field(default_factory=PlayerRecord)
 
     rotation: List[int] = field(default_factory=list)
     rotation_index: int = 0
@@ -1386,12 +1514,21 @@ class Team:
             return self.players[idx]
         return None
 
-    def get_today_starter(self) -> Optional[Player]:
+    def get_today_starter(self, level: TeamLevel = TeamLevel.FIRST) -> Optional[Player]:
         # 1. ローテーション順序に従って、登板可能な(中3日以上)投手を探索
         # rotation_indexから順にチェックし、条件を満たす最初の投手を返す
         
-        # まずローテーション内の有効なインデックスをフィルタリング (active_rosterにいる人のみ)
-        valid_rotation = [idx for idx in self.rotation if idx in self.active_roster and 0 <= idx < len(self.players)]
+        target_rotation = self.rotation
+        target_roster = self.active_roster
+        if level == TeamLevel.SECOND:
+            target_rotation = self.farm_rotation
+            target_roster = self.farm_roster
+        elif level == TeamLevel.THIRD:
+            target_rotation = self.third_rotation
+            target_roster = self.third_roster
+        
+        # まずローテーション内の有効なインデックスをフィルタリング
+        valid_rotation = [idx for idx in target_rotation if idx in target_roster and 0 <= idx < len(self.players)]
         
         if valid_rotation:
             try:
@@ -1406,16 +1543,17 @@ class Team:
                     
                     p = self.players[p_idx]
                     # 条件: 怪我していない かつ 指定間隔以上 (スタミナ回復考慮)
+                    # 2軍以下は間隔緩めでもOKとするならここで調整
                     required_rest = getattr(p, 'rotation_interval', 6)
                     if not p.is_injured and p.days_rest >= required_rest:
                         return p
             except Exception:
                 pass
         
-        # 2. ローテが機能していない場合、緊急措置として Active Roster 全体から探す
+        # 2. ローテが機能していない場合、緊急措置として Roster 全体から探す
         # 条件: 投手、怪我なし、中3日以上
         candidates = []
-        for idx in self.active_roster:
+        for idx in target_roster:
             if 0 <= idx < len(self.players):
                 p = self.players[idx]
                 required_rest = getattr(p, 'rotation_interval', 6)
@@ -1436,18 +1574,35 @@ class Team:
             return candidates[0][0]
             
         # 3. どうしようもない場合: 連投でもいいから一番マシな投手 (Ace Fallbackの前にここで粘る)
-        # Active Rosterの投手全員
         desperate_candidates = []
-        for idx in self.active_roster:
+        for idx in target_roster:
             if 0 <= idx < len(self.players):
                 p = self.players[idx]
                 if p.position.value == "投手" and not p.is_injured:
-                    # とにかく休養が多い順
-                    desperate_candidates.append(p)
+                    # 緊急登板でも、先発適性がある程度ある投手を優先
+                    # 中継ぎ専任 (適性1) は避ける
+                    if p.starter_aptitude >= 2:
+                        desperate_candidates.append(p)
+                    # どうしてもいない場合はスタミナがある投手 (ロングリリーフ等)
+                    elif p.stats.stamina >= 50:
+                        desperate_candidates.append(p)
                     
         if desperate_candidates:
-            return max(desperate_candidates, key=lambda p: p.days_rest)
+            # スタミナ順(元気な順) -> 適性順 でソートしたいが、休養が一番大事
+            # days_restが同じなら適性が高い方
+            desperate_candidates.sort(key=lambda p: (p.days_rest, p.starter_aptitude), reverse=True)
+            return desperate_candidates[0]
             
+        # 本当に誰もいない(全員リリーフ専任で連投続き)なら、最後のリリーフ
+        final_resort = []
+        for idx in target_roster:
+            if 0 <= idx < len(self.players):
+                p = self.players[idx]
+                if p.position.value == "投手" and not p.is_injured:
+                    final_resort.append(p)
+        if final_resort:
+             return max(final_resort, key=lambda p: p.days_rest)
+             
         return None
 
     def auto_assign_pitching_roles(self, level: TeamLevel = TeamLevel.FIRST):
@@ -1688,9 +1843,26 @@ class Team:
         third_batters = [idx for idx, _ in remaining_batters[25:]]
         self.third_roster = third_pitchers + third_batters
         
+        # Assign players to rosters and set their team_level attribute
+        # Enforce mutual exclusivity to prevent leakage
+        active_set = set(self.active_roster)
+        farm_set = set(self.farm_roster) - active_set
+        third_set = set(self.third_roster) - active_set - farm_set
+        
+        self.active_roster = list(active_set)
+        self.farm_roster = list(farm_set)
+        self.third_roster = list(third_set)
+
         for idx in self.active_roster: self.players[idx].team_level = TeamLevel.FIRST
         for idx in self.farm_roster: self.players[idx].team_level = TeamLevel.SECOND
         for idx in self.third_roster: self.players[idx].team_level = TeamLevel.THIRD
+        
+        # 枠外の選手は自動的に3軍へ
+        all_assigned = active_set | farm_set | third_set
+        for i, p in enumerate(self.players):
+             if i not in all_assigned and not p.is_developmental:
+                 self.third_roster.append(i)
+                 p.team_level = TeamLevel.THIRD
 
     def auto_set_bench(self):
         self.auto_assign_pitching_roles(TeamLevel.FIRST)

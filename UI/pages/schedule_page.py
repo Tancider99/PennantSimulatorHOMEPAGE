@@ -48,20 +48,24 @@ class SimulationWorker(QThread):
                 self.finished.emit()
                 return
 
-            for i in range(days_to_sim + 1): # 修正: 当日〜ターゲット日まで含める
+            for i in range(days_to_sim): # 当日〜ターゲット日の前日まで（ターゲット日は含めない）
                 if self.is_cancelled: break
                 
                 # 修正: 当日から順にシミュレート
                 sim_date = current_qdate.addDays(i) 
                 date_str = sim_date.toString("yyyy-MM-dd")
                 
-                self.progress_updated.emit(i + 1, days_to_sim + 1, f"Simulating: {date_str}")
+                self.progress_updated.emit(i + 1, days_to_sim, f"Simulating: {date_str}")
                 
                 # GameStateに処理を委譲（エラーハンドリング済み）
                 self.game_state.process_date(date_str)
                 
                 # Emit signal for main thread to handle contracts/scouting updates
                 self.day_advanced.emit()
+            
+            # After simulation, advance the current_date to the target date
+            if not self.is_cancelled:
+                self.game_state.current_date = self.target_date.toString("yyyy-MM-dd")
                 
             self.finished.emit()
             
@@ -105,9 +109,10 @@ class GameCalendarWidget(QCalendarWidget):
             QCalendarWidget QSpinBox {{ color: {self.theme.text_primary}; background-color: {self.theme.bg_input}; }}
         """)
 
-    def set_data(self, games, player_team_name):
+    def set_data(self, games, player_team_name, player_league=None):
         self.games_map = {}
         self.player_team_name = player_team_name
+        self.player_league = player_league
         
         min_date = QDate(2027, 3, 1)
         max_date = QDate(2027, 10, 31)
@@ -143,7 +148,9 @@ class GameCalendarWidget(QCalendarWidget):
             game = self.games_map[date]
             opponent = ""
             # ホーム/ビジター情報付きで対戦相手を表示
-            if game.home_team_name == self.player_team_name:
+            if "ALL-" in game.home_team_name or "ALL-" in game.away_team_name:
+                opponent = "ALL STAR"
+            elif game.home_team_name == self.player_team_name:
                 opponent = f"vs {game.away_team_name[:3]}"  # ホーム
             elif game.away_team_name == self.player_team_name:
                 opponent = f"@ {game.home_team_name[:3]}"   # ビジター
@@ -172,9 +179,32 @@ class GameCalendarWidget(QCalendarWidget):
                 if is_win: bg_color = QColor(self.theme.success); text_color = QColor("white")
                 elif is_draw: bg_color = QColor(self.theme.text_muted); text_color = QColor("white")
                 else: bg_color = QColor(self.theme.danger); text_color = QColor("white")
+
+                # All-Star Special Coloring
+                if "ALL-" in game.home_team_name or "ALL-" in game.away_team_name:
+                    if self.player_league:
+                        # Determine Winner
+                        winner_name = ""
+                        if game.home_score > game.away_score: winner_name = game.home_team_name
+                        elif game.away_score > game.home_score: winner_name = game.away_team_name
+                        else: winner_name = "DRAW"
+                        
+                        # Normalize League Name
+                        p_league_str = str(self.player_league.value) if hasattr(self.player_league, 'value') else str(self.player_league)
+                        
+                        is_my_league_win = False
+                        if "North" in p_league_str and "ALL-NORTH" in winner_name: is_my_league_win = True
+                        elif "South" in p_league_str and "ALL-SOUTH" in winner_name: is_my_league_win = True
+                        
+                        if winner_name == "DRAW":
+                            bg_color = QColor(self.theme.text_muted)
+                        elif is_my_league_win:
+                            bg_color = QColor(self.theme.success)
+                        else:
+                            bg_color = QColor(self.theme.danger)
             else:
-                # 試合予定（未消化）
-                bg_color = QColor(self.theme.primary); text_color = QColor("white")
+                # 試合予定（未消化） - 白背景・黒文字
+                bg_color = QColor("white"); text_color = QColor("black")
 
             info_rect = QRect(rect.left() + 2, rect.top() + 22, rect.width() - 4, 18)
             painter.fillRect(info_rect, bg_color)
@@ -193,6 +223,8 @@ class GameCalendarWidget(QCalendarWidget):
 class SchedulePage(QWidget):
     """Calendar-based schedule management page"""
     game_selected = Signal(object)
+    watch_game_requested = Signal(object) # New Signal
+    view_result_requested = Signal(object)  # Signal to navigate to past game result
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -222,6 +254,7 @@ class SchedulePage(QWidget):
         layout.addWidget(lbl)
         self.calendar = GameCalendarWidget()
         self.calendar.clicked.connect(self._on_date_selected)
+        self.calendar.activated.connect(self._on_date_double_clicked)  # Double-click
         layout.addWidget(self.calendar)
         return panel
 
@@ -241,12 +274,25 @@ class SchedulePage(QWidget):
         self.status_label = QLabel(""); self.status_label.setStyleSheet(f"font-size: 14px; color: {self.theme.text_secondary}; background: transparent;")
         self.status_label.setAlignment(Qt.AlignCenter); card_layout.addWidget(self.status_label)
         self.detail_card.add_widget(container); layout.addWidget(self.detail_card)
-        layout.addStretch()
+        
+        # Action Buttons Layout
+        btn_layout = QVBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        # Watch / Play Button
+        # Watch Button Removed
+        # self.watch_btn = QPushButton("試合を見る")...
+        # btn_layout.addWidget(self.watch_btn)
 
+        layout.addLayout(btn_layout)
+        layout.addStretch()
+        
+        # Skip Button (Moved to Bottom)
         self.skip_btn = QPushButton("この日までスキップ"); self.skip_btn.setCursor(Qt.PointingHandCursor); self.skip_btn.setFixedHeight(50)
         self.skip_btn.setStyleSheet(f"QPushButton {{ background-color: {self.theme.primary}; color: {self.theme.text_highlight}; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; padding: 10px; }} QPushButton:hover {{ background-color: {self.theme.primary_hover}; }} QPushButton:disabled {{ background-color: {self.theme.bg_input}; color: {self.theme.text_muted}; border: 1px solid {self.theme.border}; }}")
         self.skip_btn.clicked.connect(self._on_skip_clicked); self.skip_btn.setEnabled(False)
         layout.addWidget(self.skip_btn)
+        
         return panel
 
     def set_game_state(self, game_state):
@@ -262,11 +308,98 @@ class SchedulePage(QWidget):
     def _refresh_calendar_data(self):
         if not self.game_state or not self.game_state.schedule: return
         my_team_name = self.game_state.player_team.name if self.game_state.player_team else ""
-        my_games = [g for g in self.game_state.schedule.games if g.home_team_name == my_team_name or g.away_team_name == my_team_name]
-        self.calendar.set_data(my_games, my_team_name)
+        # Include My Team games AND All-Star games
+        games = [g for g in self.game_state.schedule.games if 
+                 g.home_team_name == my_team_name or 
+                 g.away_team_name == my_team_name or
+                 g.home_team_name in ["ALL-NORTH", "ALL-SOUTH"] or
+                 g.away_team_name in ["ALL-NORTH", "ALL-SOUTH"]]
+        
+        player_league = getattr(self.game_state.player_team, 'league', None) if self.game_state.player_team else None
+        self.calendar.set_data(games, my_team_name, player_league)
+
+    def _get_allstar_games(self, as_engine, calendar):
+        """Construct dummy ScheduledGame objects for All-Star display"""
+        from league_schedule_engine import ScheduledGame, GameStatus
+        games = []
+        
+        # Game 1
+        g1 = ScheduledGame(
+            game_number=1, date=calendar.allstar_day1.strftime("%Y-%m-%d"),
+            home_team_name="ALL-NORTH", away_team_name="ALL-SOUTH"
+        )
+        if as_engine.game1_result:
+            g1.status = GameStatus.COMPLETED
+            g1.home_score, g1.away_score = as_engine.game1_result
+            # Swap if defined differently in engine (North vs South? Engine doesn't specify home/away explicitly in result tuple logic, assumed order)
+            # Engine.get_winner logic: game1_result[0] vs [1].
+            # Let's assume Tuple is (Team1, Team2) -> (North, South) for now based on typical ordering? 
+            # North teams usually listed first.
+            g1.home_score = as_engine.game1_result[0] # North
+            g1.away_score = as_engine.game1_result[1] # South
+        else:
+             g1.status = GameStatus.SCHEDULED
+             
+        games.append(g1)
+        
+        # Game 2
+        g2 = ScheduledGame(
+            game_number=2, date=calendar.allstar_day2.strftime("%Y-%m-%d"),
+            home_team_name="ALL-SOUTH", away_team_name="ALL-NORTH"
+        )
+        if as_engine.game2_result:
+            g2.status = GameStatus.COMPLETED
+            g2.home_score = as_engine.game2_result[0] # South (Home)
+            g2.away_score = as_engine.game2_result[1] # North (Away)
+        else:
+             g2.status = GameStatus.SCHEDULED
+             
+        games.append(g2)
+        
+        return games
+    
+    def _get_postseason_games_for_team(self, ps_engine, team_name: str) -> list:
+        """自チームが参加しているポストシーズンの試合を取得"""
+        games = []
+        
+        series_list = [
+            ps_engine.cs_north_first,
+            ps_engine.cs_south_first,
+            ps_engine.cs_north_final,
+            ps_engine.cs_south_final,
+            ps_engine.japan_series
+        ]
+        
+        for series in series_list:
+            if series and (series.team1 == team_name or series.team2 == team_name):
+                # Add games from this series
+                if hasattr(series, 'schedule') and series.schedule:
+                    games.extend(series.schedule)
+        
+        return games
 
     def _on_date_selected(self, date):
         self.selected_date = date; self._refresh_info_panel()
+
+    def _on_date_double_clicked(self, date):
+        """Handle double-click on calendar date to view completed game result"""
+        if not self.game_state or not self.game_state.schedule:
+            return
+        
+        date_str = date.toString("yyyy-MM-dd")
+        my_team_name = self.game_state.player_team.name if self.game_state.player_team else ""
+        
+        for game in self.game_state.schedule.games:
+            if game.date == date_str and (
+                game.home_team_name == my_team_name or 
+                game.away_team_name == my_team_name or
+                game.home_team_name in ["ALL-NORTH", "ALL-SOUTH"] or
+                game.away_team_name in ["ALL-NORTH", "ALL-SOUTH"]
+            ):
+                if game.is_completed:
+                    self.view_result_requested.emit(game)
+                    return
+                break
 
     def _refresh_info_panel(self):
         date_str = self.selected_date.toString("yyyy-MM-dd")
@@ -275,16 +408,35 @@ class SchedulePage(QWidget):
         if self.game_state and self.game_state.schedule:
             my_team_name = self.game_state.player_team.name if self.game_state.player_team else ""
             for game in self.game_state.schedule.games:
-                if game.date == date_str and (game.home_team_name == my_team_name or game.away_team_name == my_team_name):
+                # プレイヤーチームの試合 または オールスターゲームを表示
+                if game.date == date_str and (
+                    game.home_team_name == my_team_name or 
+                    game.away_team_name == my_team_name or
+                    game.home_team_name in ["ALL-NORTH", "ALL-SOUTH"] or
+                    game.away_team_name in ["ALL-NORTH", "ALL-SOUTH"]
+                ):
                     target_game = game; break
         
         if target_game:
+            self.current_target_game = target_game
             self.matchup_label.setText(f"{target_game.away_team_name} vs {target_game.home_team_name}")
             if target_game.is_completed:
                 self.score_label.setText(f"{target_game.away_score} - {target_game.home_score}"); self.status_label.setText("試合終了")
-            else: self.score_label.setText("-"); self.status_label.setText("試合予定")
+
+            else: 
+                self.score_label.setText("-"); self.status_label.setText("試合予定")
+                
+                # Check for Watch Availability (Today & Scheduled)
+                current_gdate = self._get_current_game_date()
+                target_gdate = self._str_to_date(target_game.date)
+                
+                # Watch Button removed as per request
+                # if target_gdate == current_gdate: ...
+
         else:
+            self.current_target_game = None
             self.matchup_label.setText("一軍試合なし"); self.score_label.setText(""); self.status_label.setText("")
+            # self.watch_btn.setVisible(False)
 
         current_gdate = self._get_current_game_date()
         if self.selected_date > current_gdate:
@@ -292,6 +444,9 @@ class SchedulePage(QWidget):
             diff = self.selected_date.toJulianDay() - current_gdate.toJulianDay()
             self.skip_btn.setText(f"{diff}日分をスキップ (全軍自動消化)")
         else: self.skip_btn.setEnabled(False); self.skip_btn.setText("過去または当日のためスキップ不可")
+
+    # _on_watch_clicked removed
+
 
     def _get_current_game_date(self) -> QDate:
         if self.game_state and hasattr(self.game_state, 'current_date'):
@@ -366,3 +521,15 @@ class SchedulePage(QWidget):
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning(): self.worker.is_cancelled = True; self.worker.wait()
         super().closeEvent(event)
+
+    def _get_current_game_date(self):
+        if self.game_state and self.game_state.current_date:
+            return self._str_to_date(self.game_state.current_date)
+        return QDate.currentDate()
+
+    def _str_to_date(self, d_str):
+        try:
+            y, m, d = map(int, d_str.split('-'))
+            return QDate(y, m, d)
+        except:
+            return QDate.currentDate()

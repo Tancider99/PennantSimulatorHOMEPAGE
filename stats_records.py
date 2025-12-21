@@ -38,6 +38,7 @@ class LeagueStatsCalculator:
         for level in [TeamLevel.FIRST, TeamLevel.SECOND, TeamLevel.THIRD]:
             self._calculate_coefficients(level)
             self._calculate_player_advanced_stats(level)
+        self._aggregate_team_stats()
 
     def _aggregate_league_totals(self):
         """全チーム・全レベルの合計値を集計"""
@@ -330,7 +331,8 @@ class LeagueStatsCalculator:
                      pos_adj = pos_base * (r.plate_appearances / 600.0)
 
             # Replacement Runs
-            rep_runs = 20.0 * (r.plate_appearances / 600.0)
+            # User request: Raise Batter WAR. Increasing replacement level constant increases WAR (as it's runs above replacement).
+            rep_runs = 25.0 * (r.plate_appearances / 600.0)
             
             total_runs = batting_runs + bsr + fielding_runs + pos_adj + rep_runs
             r.war_val = total_runs / rpw
@@ -350,10 +352,87 @@ class LeagueStatsCalculator:
                 ra9_diff = lg_fip - adjusted_fip
                 runs_saved = ra9_diff * (r.innings_pitched / 9.0)
                 
-                rep_runs_per_9 = 2.06
+                # User request: Lower Pitcher WAR. Lowering rep_runs reduces the "free value" given to all pitchers.
+                rep_runs_per_9 = 0.80
                 rep_runs = rep_runs_per_9 * (r.innings_pitched / 9.0)
                 
                 r.war_val = (runs_saved + rep_runs) / rpw
+
+
+    def _aggregate_team_stats(self):
+        """チームごとの詳細成績を集計してTeamオブジェクトに格納（レベル別）"""
+        target_attrs = {
+            TeamLevel.FIRST: 'stats_total',
+            TeamLevel.SECOND: 'stats_total_farm',
+            TeamLevel.THIRD: 'stats_total_third'
+        }
+        
+        for team in self.teams:
+            for level, attr_name in target_attrs.items():
+                if not hasattr(team, attr_name):
+                    continue # Should adhere to model definition
+                
+                t = getattr(team, attr_name)
+                t.reset()
+                
+                # 集計
+                for p in team.players:
+                    r = p.get_record_by_level(level)
+                    t.merge_from(r)
+                
+                # 再計算（WAR, FIP, wOBAなど）
+                # WAR summation
+                t.war_val = sum(p.get_record_by_level(level).war_val for p in team.players)
+                
+                # Coefficients for this level
+                c = self.coefficients.get(level, {})
+                if not c: continue # Skip if no games played at this level
+                
+                if t.innings_pitched > 0:
+                    # FIP & xFIP
+                    fip_const = c.get("fip_constant", 3.10)
+                    ubb = max(0, t.walks_allowed - t.intentional_walks_allowed)
+                    
+                    fip_val = (13 * t.home_runs_allowed + 3 * (ubb + t.hit_batters) - 2 * t.strikeouts_pitched) / t.innings_pitched
+                    t.fip_val = fip_val + fip_const
+                    
+                    lg_hr_fb = c.get("league_hr_fb", 0.10)
+                    expected_hr = t.fly_balls * lg_hr_fb
+                    xfip_val = (13 * expected_hr + 3 * (ubb + t.hit_batters) - 2 * t.strikeouts_pitched) / t.innings_pitched
+                    t.xfip_val = xfip_val + fip_const
+                
+                if t.plate_appearances > 0:
+                    # wOBA
+                    w = c.get("woba_weights", {})
+                    denom = t.at_bats + t.walks - t.intentional_walks + t.hit_by_pitch + t.sacrifice_flies
+                    if denom > 0:
+                        uBB = max(0, t.walks - t.intentional_walks)
+                        num = (w.get("uBB",0) * uBB + 
+                               w.get("HBP",0) * t.hit_by_pitch + 
+                               w.get("ROE",0) * t.reach_on_error +
+                               w.get("1B",0) * t.singles + 
+                               w.get("2B",0) * t.doubles + 
+                               w.get("3B",0) * t.triples + 
+                               w.get("HR",0) * t.home_runs)
+                        t.woba_val = num / denom
+                    
+                    # wRC, wRAA, wRC+
+                    lg_woba = c.get("league_woba", 0.300)
+                    woba_scale = c.get("woba_scale", 1.20)
+                    lg_r_pa = c.get("league_r_pa", 0.12)
+                    
+                    divisor = woba_scale if woba_scale > 0 else 1.25
+                    wraa = ((t.woba_val - lg_woba) / divisor) * t.plate_appearances
+                    t.wraa_val = wraa
+                    
+                    # Team wRC+
+                    t.wrc_val = wraa + (lg_r_pa * t.plate_appearances)
+                    if lg_r_pa * t.plate_appearances > 0:
+                        t.wrc_plus_val = 100 * t.wrc_val / (lg_r_pa * t.plate_appearances)
+                
+                # UZR, DRS summation
+                t.drs_val = sum(p.get_record_by_level(level).drs_val for p in team.players)
+                t.uzr_val = sum(p.get_record_by_level(level).uzr_val for p in team.players)
 
 
 def update_league_stats(all_teams: List[Team]):

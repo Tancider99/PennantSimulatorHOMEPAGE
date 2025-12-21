@@ -14,6 +14,7 @@ from PySide6.QtGui import QIcon, QPixmap, QFont, QAction, QKeySequence, QScreen
 import sys
 import os
 import random
+import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -210,9 +211,19 @@ class MainWindow(QMainWindow):
 
         elif section == "schedule":
             self.schedule_page = SchedulePage(self)
+            self.schedule_page.watch_game_requested.connect(self._on_watch_game_requested)
+            self.schedule_page.view_result_requested.connect(self._on_view_past_result)
+            
             # Link contracts_page for scouting progress during bulk skip
-            if hasattr(self, 'contracts_page') and self.contracts_page:
-                self.schedule_page.contracts_page = self.contracts_page
+            # Ensure contracts_page exists (create and cache if not)
+            if "contract_changes" not in self.cached_pages:
+                c_page = self._create_page_instance("contract_changes")
+                self.pages.add_page("contract_changes", c_page)
+                self.cached_pages["contract_changes"] = c_page
+                self.contracts_page = c_page
+            
+            # Now assign it
+            self.schedule_page.contracts_page = getattr(self, 'contracts_page', None)
             page = self.schedule_page 
 
         elif section == "stats":
@@ -234,18 +245,35 @@ class MainWindow(QMainWindow):
                 page.go_to_player_detail.connect(self._show_player_detail)
             self.game_page = page # 属性として保持
             
-        elif section == "contract_changes": # ★追加: 契約ページ
+        elif section == "pre_game":
+            page = PreGamePage(self)
+            page.start_game_requested.connect(self._on_pre_game_start)
+            page.edit_order_requested.connect(self._on_edit_order_requested)
+            page.player_detail_requested.connect(self._show_player_detail)
+            self.pre_game_page = page 
+            
+        elif section == "acquisitions":
+            page = AcquisitionsPage(self)
+            page.player_detail_requested.connect(self._show_player_detail)
+            self.acquisitions_page = page
+            
+        elif section == "result":
+            from UI.pages.game_result_page import GameResultPage
+            page = GameResultPage(self)
+            page.return_home.connect(lambda: self._navigate_to("home"))
+            self.game_result_page = page
+
+        elif section == "contract_changes":
             page = ContractsPage(self)
-            # 選手詳細画面への遷移シグナルを接続 (ContractsPageから飛べるように)
-            if hasattr(page, 'go_to_player_detail'):
-                page.go_to_player_detail.connect(self._show_player_detail)
             if hasattr(page, 'go_to_player_detail'):
                 page.go_to_player_detail.connect(self._show_player_detail)
             self.contracts_page = page
 
         elif section == "game_result": # ★追加: 試合結果ページ
+            from UI.pages.game_result_page import GameResultPage
             page = GameResultPage(self)
             page.return_home.connect(lambda: self._navigate_to("home"))
+            page.return_schedule.connect(lambda: self._navigate_to("schedule"))  # For past game view
             self.game_result_page = page
 
         elif section == "pre_game": # ★追加: 試合前確認ページ
@@ -326,6 +354,14 @@ class MainWindow(QMainWindow):
         today_games = self.game_state.get_today_games()
         target_game = None
         
+        # ★追加: オールスターゲームの確認
+        for g in today_games:
+            if "ALL-" in g.home_team_name or "ALL-" in g.away_team_name:
+                self._simulate_allstar_games()
+                return
+
+
+
         # 自チームの試合を探す
         for g in today_games:
             if g.home_team_name == player_team.name or g.away_team_name == player_team.name:
@@ -354,13 +390,14 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Farm Simulation Error: {e}")
 
-            # Create contracts_page if not yet navigated to
-            if not hasattr(self, 'contracts_page') or not self.contracts_page:
-                from UI.pages.contracts_page import ContractsPage
-                self.contracts_page = ContractsPage(self)
-                if hasattr(self.contracts_page, 'go_to_player_detail'):
-                    self.contracts_page.go_to_player_detail.connect(self._show_player_detail)
-            self.contracts_page.advance_day()
+            # Create contracts_page if not yet navigated to (and cache it!)
+            if "contract_changes" not in self.cached_pages:
+                page = self._create_page_instance("contract_changes")
+                self.pages.add_page("contract_changes", page)
+                self.cached_pages["contract_changes"] = page
+            
+            if hasattr(self, 'contracts_page') and self.contracts_page:
+                self.contracts_page.advance_day()
 
             self.game_state.finish_day_and_advance()
             
@@ -406,6 +443,10 @@ class MainWindow(QMainWindow):
 
     def _simulate_fast_forward_game(self, home_team, away_team):
         """Simulate game headlessly and go to results"""
+        # ★追加: スキップ実行前に自動オーダー編成＆ロースター補充を実行
+        if self.game_state:
+            self.game_state._manage_all_teams_rosters()
+        
         from live_game_engine import LiveGameEngine, PlayResult
         
         # UIをブロックしないようにしたいが、簡単のため同期実行 (Fast forward is fast enough usually)
@@ -568,11 +609,102 @@ class MainWindow(QMainWindow):
         
         # Navigate to game result page
         self._navigate_to("game_result")
-        if hasattr(self, 'game_result_page') and self.game_result_page:
-            self.game_result_page.set_result(result)
+        
+        # Access the page instance (it might be in cached_pages or self.game_result_page)
+        page = self.cached_pages.get("game_result") or getattr(self, 'game_result_page', None)
+        
+        if page:
+            page.set_mode(False) # Back to Home
+            page.set_result(result)
         
         # Call post-game processing
         self._on_game_finished_post(result)
+
+    def _on_view_past_result(self, game):
+        """Handle double-click on past completed game in schedule calendar"""
+        if not game or not game.is_completed:
+            return
+        
+        from UI.pages.game_result_page import GameResultPage
+        
+        # Find team objects
+        home_team = None
+        away_team = None
+        
+        if self.game_state:
+            for team in self.game_state.teams:
+                if team.name == game.home_team_name:
+                    home_team = team
+                if team.name == game.away_team_name:
+                    away_team = team
+        
+        # Handle All-Star games
+        if "ALL-" in game.home_team_name or "ALL-" in game.away_team_name:
+            sm = getattr(self.game_state, 'season_manager', None)
+            if sm and hasattr(sm, 'allstar_engine') and sm.allstar_engine:
+                home_team, away_team = sm.allstar_engine.create_team_objects()
+                if game.home_team_name == "ALL-SOUTH":
+                    home_team, away_team = away_team, home_team
+        
+        if not home_team or not away_team:
+            # Fallback: create minimal result data
+            pass
+        
+        # Construct result dict
+        result = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'home_score': game.home_score,
+            'away_score': game.away_score,
+            'home_innings': getattr(game, 'home_inning_scores', []) or [],
+            'away_innings': getattr(game, 'away_inning_scores', []) or [],
+            'hits': (getattr(game, 'home_hits', 0), getattr(game, 'away_hits', 0)),
+            'errors': (getattr(game, 'home_errors', 0), getattr(game, 'away_errors', 0)),
+            'game_stats': getattr(game, 'game_stats', {}) or {},
+            'pitcher_result': {
+                'win': getattr(game, 'pitcher_win', None),
+                'loss': getattr(game, 'pitcher_loss', None),
+                'save': getattr(game, 'pitcher_save', None)
+            },
+            'home_runs': self._extract_home_runs(game) if hasattr(game, 'game_stats') else []
+        }
+        
+        
+        # Navigate to result page
+        self._navigate_to("game_result")
+        
+        # Access the page instance (it might be in cached_pages or self.game_result_page)
+        page = self.cached_pages.get("game_result") or getattr(self, 'game_result_page', None)
+        
+        if page:
+            page.set_mode(True) # Back to Schedule
+            page.set_result(result)
+        
+    def _extract_home_runs(self, game):
+        """Extract home run info from game_stats for display"""
+        home_runs = []
+        game_stats = getattr(game, 'game_stats', {})
+        if not game_stats:
+            return []
+        
+        for player, stats in game_stats.items():
+            hr_count = stats.get('home_runs', 0)
+            if hr_count > 0:
+                # Get player name and team
+                player_name = getattr(player, 'name', str(player))
+                # Try to determine team name
+                team_name = ""
+                if hasattr(game, 'home_team_name') and hasattr(game, 'away_team_name'):
+                    # Guess team based on context (not 100% accurate but reasonable)
+                    team_name = game.home_team_name
+                
+                # Get current HR count (season total + this game)
+                season_hr = getattr(player, 'record', None)
+                hr_number = season_hr.home_runs if season_hr else hr_count
+                
+                home_runs.append((player_name, hr_number, team_name))
+        
+        return home_runs
 
     def _on_training_saved(self):
         """Handle training saved"""
@@ -603,6 +735,28 @@ class MainWindow(QMainWindow):
                     g.home_score = home_score
                     g.away_score = away_score
                     
+                    # 詳細情報の保存（後で過去の試合結果を見るため）
+                    g.game_stats = result.get('game_stats', {})
+                    g.home_hits = result.get('hits', (0,0))[0]
+                    g.away_hits = result.get('hits', (0,0))[1]
+                    g.home_errors = result.get('errors', (0,0))[0]
+                    g.away_errors = result.get('errors', (0,0))[1]
+                    
+                    score_history = result.get('score_history', {})
+                    if isinstance(score_history, dict):
+                        g.home_inning_scores = score_history.get('bot', []) # Bottom is Home
+                        g.away_inning_scores = score_history.get('top', []) # Top is Away
+                    else:
+                        # List of tuples case?
+                        g.home_inning_scores = [x[0] for x in score_history]
+                        g.away_inning_scores = [x[1] for x in score_history]
+
+                    p_res = result.get('pitcher_result', {})
+                    if p_res:
+                        g.pitcher_win = p_res.get('win')
+                        g.pitcher_loss = p_res.get('loss')
+                        g.pitcher_save = p_res.get('save')
+                    
                     # 先発ローテーションを進める（試合消化時のみ）
                     home_team.rotation_index = (home_team.rotation_index + 1) % 6
                     away_team.rotation_index = (away_team.rotation_index + 1) % 6
@@ -615,13 +769,14 @@ class MainWindow(QMainWindow):
                 print(f"Farm Simulation Error: {e}")
 
             # ★追加: 契約関連（スカウト）の日付進行処理
-            # Create contracts_page if not yet navigated to
-            if not hasattr(self, 'contracts_page') or not self.contracts_page:
-                from UI.pages.contracts_page import ContractsPage
-                self.contracts_page = ContractsPage(self)
-                if hasattr(self.contracts_page, 'go_to_player_detail'):
-                    self.contracts_page.go_to_player_detail.connect(self._show_player_detail)
-            self.contracts_page.advance_day()
+            # Create contracts_page if not yet navigated to (and cache it!)
+            if "contract_changes" not in self.cached_pages:
+                page = self._create_page_instance("contract_changes")
+                self.pages.add_page("contract_changes", page)
+                self.cached_pages["contract_changes"] = page
+
+            if hasattr(self, 'contracts_page') and self.contracts_page:
+                self.contracts_page.advance_day()
 
 
             # ★追加: Highlight Logging from Manual Game (or any source passing 'highlights' in result)
@@ -695,6 +850,10 @@ class MainWindow(QMainWindow):
             page = self.persistent_pages.get(section)
             if page and self.game_state and hasattr(page, 'set_game_state'):
                 page.set_game_state(self.game_state)
+            # ★追加: 永続ページのリフレッシュ
+            if page and hasattr(page, 'refresh'):
+                try: page.refresh()
+                except: pass
                 
         elif is_cached:
             # 既にキャッシュされている場合は単に表示する
@@ -935,8 +1094,162 @@ class MainWindow(QMainWindow):
         self._save_window_state()
         event.accept()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
+
+    def _simulate_allstar_games(self):
+        """オールスターゲームをシミュレートして結果画面へ (1試合ずつ)"""
+        import datetime
+        if not self.game_state or not self.game_state.season_manager: return
+        
+        sm = self.game_state.season_manager
+        if not hasattr(sm, 'allstar_engine') or not sm.allstar_engine:
+             sm.initialize_allstar(self.game_state.teams)
+
+        if not sm.allstar_engine:
+            QMessageBox.warning(self, "エラー", "オールスターエンジンの初期化に失敗しました")
+            return
+            
+        # Determine Game Number based on date
+        cal = sm.calendar
+        current_date_obj = datetime.datetime.strptime(self.game_state.current_date, "%Y-%m-%d").date()
+        
+        game_num = 0
+        if current_date_obj == cal.allstar_day1:
+            game_num = 1
+        elif current_date_obj == cal.allstar_day2:
+            game_num = 2
+        else:
+            # Fallback: check results
+            if not getattr(sm.allstar_engine, 'game1_result', None):
+                game_num = 1
+            elif not getattr(sm.allstar_engine, 'game2_result', None):
+                game_num = 2
+            else:
+                 QMessageBox.information(self, "Info", "All-Star games already finished.")
+                 return
+
+        # Simulate Single Game
+        engine = sm.allstar_engine.simulate_single_allstar_game(game_num)
+        
+        # Sync result to schedule.games for Schedule Tab consistency
+        if engine and self.game_state.schedule:
+            for g in self.game_state.schedule.games:
+                if hasattr(g, 'game_number') and g.game_number == game_num:
+                    if g.home_team_name in ["ALL-NORTH", "ALL-SOUTH"]:
+                        from models import GameStatus
+                        g.home_score = engine.state.home_score
+                        g.away_score = engine.state.away_score
+                        g.status = GameStatus.COMPLETED
+                        break
+        
+        # Advance Day Logically
+        self.game_state.finish_day_and_advance()
+        self._on_page_changed(0) 
+        
+        # Navigate to Result Page
+        self._navigate_to("result")
+        res_page = getattr(self, "game_result_page", None)
+        if not res_page:
+             # Should not happen if navigate_to works, but fallback
+             return
+        
+        # Construct Data for ResultPage
+        detail = sm.allstar_engine.game1_detail if game_num == 1 else sm.allstar_engine.game2_detail
+        
+        # Game 1: North Home. Game 2: South Home.
+        if game_num == 1:
+            h_inn = detail['north_innings']
+            a_inn = detail['south_innings']
+        else:
+            h_inn = detail['south_innings'] # Home=South
+            a_inn = detail['north_innings'] # Away=North
+
+        # Calculate Hits
+        h_hits = sum(engine.game_stats[p]['hits'] for p in engine.home_team.players)
+        a_hits = sum(engine.game_stats[p]['hits'] for p in engine.away_team.players)
+        
+        res_data = {
+            "home_team": engine.home_team,
+            "away_team": engine.away_team,
+            "home_score": engine.state.home_score,
+            "away_score": engine.state.away_score,
+            "score_history": {"top": a_inn, "bot": h_inn}, # Top=Away
+            "hits": (h_hits, a_hits),
+            "errors": (0, 0),
+            "pitcher_result": detail.get("pitcher_result", {"win": None, "loss": None, "save": None}),
+            "home_runs": [], 
+            "game_stats": engine.game_stats
+        }
+        
+        # Populate Home Runs
+        hrs = []
+        for p in engine.home_team.players + engine.away_team.players:
+            cnt = engine.game_stats[p]['home_runs']
+            if cnt > 0:
+                t_name = engine.home_team.name if p in engine.home_team.players else engine.away_team.name
+                hrs.append((p.name, cnt, t_name))
+        res_data["home_runs"] = hrs
+
+        res_page.set_result(res_data)
+
+
+
+
+
+    def _on_watch_game_requested(self, game_info):
+        """Handle watch game request from schedule page"""
+        if not self.game_state: return
+
+        # Identify teams
+        home_name = game_info.home_team_name
+        away_name = game_info.away_team_name
+        
+        is_allstar = "ALL-" in home_name or "ALL-" in away_name
+        
+        if is_allstar:
+             # Generate All-Star Teams
+             season_mgr = self.game_state.season_manager
+             if hasattr(season_mgr, 'allstar_engine') and season_mgr.allstar_engine:
+                 t_north, t_south = season_mgr.allstar_engine.create_team_objects()
+                 # Determine Home/Away (t_north has name "ALL-NORTH")
+                 home_team = t_north if home_name == "ALL-NORTH" else t_south
+                 away_team = t_north if away_name == "ALL-NORTH" else t_south
+                 if home_team == away_team: 
+                     away_team = t_south if home_team == t_north else t_north
+             else:
+                 # リロード直後などでEngineがない場合、再生成を試みる
+                 print("All-Star Engine not found. Regenerating...")
+                 try:
+                     season_mgr.initialize_allstar(self.game_state.teams)
+                     if season_mgr.allstar_engine:
+                         t_north, t_south = season_mgr.allstar_engine.create_team_objects()
+                         home_team = t_north if home_name == "ALL-NORTH" else t_south
+                         away_team = t_north if away_name == "ALL-NORTH" else t_south
+                         if home_team == away_team: away_team = t_south if home_team == t_north else t_north
+                     else:
+                         QMessageBox.warning(self, "エラー", "オールスターデータの生成に失敗しました。")
+                         return
+                 except Exception as e:
+                     QMessageBox.warning(self, "エラー", f"オールスター生成エラー: {e}")
+                     return
+        else:
+             home_team = self.game_state.get_team(home_name)
+             away_team = self.game_state.get_team(away_name)
+
+        if not home_team or not away_team: return
+
+        # Set Game Context
+        current_date_str = getattr(game_info, 'date', self.game_state.current_date)
+        
+        self.game_state.current_game_info = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'date': current_date_str,
+            'game_type': 'ai_vs_ai', # Forces AI vs AI mode
+            'is_allstar': is_allstar
+        }
+        
+        # Navigate
+        self._navigate_to("game")
 
 
 def run_app():

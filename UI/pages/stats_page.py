@@ -376,7 +376,7 @@ class StatsPage(QWidget):
                 padding: 10px 20px; 
                 font-weight: bold; 
                 font-size: 14px; 
-                min-width: 120px;
+                min-width: 100px;
             }}
             QTabBar::tab:selected {{ 
                 color: {self.theme.primary}; 
@@ -396,9 +396,52 @@ class StatsPage(QWidget):
         self.tabs.addTab(self.pitcher_table, "投手成績")
         self.pitcher_table.player_double_clicked.connect(self.player_detail_requested.emit)
 
-        self.tabs.currentChanged.connect(self._refresh_stats)
+        # チーム野手成績タブ
+        self.team_batter_table = StatsTable()
+        self.tabs.addTab(self.team_batter_table, "チーム野手成績")
+
+        # チーム投手成績タブ
+        self.team_pitcher_table = StatsTable()
+        self.tabs.addTab(self.team_pitcher_table, "チーム投手成績")
+
+        # ポストシーズン結果タブ
+        self.postseason_widget = self._create_postseason_widget()
+        self.tabs.addTab(self.postseason_widget, "ポストシーズン")
+
+
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         layout.addWidget(self.tabs)
+
+
+    
+    def _create_postseason_widget(self) -> QWidget:
+        """ポストシーズン結果ウィジェットを作成"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        
+        # タイトル
+        title = QLabel("ポストシーズン結果")
+        title.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 20px; font-weight: bold;")
+        layout.addWidget(title)
+        
+        # 結果表示エリア
+        self.postseason_content = QVBoxLayout()
+        layout.addLayout(self.postseason_content)
+        
+        # プレースホルダー
+        self.postseason_placeholder = QLabel("ポストシーズンはまだ開始されていません")
+        self.postseason_placeholder.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 14px; padding: 40px;")
+        self.postseason_placeholder.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.postseason_placeholder)
+        
+        layout.addStretch()
+        return widget
+    
+
 
     def showEvent(self, event):
         """タブが表示されたときにデータを更新する（レイアウト確定後の描画保証）"""
@@ -445,7 +488,7 @@ class StatsPage(QWidget):
             QCheckBox {{ color: {self.theme.text_primary}; font-weight: bold; }}
             QCheckBox::indicator {{ width: 16px; height: 16px; }}
         """)
-        self.filter_qualified_btn.toggled.connect(self._refresh_stats)
+        self.filter_qualified_btn.toggled.connect(self._refresh_active_tab)
         toolbar.add_widget(self.filter_qualified_btn)
         
         toolbar.add_stretch()
@@ -537,27 +580,45 @@ class StatsPage(QWidget):
         self.team_combo.setCurrentIndex(index_to_set)
         self.team_combo.blockSignals(False)
         
-        self._refresh_stats()
+        self._refresh_active_tab()
 
     def _on_league_changed(self, index):
         if index == 0: self.current_league = "All"
         elif index == 1: self.current_league = "North League"
         elif index == 2: self.current_league = "South League"
-        self._refresh_stats()
+        self._refresh_active_tab()
 
     def _on_team_changed(self, index):
         self.current_team = self.team_combo.itemData(index)
-        self._refresh_stats()
+        self._refresh_active_tab()
 
     def _on_category_changed(self, index):
         self.current_category = self.category_combo.currentText()
-        self._refresh_stats()
+        self._refresh_active_tab()
 
     def _on_level_changed(self, btn_id):
         if btn_id == 1: self.current_level = TeamLevel.FIRST
         elif btn_id == 2: self.current_level = TeamLevel.SECOND
         elif btn_id == 3: self.current_level = TeamLevel.THIRD
-        self._refresh_stats()
+        self._refresh_active_tab()
+
+    def _on_tab_changed(self, index):
+        """タブ切り替え時の処理"""
+        if index == 0:
+            self._refresh_stats()
+        elif index == 1:
+            self._refresh_stats()
+        elif index == 2:
+            self._refresh_team_batters()
+        elif index == 3:
+            self._refresh_team_pitchers()
+        elif index == 4:
+            self._refresh_postseason()
+
+
+    def _refresh_active_tab(self, *args):
+        """現在アクティブなタブを再描画する"""
+        self._on_tab_changed(self.tabs.currentIndex())
 
     def _refresh_stats(self):
         if not self.game_state: return
@@ -608,5 +669,242 @@ class StatsPage(QWidget):
         current_tab_idx = self.tabs.currentIndex()
         if current_tab_idx == 0:
             self.batter_table.set_data(batters_data, mode="batter", category=self.current_category)
-        else:
+        elif current_tab_idx == 1:
             self.pitcher_table.set_data(pitchers_data, mode="pitcher", category=self.current_category)
+
+    def _get_team_stats_by_level(self, team):
+        if self.current_level == TeamLevel.FIRST:
+            return team.stats_total
+        elif self.current_level == TeamLevel.SECOND:
+            return team.stats_total_farm
+        elif self.current_level == TeamLevel.THIRD:
+            return team.stats_total_third
+        return team.stats_total
+
+    def _refresh_team_batters(self):
+        """チーム野手成績を更新"""
+        if not self.game_state:
+            return
+        
+        # 集計呼び出し（stats_records.pyで実装済）
+        update_league_stats(self.game_state.teams)
+        
+        # TeamAggregate for Display
+        class TeamAggregate:
+            def __init__(self, name, position):
+                self.name = name
+                self.position = position
+                self.pitch_type = None
+        
+        class DummyPos:
+            value = "-"
+            
+        team_data = []
+        target_teams = [self.current_team] if self.current_team else (self.game_state.teams if self.current_league == "All" else [t for t in self.game_state.teams if t.league.value == self.current_league])
+
+        for team in target_teams:
+            stats = self._get_team_stats_by_level(team)
+            
+            # Create Dummy Player
+            agg_player = TeamAggregate(team.name, DummyPos())
+            
+            # Use League Name or Team Name depending on context 
+            # (If list is all teams, Team Name is already in Player Name, so maybe put League in Team column)
+            league_name = team.league.value if hasattr(team.league, 'value') else str(team.league)
+            
+            # 表示用にGamesをチーム試合数に補正（PlayerRecordの合計だと延べ出場数になってしまうため）
+            # ただしstatsは参照渡しなのでコピーを作成して修正する
+            from models import PlayerRecord
+            display_record = PlayerRecord()
+            display_record.merge_from(stats)
+            display_record.games = team.wins + team.losses + team.draws # チーム試合数
+            
+            # 手動集計フィールド（TeamRecordにはあるがPlayerRecordにはないもの）の対応
+            # チームとしての打率や防御率は再計算が必要な場合があるが、
+            # stats_records.pyで適切にPlayerRecordに詰め込まれていればOK。
+            # ただし、PlayerRecordのプロパティ（avg等）は at_bats 等から計算するので、
+            # merge_fromで分子分母が正しくコピーされていれば問題ない。
+            
+            team_data.append((agg_player, league_name, display_record))
+        
+        self.team_batter_table.set_data(team_data, mode="batter", category=self.current_category)
+    
+    def _refresh_team_pitchers(self):
+        """チーム投手成績を更新"""
+        if not self.game_state:
+            return
+        
+        update_league_stats(self.game_state.teams)
+        
+        class TeamAggregate:
+            def __init__(self, name, position):
+                self.name = name
+                self.position = position
+                self.pitch_type = type('obj', (object,), {'value': '-'})
+        
+        class DummyPos:
+            value = "P"
+
+        team_data = []
+        target_teams = [self.current_team] if self.current_team else (self.game_state.teams if self.current_league == "All" else [t for t in self.game_state.teams if t.league.value == self.current_league])
+
+        for team in target_teams:
+            stats = self._get_team_stats_by_level(team)
+            
+            agg_player = TeamAggregate(team.name, DummyPos())
+            league_name = team.league.value if hasattr(team.league, 'value') else str(team.league)
+            
+            from models import PlayerRecord
+            display_record = PlayerRecord()
+            display_record.merge_from(stats)
+            display_record.games_pitched = team.wins + team.losses + team.draws # Team Games
+            
+            team_data.append((agg_player, league_name, display_record))
+        
+        self.team_pitcher_table.set_data(team_data, mode="pitcher", category=self.current_category)
+
+
+    def _aggregate_team_pitching_record(self, team):
+        """チーム全投手の成績を集計してPlayerRecordとして返す"""
+        from models import PlayerRecord
+        
+        class TeamAggregate:
+            def __init__(self, name, position, pitch_type):
+                self.name = name
+                self.position = position
+                self.pitch_type = pitch_type
+        
+        class DummyEnum:
+            value = "-"
+            
+        agg_player = TeamAggregate(team.name, DummyEnum(), DummyEnum())
+        agg_record = PlayerRecord()
+        
+        team_games = team.wins + team.losses + team.draws
+        # For pitching, games_pitched is meaningless for a team (it's team_games)
+        agg_record.games_pitched = max(0, team_games)
+        
+        player_count = 0
+        for player in team.players:
+            if player.position.value != "投手":
+                continue
+            r = player.get_record_by_level(self.current_level)
+            if r.games_pitched == 0:
+                continue
+            
+            player_count += 1
+            agg_record.games_started += r.games_started
+            agg_record.complete_games += r.complete_games
+            agg_record.shutouts += r.shutouts
+            agg_record.wins += r.wins
+            agg_record.losses += r.losses
+            agg_record.saves += r.saves
+            agg_record.holds += r.holds
+            agg_record.innings_pitched += r.innings_pitched
+            agg_record.hits_allowed += r.hits_allowed
+            agg_record.runs_allowed += r.runs_allowed
+            agg_record.earned_runs += r.earned_runs
+            agg_record.home_runs_allowed += r.home_runs_allowed
+            agg_record.walks_allowed += r.walks_allowed
+            agg_record.hit_batters += getattr(r, 'hit_batters', 0)
+            agg_record.strikeouts_pitched += r.strikeouts_pitched
+            agg_record.wild_pitches += getattr(r, 'wild_pitches', 0)
+            agg_record.balks += getattr(r, 'balks', 0)
+            
+            agg_record.war_val += getattr(r, 'war_val', 0.0)
+            agg_record.wrc_val += getattr(r, 'wrc_val', 0.0) # Pitchers have wRC too (batting stats) or FIP based?
+            # Pitcher WAR is primarily WAR_val. 
+            
+            # UZR components for Pitchers (fielding)
+            if hasattr(r, 'uzr_rngr'): setattr(agg_record, 'uzr_rngr', getattr(agg_record, 'uzr_rngr', 0.0) + r.uzr_rngr)
+            if hasattr(r, 'uzr_errr'): setattr(agg_record, 'uzr_errr', getattr(agg_record, 'uzr_errr', 0.0) + r.uzr_errr)
+            if hasattr(r, 'uzr_arm'): setattr(agg_record, 'uzr_arm', getattr(agg_record, 'uzr_arm', 0.0) + r.uzr_arm)
+            if hasattr(r, 'uzr_dpr'): setattr(agg_record, 'uzr_dpr', getattr(agg_record, 'uzr_dpr', 0.0) + r.uzr_dpr)
+            agg_record.ground_outs += r.ground_outs
+            agg_record.fly_outs += r.fly_outs
+            agg_record.batters_faced += r.batters_faced
+            
+            # Sum Advanced
+            agg_record.war_val += getattr(r, 'war_val', 0.0)
+            
+        return {'player': agg_player, 'record': agg_record}
+    
+
+    
+    def _refresh_postseason(self):
+        """ポストシーズン結果を更新"""
+        # Clear existing content
+        while self.postseason_content.count():
+            item = self.postseason_content.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        if not self.game_state:
+            self.postseason_placeholder.setVisible(True)
+            return
+        
+        # Check if postseason engine exists via season_manager
+        season_mgr = getattr(self.game_state, 'season_manager', None)
+        ps_engine = getattr(season_mgr, 'postseason_engine', None) if season_mgr else None
+        if not ps_engine:
+            self.postseason_placeholder.setVisible(True)
+            return
+        
+        self.postseason_placeholder.setVisible(False)
+        
+        # CS First Stage - North
+        if ps_engine.cs_north_first:
+            self._add_series_result("CSファースト (North)", ps_engine.cs_north_first)
+        
+        # CS First Stage - South
+        if ps_engine.cs_south_first:
+            self._add_series_result("CSファースト (South)", ps_engine.cs_south_first)
+        
+        # CS Final Stage - North
+        if ps_engine.cs_north_final:
+            self._add_series_result("CSファイナル (North)", ps_engine.cs_north_final)
+        
+        # CS Final Stage - South
+        if ps_engine.cs_south_final:
+            self._add_series_result("CSファイナル (South)", ps_engine.cs_south_final)
+        
+        # Japan Series
+        if ps_engine.japan_series:
+            self._add_series_result("日本シリーズ", ps_engine.japan_series, is_champion=True)
+    
+    def _add_series_result(self, title: str, series, is_champion: bool = False):
+        """シリーズ結果を追加"""
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card_elevated};
+                border-radius: 8px;
+                padding: 12px;
+            }}
+        """)
+        layout = QVBoxLayout(frame)
+        
+        # Title
+        title_label = QLabel(title)
+        title_style = f"color: {self.theme.accent_orange if is_champion else self.theme.text_primary}; font-size: 16px; font-weight: bold;"
+        title_label.setStyleSheet(title_style)
+        layout.addWidget(title_label)
+        
+        # Matchup
+        team1 = series.team1 or "TBD"
+        team2 = series.team2 or "TBD"
+        score = f"{series.team1_wins} - {series.team2_wins}"
+        
+        matchup_label = QLabel(f"{team1}  {score}  {team2}")
+        matchup_label.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 14px;")
+        matchup_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(matchup_label)
+        
+        # Winner
+        if series.winner:
+            winner_label = QLabel(f"勝者: {series.winner}")
+            winner_label.setStyleSheet(f"color: {self.theme.success}; font-size: 12px; font-weight: bold;")
+            winner_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(winner_label)
+        
+        self.postseason_content.addWidget(frame)

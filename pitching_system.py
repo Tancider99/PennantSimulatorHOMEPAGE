@@ -118,7 +118,7 @@ class PitchingDirector:
         return PitcherRole.MIDDLE
     
     def check_pitcher_change(self, ctx: PitchingContext, current_pitcher: 'Player', 
-                             used_pitchers: List['Player'], next_batter: 'Player') -> Optional['Player']:
+                             used_pitchers: List['Player'], next_batter: 'Player', is_all_star: bool = False) -> Optional['Player']:
         """
         投手交代が必要かチェックし、必要なら交代投手を返す
         
@@ -127,10 +127,30 @@ class PitchingDirector:
             current_pitcher: 現在の投手
             used_pitchers: すでに登板した投手リスト
             next_batter: 次の打者
+            is_all_star: オールスターゲームかどうか (特別ルール適用)
             
         Returns:
             交代する投手、交代不要ならNone
         """
+        # All-Star Special Rules - MANDATORY rotation based on IP
+        if is_all_star:
+            # First pitcher in the game (starter) gets EXACTLY 2 IP max
+            # All subsequent pitchers (relievers) get EXACTLY 1 IP max
+            is_first_pitcher = (len(used_pitchers) == 0) or (len(used_pitchers) == 1 and current_pitcher in used_pitchers)
+            
+            if is_first_pitcher:
+                # First pitcher: Change after completing 2 innings (6 outs)
+                if ctx.ip_pitched >= 2.0:
+                    reliever = self._select_reliever(ctx, used_pitchers, next_batter)
+                    if reliever:
+                        return reliever
+            else:
+                # Subsequent pitchers: Change after completing 1 inning (3 outs)
+                if ctx.ip_pitched >= 1.0:
+                    reliever = self._select_reliever(ctx, used_pitchers, next_batter)
+                    if reliever:
+                        return reliever
+        
         # 怪我チェック
         if current_pitcher.is_injured:
             return self._select_reliever(ctx, used_pitchers, next_batter)
@@ -321,6 +341,8 @@ class PitchingDirector:
                 idx = self.team.closers[0]
                 if 0 <= idx < len(self.team.players):
                     p = self.team.players[idx]
+                    # if self._is_available(p, used_pitchers): # CLoser might be tired but we need him?
+                    # Strict availability check for now
                     if self._is_available(p, used_pitchers):
                         return p
         
@@ -334,12 +356,13 @@ class PitchingDirector:
         
         elif target_role == PitcherRole.SETUP_B:
             if len(self.team.setup_pitchers) > 1:
+                # Iterate all secondary setup pitchers
                 for idx in self.team.setup_pitchers[1:]:
                     if 0 <= idx < len(self.team.players):
                         p = self.team.players[idx]
                         if self._is_available(p, used_pitchers):
                             return p
-        
+                        
         # 汎用検索
         candidates = []
         for idx in self.team.active_roster:
@@ -372,7 +395,14 @@ class PitchingDirector:
         from models import Position
         
         available = []
-        for idx in self.team.active_roster:
+        
+        # For All-Star teams or teams without active_roster, search all players
+        roster_indices = getattr(self.team, 'active_roster', None)
+        if not roster_indices or len(roster_indices) == 0:
+            # Fallback: search all players by index
+            roster_indices = range(len(self.team.players))
+        
+        for idx in roster_indices:
             if not (0 <= idx < len(self.team.players)):
                 continue
             p = self.team.players[idx]
@@ -381,8 +411,9 @@ class PitchingDirector:
                 continue
             if not self._is_available(p, used_pitchers):
                 continue
-            # ローテ投手は除外
-            if self.is_starter(p):
+            # ローテ投手は除外 (for normal games, but for All-Star we may include)
+            # For All-Star: don't exclude rotation pitchers since they should also be available
+            if "ALL-" not in self.team.name and self.is_starter(p):
                 continue
             
             available.append(p)

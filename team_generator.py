@@ -9,19 +9,19 @@ import random
 
 
 def create_team(team_name: str, league: League) -> Team:
-    """チームを生成（支配下70人＋育成30人）"""
+    """チームを生成（支配下67〜70人＋育成30〜35人）"""
     team = Team(name=team_name, league=league)
     number = 1
     player_count = 0  # 支配下選手のカウント
     first_team_limit = 31  # 一軍上限
     
     # ==============================
-    # 支配下選手 (70人)
-    # 1軍枠配分: 投手15人 / 野手16人
+    # 支配下日本人選手 (64人)
+    # 外国人3〜6人を追加して67〜70人になる
     # ==============================
     
-    # 投手 (28人) - 5:4:1 比率 (14:11:3)
-    for _ in range(14):
+    # 投手 (25人) - 5:4:1 比率 (12:10:3)
+    for _ in range(12):
         p = create_random_player(Position.PITCHER, PitchType.STARTER, PlayerStatus.ACTIVE, number)
         p.is_developmental = False
         _add_sub_positions_pitcher(p)
@@ -29,7 +29,7 @@ def create_team(team_name: str, league: League) -> Team:
         player_count += 1
         team.players.append(p)
         number += 1
-    for _ in range(11):
+    for _ in range(10):
         p = create_random_player(Position.PITCHER, PitchType.RELIEVER, PlayerStatus.ACTIVE, number)
         p.is_developmental = False
         _add_sub_positions_pitcher(p)
@@ -46,7 +46,7 @@ def create_team(team_name: str, league: League) -> Team:
         team.players.append(p)
         number += 1
     
-    # 野手 (42人)
+    # 野手 (39人)
     # 捕手 (4)
     for _ in range(4):
         p = create_random_player(Position.CATCHER, status=PlayerStatus.ACTIVE, number=number)
@@ -58,8 +58,8 @@ def create_team(team_name: str, league: League) -> Team:
         team.players.append(p)
         number += 1
     
-    # 内野手 (22)
-    for pos, count in [(Position.FIRST, 5), (Position.SECOND, 6), (Position.THIRD, 5), (Position.SHORTSTOP, 6)]:
+    # 内野手 (19)
+    for pos, count in [(Position.FIRST, 4), (Position.SECOND, 5), (Position.THIRD, 5), (Position.SHORTSTOP, 5)]:
         for _ in range(count):
             p = create_random_player(pos, status=PlayerStatus.ACTIVE, number=number)
             p.is_developmental = False
@@ -103,34 +103,71 @@ def create_team(team_name: str, league: League) -> Team:
         m_batters[i].team_level = TeamLevel.FIRST
     
     # ==============================
-    # 育成選手 (30人) - 背番号は3桁
+    # 支配下外国人選手 (3〜6人、27〜35歳)
+    # ==============================
+    num_foreign_major = random.randint(3, 6)
+    foreign_number = 90  # 外国人は90番台
+    foreign_positions = [Position.PITCHER, Position.FIRST, Position.LEFT, Position.RIGHT, Position.CENTER]
+    
+    for _ in range(num_foreign_major):
+        pos = random.choice(foreign_positions)
+        pitch_type = None
+        if pos == Position.PITCHER:
+            pitch_type = random.choice([PitchType.STARTER, PitchType.RELIEVER, PitchType.CLOSER])
+        
+        p = create_random_player(
+            pos, pitch_type, PlayerStatus.ACTIVE, foreign_number,
+            is_foreign=True, age=random.randint(27, 35)
+        )
+        p.is_developmental = False
+        p.team_level = TeamLevel.SECOND  # 2軍スタート
+        
+        if pos == Position.PITCHER:
+            _add_sub_positions_pitcher(p)
+        elif pos in [Position.LEFT, Position.CENTER, Position.RIGHT]:
+            _add_sub_positions_outfielder(p)
+        else:
+            _add_sub_positions_infielder(p, pos)
+            
+        p.fix_main_position()
+        team.players.append(p)
+        foreign_number += 1
+    
+    # ==============================
+    # 育成選手 (30人) - 背番号は3桁、年齢18〜25歳
     # ==============================
     dev_number = 101
     
-    # 育成投手 (12人)
+    # 育成投手 (12人、日本人)
     for _ in range(12):
         p = create_random_player(
             Position.PITCHER, 
             None, # 自動決定（5:4:1）
             PlayerStatus.FARM, 
-            dev_number
+            dev_number,
+            is_foreign=False,
+            age=random.randint(18, 25)
         )
         p.is_developmental = True
         p.team_level = TeamLevel.THIRD
         _add_sub_positions_pitcher(p)
         _adjust_developmental_stats(p)
+        # 育成選手の年俸: 2〜10百万
+        p.salary = random.randint(2, 10) * 1000000
         team.players.append(p)
         dev_number += 1
     
-    # 育成野手 (18人)
-    # ポジションリストを修正 (OUTFIELD -> LEFT, CENTER, RIGHT)
+    # 育成野手 (18人、日本人)
     positions = [
         Position.CATCHER, Position.FIRST, Position.SECOND, Position.THIRD, Position.SHORTSTOP,
         Position.LEFT, Position.CENTER, Position.RIGHT, Position.LEFT
     ]
     for _ in range(18):
         pos = random.choice(positions)
-        p = create_random_player(pos, status=PlayerStatus.FARM, number=dev_number)
+        p = create_random_player(
+            pos, status=PlayerStatus.FARM, number=dev_number,
+            is_foreign=False, age=random.randint(18, 25)
+        )
         p.is_developmental = True
         p.team_level = TeamLevel.THIRD
         
@@ -142,6 +179,39 @@ def create_team(team_name: str, league: League) -> Team:
             _add_sub_positions_infielder(p, pos)
             
         _adjust_developmental_stats(p)
+        # 育成選手の年俸: 2〜10百万
+        p.salary = random.randint(2, 10) * 1000000
+        p.fix_main_position()
+        team.players.append(p)
+        dev_number += 1
+    
+    # ==============================
+    # 育成外国人選手 (0〜5人、18〜25歳)
+    # ==============================
+    num_foreign_dev = random.randint(0, 5)
+    for _ in range(num_foreign_dev):
+        pos = random.choice(foreign_positions)
+        pitch_type = None
+        if pos == Position.PITCHER:
+            pitch_type = random.choice([PitchType.STARTER, PitchType.RELIEVER, PitchType.CLOSER])
+        
+        p = create_random_player(
+            pos, pitch_type, PlayerStatus.FARM, dev_number,
+            is_foreign=True, age=random.randint(18, 25)
+        )
+        p.is_developmental = True
+        p.team_level = TeamLevel.THIRD
+        
+        if pos == Position.PITCHER:
+            _add_sub_positions_pitcher(p)
+        elif pos in [Position.LEFT, Position.CENTER, Position.RIGHT]:
+            _add_sub_positions_outfielder(p)
+        else:
+            _add_sub_positions_infielder(p, pos)
+            
+        _adjust_developmental_stats(p)
+        # 育成外国人の年俸: 2〜10百万
+        p.salary = random.randint(2, 10) * 1000000
         p.fix_main_position()
         team.players.append(p)
         dev_number += 1

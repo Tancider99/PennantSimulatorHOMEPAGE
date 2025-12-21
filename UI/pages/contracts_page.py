@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QMessageBox, QProgressBar, QSpinBox,
     QStyledItemDelegate, QStyle, QDialog
 )
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QFont, QBrush, QPen, QPainter
+from PySide6.QtCore import Qt, Signal, QTimer, QMimeData
+from PySide6.QtGui import QColor, QFont, QBrush, QPen, QPainter, QDrag
 
 import sys
 import os
@@ -259,31 +259,34 @@ class ForeignPlayerCandidate:
 
         self._cached_visible_stats = new_stats
 
-        # 総合力の推定 (ブレ幅大)
+        # 総合力の推定 (実際のoverall計算を使用)
         if self.position == Position.PITCHER:
-            true_overall = self.true_stats.stuff + self.true_stats.control + self.true_stats.stamina
+            true_overall = self.true_stats.overall_pitching()
         else:
-            true_overall = (self.true_stats.contact + self.true_stats.power + 
-                           self.true_stats.speed + self.true_stats.arm + self.true_stats.fielding)
+            true_overall = self.true_stats.overall_batting(self.position)
         
-        # 範囲を大きく
-        range_half_width = int(60 * uncertainty)
-        min_ovr = max(0, true_overall - random.randint(0, range_half_width))
-        max_ovr = true_overall + random.randint(0, range_half_width)
+        # 範囲を大きく（真の値が必ず範囲内に含まれるよう保証）
+        range_half_width = int(50 * uncertainty) + 10  # 最低10の幅
+        min_offset = random.randint(5, range_half_width)  # 最低5のオフセット
+        max_offset = random.randint(5, range_half_width)
         
-        if range_half_width > 10 and (max_ovr - min_ovr) < 30:
-             max_ovr += 30
-             min_ovr = max(0, min_ovr - 20)
+        min_ovr = max(1, true_overall - min_offset)
+        max_ovr = min(999, true_overall + max_offset)
+        
+        # 最小幅を保証
+        if (max_ovr - min_ovr) < 30:
+            min_ovr = max(1, min_ovr - 15)
+            max_ovr = min(999, max_ovr + 15)
 
         self._cached_est_overall_range = (min_ovr, max_ovr)
 
-        # 潜在能力の推定 (ブレ幅大)
+        # 潜在能力の推定（真の値が必ず範囲内に含まれるよう保証）
         true_pot = self.true_potential
         pot_uncertainty = max(0.3, uncertainty)
-        pot_width = int(20 * pot_uncertainty)
+        pot_width = int(15 * pot_uncertainty) + 5  # 最低5の幅
         
-        min_pot = max(1, true_pot - random.randint(0, pot_width))
-        max_pot = min(99, true_pot + random.randint(0, pot_width))
+        min_pot = max(1, true_pot - random.randint(3, pot_width))
+        max_pot = min(99, true_pot + random.randint(3, pot_width))
         
         self._cached_est_potential_range = (min_pot, max_pot)
 
@@ -356,12 +359,13 @@ class TradeOffer:
 
 class ForeignNegotiationDialog(QDialog):
     """外国人選手との契約交渉ダイアログ"""
-    def __init__(self, parent, candidate: ForeignPlayerCandidate, theme):
+    def __init__(self, parent, candidate: ForeignPlayerCandidate, theme, is_developmental_tab: bool = False):
         super().__init__(parent)
         self.candidate = candidate
         self.theme = theme
+        self.is_developmental_tab = is_developmental_tab  # 育成タブからの呼び出しか
         self.setWindowTitle("契約交渉")
-        self.setFixedSize(500, 450)  # Increased size for text visibility
+        self.setFixedSize(600, 550)  # Increased size for text visibility
         self.setModal(True)
         self.setStyleSheet(f"""
             QDialog {{ background-color: {self.theme.bg_card}; color: {self.theme.text_primary}; }}
@@ -370,6 +374,10 @@ class ForeignNegotiationDialog(QDialog):
         
         self.offered_salary = 0
         self.offered_years = 0
+        self.is_developmental = is_developmental_tab  # 育成タブならデフォルトON
+        
+        # 育成タブなら育成契約可能、そうでなければ支配下のみ
+        self.can_be_developmental = is_developmental_tab
         
         self._setup_ui()
         
@@ -435,6 +443,21 @@ class ForeignNegotiationDialog(QDialog):
         
         layout.addLayout(offer_grid)
         
+        # 育成契約チェックボックス（育成タブの場合のみ表示）
+        from PySide6.QtWidgets import QCheckBox
+        self.dev_checkbox = QCheckBox("育成契約で獲得する")
+        self.dev_checkbox.setStyleSheet(f"color: {self.theme.text_primary}; margin-top: 8px;")
+        
+        if self.is_developmental_tab:
+            # 育成タブ: チェックボックスを表示・デフォルトON
+            self.dev_checkbox.setEnabled(True)
+            self.dev_checkbox.setChecked(True)  # デフォルトON
+            self.dev_checkbox.setToolTip("育成契約で獲得します")
+            layout.addWidget(self.dev_checkbox)
+        else:
+            # 即戦力タブ: チェックボックスを非表示
+            self.dev_checkbox.setVisible(False)
+        
         layout.addStretch()
         
         # ボタン
@@ -467,7 +490,8 @@ class ForeignNegotiationDialog(QDialog):
             years = min(15, max(1, int(self.years_input.text())))  # Clamp to 1-15
         except:
             years = 1
-        return salary, years
+        is_developmental = self.dev_checkbox.isChecked()
+        return salary, years, is_developmental
 
 
 # ========================================
@@ -1164,6 +1188,9 @@ class DraftScoutingPage(QWidget):
                      if p.scouting_status == ScoutingStatus.NOT_STARTED 
                      and not p.assigned_scout]
         
+        # Sort by estimated potential (descending) so scouts pick the best prospects first
+        unscouted.sort(key=lambda p: p.get_max_estimated_overall(), reverse=True)
+        
         # Assign to first available (assuming list is roughly sorted by value/rank)
         for scout in free_scouts:
             if not unscouted:
@@ -1188,17 +1215,21 @@ class ForeignPlayerScoutingPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.theme = get_theme()
-        self.candidates: List[ForeignPlayerCandidate] = []
+        # 二層システム: 即戦力候補と育成候補を分離
+        self.main_roster_candidates: List[ForeignPlayerCandidate] = []    # 即戦力層
+        self.developmental_candidates: List[ForeignPlayerCandidate] = []  # 育成層
+        self.candidates: List[ForeignPlayerCandidate] = []  # 現在表示中の候補リスト（参照）
         self.scouts: List[Scout] = []
         self.selected_candidate: Optional[ForeignPlayerCandidate] = None
         self.game_state = None
+        self.current_tab_mode = "main_roster"  # "main_roster" or "developmental"
         
         # New features
         self.negotiated_ids = set() # Set of candidate IDs negotiated with today
         self.last_reset_year = None # Last year we reset candidates
 
-        self._generate_dummy_data()
         self._setup_ui()
+        self._generate_dummy_data()
         
         # Hide initially to prevent appearing at (0,0) before being properly added to layout
         self.hide()
@@ -1209,79 +1240,22 @@ class ForeignPlayerScoutingPage(QWidget):
         self._update_detail_panel()
 
     def _generate_dummy_data(self):
-        """ダミーデータ生成 (100人)"""
-        scout_names = ["John Smith", "Mike Johnson", "Carlos Garcia"]
+        """ダミーデータ生成 (二層システム)"""
+        # 外国人スカウト 4人 (専門分野なし)
+        scout_names = ["John Smith", "Mike Johnson", "Carlos Garcia", "Pedro Martinez"]
         for name in scout_names:
             self.scouts.append(Scout(
                 name=name,
-                skill=random.randint(50, 85),
+                skill=random.randint(55, 85),
                 specialty="汎用"
             ))
 
-        countries = ["USA", "Dominican", "Cuba", "Venezuela", "Mexico", "Korea", "Taiwan", "Puerto Rico", "Canada", "Australia"]
-
-        positions = [Position.PITCHER, Position.FIRST, Position.LEFT,
-                    Position.RIGHT, Position.CENTER, Position.SHORTSTOP, Position.THIRD, Position.SECOND, Position.CATCHER]
-
-        # 100人に増やす
-        for i in range(100):
-            pos = random.choice(positions)
-            
-            # player_generatorを利用 (外国人選手)
-            gen_player = player_generator.create_foreign_free_agent(pos)
-            
-            # 能力値の底上げ（ユーザー要望）
-            if pos == Position.PITCHER:
-                 gen_player.stats.velocity += random.randint(0, 3)
-                 gen_player.stats.stuff = min(99, int(gen_player.stats.stuff * 1.05))
-                 gen_player.stats.control = min(99, int(gen_player.stats.control * 1.05))
-            else:
-                 gen_player.stats.contact = min(99, int(gen_player.stats.contact * 1.05))
-                 gen_player.stats.power = min(99, int(gen_player.stats.power * 1.05))
-
-            country = random.choice(countries)
-            
-            # 総額 5000万 ~ 10億
-            total_budget = random.randint(50, 1000) * 1000000
-            
-            # 契約金比率 10% ~ 40%
-            bonus_ratio = random.uniform(0.1, 0.4)
-            bonus = int(total_budget * bonus_ratio)
-            # 100万単位に丸める
-            bonus = (bonus // 1000000) * 1000000
-            if bonus < 0: bonus = 0
-
-            salary = total_budget - bonus
-            # 100万単位に丸める
-            salary = (salary // 1000000) * 1000000
-            if salary < 10000000: salary = 10000000 # 最低1000万
-
-            # ポテンシャルは年齢に応じて（若いほど高く、ベテランは低い）
-            # 外国人選手は即戦力期待なので少し高めに設定（ユーザー要望でさらに+5~10）
-            if gen_player.age < 24:
-                pot_base = 65 
-            elif gen_player.age < 30:
-                pot_base = 55
-            else:
-                pot_base = 40
-            
-            true_potential = max(1, min(99, int(random.gauss(pot_base, 15))))
-
-            candidate = ForeignPlayerCandidate(
-                id=i,
-                name=gen_player.name,
-                position=gen_player.position,
-                pitch_type=gen_player.pitch_type,
-                age=gen_player.age,
-                country=country,
-                true_stats=gen_player.stats,
-                true_potential=true_potential,
-                salary_demand=salary,
-                bonus_demand=bonus,
-                years_demand=random.choice([1, 1, 1, 2, 2, 3]),
-                interest_level=random.randint(30, 80)
-            )
-            self.candidates.append(candidate)
+        # reset_candidatesを呼び出して候補を生成
+        self.reset_candidates()
+        
+        # スカウトUIを更新
+        self._update_scout_combo()
+        self._update_scout_status()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -1316,6 +1290,51 @@ class ForeignPlayerScoutingPage(QWidget):
         layout.addWidget(title)
 
         layout.addSpacing(20)
+        
+        # タブ切り替えボタン
+        self.main_roster_btn = QPushButton("即戦力")
+        self.main_roster_btn.setCheckable(True)
+        self.main_roster_btn.setChecked(True)
+        self.main_roster_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme.accent_blue};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:!checked {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_secondary};
+            }}
+        """)
+        self.main_roster_btn.clicked.connect(lambda: self._switch_tab("main_roster"))
+        layout.addWidget(self.main_roster_btn)
+        
+        layout.addSpacing(4)
+        
+        self.developmental_btn = QPushButton("育成")
+        self.developmental_btn.setCheckable(True)
+        self.developmental_btn.setChecked(False)
+        self.developmental_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme.success};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:!checked {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_secondary};
+            }}
+        """)
+        self.developmental_btn.clicked.connect(lambda: self._switch_tab("developmental"))
+        layout.addWidget(self.developmental_btn)
+        
+        layout.addSpacing(20)
 
         self.pos_filter = QComboBox()
         self.pos_filter.addItems(["全ポジション", "投手", "野手"])
@@ -1341,6 +1360,22 @@ class ForeignPlayerScoutingPage(QWidget):
         self._update_scout_status()
 
         return toolbar
+    
+    def _switch_tab(self, mode: str):
+        """タブ切り替え"""
+        self.current_tab_mode = mode
+        self.main_roster_btn.setChecked(mode == "main_roster")
+        self.developmental_btn.setChecked(mode == "developmental")
+        
+        # 候補リストを切り替え
+        if mode == "main_roster":
+            self.candidates = self.main_roster_candidates
+        else:
+            self.candidates = self.developmental_candidates
+        
+        self.selected_candidate = None
+        self._refresh_table()
+        self._update_detail_panel()
 
     def _create_candidate_list(self) -> QWidget:
         widget = QWidget()
@@ -1804,51 +1839,74 @@ class ForeignPlayerScoutingPage(QWidget):
         if not c or c.scout_level < 50:
             return
 
+        # ★支配下枚数チェック
+        if self.game_state and self.game_state.player_team:
+            team = self.game_state.player_team
+            shihaika_count = len([p for p in team.players if not p.is_developmental])
+            if shihaika_count >= 70:
+                QMessageBox.warning(self, "支配下枚いっぱい", 
+                    "支配下登録選手が70人に達しているため、\n新たな外国人選手との交渉を開始できません。\n先に選手を解雇または育成枚に降格してください。")
+                return
+
         # Check negotiation limit
         if c.id in self.negotiated_ids:
             QMessageBox.warning(self, "交渉不可", "この選手とは本日すでに交渉済みです。")
             return
 
-        # ★追加: 交渉画面(ダイアログ)を開く
-        dlg = ForeignNegotiationDialog(self, c, self.theme)
+        # ★追加: 交渉画面(ダイアログ)を開く（育成タブかどうかを渡す）
+        is_dev_tab = self.current_tab_mode == "developmental"
+        dlg = ForeignNegotiationDialog(self, c, self.theme, is_developmental_tab=is_dev_tab)
         if dlg.exec() != QDialog.Accepted:
             return
             
         # Add to negotiated set (consumed daily attempt)
         self.negotiated_ids.add(c.id)
 
-        # ダイアログから値を取得
-        offered_salary_val, offered_years = dlg.get_values()
+        # ダイアログから値を取得 (育成契約フラグ追加)
+        offered_salary_val, offered_years, is_developmental_contract = dlg.get_values()
         offered_salary = offered_salary_val * 1000000
 
-        salary_ratio = offered_salary / c.salary_demand
-        years_ratio = offered_years / c.years_demand
-
-        # If salary is less than 2/3 of demand, success rate is 0%
-        if salary_ratio < 0.67:
-            success_chance = 0
+        # 育成契約の場合の特別処理
+        if is_developmental_contract:
+            # 能力280以上は育成契約不可（成功率0%）
+            if not getattr(c, 'is_developmental_candidate', False):
+                QMessageBox.warning(self, "育成契約不可", 
+                    f"{c.name}は即戦力級の選手のため、育成契約での獲得はできません。\n"
+                    "支配下契約での獲得をお試しください。")
+                return
+            # 育成契約は高い成功率
+            success_chance = 70 + (offered_salary_val // 100) * 5  # 年俸提示に応じてボーナス
+            success_chance = min(95, success_chance)
         else:
-            base_chance = c.interest_level
-            if salary_ratio >= 1.2:
-                base_chance += 20
-            elif salary_ratio >= 1.0:
-                base_chance += 10
-            elif salary_ratio >= 0.8:
-                base_chance -= 10
-            else:
-                base_chance -= 30
+            # 支配下契約の通常処理
+            salary_ratio = offered_salary / c.salary_demand
+            years_ratio = offered_years / c.years_demand
 
-            if years_ratio >= 1.0:
-                base_chance += 10
+            # If salary is less than 2/3 of demand, success rate is 0%
+            if salary_ratio < 0.67:
+                success_chance = 0
             else:
-                base_chance -= 10
-            
-            # Longer contracts reduce success rate (each year above demand = -3%)
-            if offered_years > c.years_demand:
-                extra_years = offered_years - c.years_demand
-                base_chance -= extra_years * 3
+                base_chance = c.interest_level
+                if salary_ratio >= 1.2:
+                    base_chance += 20
+                elif salary_ratio >= 1.0:
+                    base_chance += 10
+                elif salary_ratio >= 0.8:
+                    base_chance -= 10
+                else:
+                    base_chance -= 30
 
-            success_chance = max(5, min(95, base_chance))
+                if years_ratio >= 1.0:
+                    base_chance += 10
+                else:
+                    base_chance -= 10
+                
+                # Longer contracts reduce success rate (each year above demand = -3%)
+                if offered_years > c.years_demand:
+                    extra_years = offered_years - c.years_demand
+                    base_chance -= extra_years * 3
+
+                success_chance = max(5, min(95, base_chance))
 
         result = random.randint(1, 100)
 
@@ -1857,6 +1915,16 @@ class ForeignPlayerScoutingPage(QWidget):
             if self.game_state and self.game_state.player_team:
                 from models import Player
                 
+                # 育成契約でない場合のみ支配下枠チェック
+                if not is_developmental_contract:
+                    MAX_SHIHAIKA = 70
+                    shihaika_count = len([p for p in self.game_state.player_team.players if not p.is_developmental])
+                    if shihaika_count >= MAX_SHIHAIKA:
+                        QMessageBox.warning(self, "登録枠超過", 
+                            f"支配下登録枠({MAX_SHIHAIKA}人)が一杯です。\n"
+                            "先に選手を自由契約にするか、トレードで放出してください。")
+                        return
+                
                 # Create Player from candidate
                 new_player = Player(
                     name=c.name,
@@ -1864,18 +1932,20 @@ class ForeignPlayerScoutingPage(QWidget):
                     age=c.age,
                     stats=c.true_stats,
                     pitch_type=c.pitch_type,
-                    uniform_number=self._get_available_uniform_number(),
+                    uniform_number=self._get_available_uniform_number() if not is_developmental_contract else random.randint(101, 199),
                     is_foreign=True
                 )
                 new_player.salary = offered_salary
                 new_player.contract_years = offered_years
                 new_player.potential = c.true_potential
+                new_player.is_developmental = is_developmental_contract
                 
                 # Add to player's team
                 self.game_state.player_team.players.append(new_player)
                 
+                contract_type = "育成" if is_developmental_contract else "支配下"
                 QMessageBox.information(self, "契約成功",
-                    f"{c.name}との契約が成立！\n"
+                    f"{c.name}との{contract_type}契約が成立！\n"
                     f"年俸: {offered_salary // 1000000}百万円 / {offered_years}年契約\n"
                     f"選手がチームに加わりました！")
                 
@@ -1904,38 +1974,26 @@ class ForeignPlayerScoutingPage(QWidget):
         return 99
 
     def reset_candidates(self):
-        """Reset and regenerate foreign candidates"""
-        self.candidates.clear()
+        """Reset and regenerate foreign candidates (二層システム)"""
+        self.main_roster_candidates.clear()
+        self.developmental_candidates.clear()
         self.selected_candidate = None
         
-        # Regenerate candidates (logic from _generate_dummy_data)
         countries = ["USA", "Dominican", "Cuba", "Venezuela", "Mexico", "Korea", "Taiwan", "Puerto Rico", "Canada", "Australia"]
         positions = [Position.PITCHER, Position.FIRST, Position.LEFT,
                     Position.RIGHT, Position.CENTER, Position.SHORTSTOP, Position.THIRD, Position.SECOND, Position.CATCHER]
-                    
-        for i in range(100):
+        
+        # 即戦力層を生成 (70人)
+        for i in range(70):
             pos = random.choice(positions)
-            gen_player = player_generator.create_foreign_free_agent(pos)
+            # 強制的に即戦力層を生成 (年齢26-35)
+            gen_player = self._generate_main_roster_candidate(pos)
             
-            # Boost stats
-            if pos == Position.PITCHER:
-                 gen_player.stats.velocity += random.randint(0, 3)
-                 gen_player.stats.stuff = min(99, int(gen_player.stats.stuff * 1.05))
-                 gen_player.stats.control = min(99, int(gen_player.stats.control * 1.05))
-            else:
-                 gen_player.stats.contact = min(99, int(gen_player.stats.contact * 1.05))
-                 gen_player.stats.power = min(99, int(gen_player.stats.power * 1.05))
-
             country = random.choice(countries)
-            total = random.randint(50, 1000) * 1000000
-            bonus = int(total * random.uniform(0.1, 0.4))
-            bonus = (bonus // 1000000) * 1000000
-            salary = total - bonus
-            salary = (salary // 1000000) * 1000000
-            if salary < 10000000: salary = 10000000
-
-            if gen_player.age < 24: pot_base = 65 
-            elif gen_player.age < 30: pot_base = 55
+            salary = gen_player.salary
+            bonus = gen_player.contract_bonus
+            
+            if gen_player.age < 30: pot_base = 55
             else: pot_base = 40
             pot = max(1, min(99, int(random.gauss(pot_base, 15))))
 
@@ -1953,7 +2011,46 @@ class ForeignPlayerScoutingPage(QWidget):
                 years_demand=random.choice([1, 1, 1, 2, 2, 3]),
                 interest_level=random.randint(30, 80)
             )
-            self.candidates.append(candidate)
+            candidate.is_developmental_candidate = False
+            self.main_roster_candidates.append(candidate)
+        
+        # 育成層を生成 (30人)
+        for i in range(30):
+            pos = random.choice(positions)
+            # 強制的に育成層を生成 (年齢18-25)
+            gen_player = self._generate_developmental_candidate(pos)
+            
+            country = random.choice(countries)
+            salary = gen_player.salary
+            bonus = gen_player.contract_bonus
+            
+            if gen_player.age < 22: pot_base = 70
+            elif gen_player.age < 24: pot_base = 65
+            else: pot_base = 55
+            pot = max(1, min(99, int(random.gauss(pot_base, 15))))
+
+            candidate = ForeignPlayerCandidate(
+                id=50 + i,  # IDが被らないようにオフセット
+                name=gen_player.name,
+                position=gen_player.position,
+                pitch_type=gen_player.pitch_type,
+                age=gen_player.age,
+                country=country,
+                true_stats=gen_player.stats,
+                true_potential=pot,
+                salary_demand=salary,
+                bonus_demand=bonus,
+                years_demand=random.choice([1, 1, 2]),
+                interest_level=random.randint(30, 80)
+            )
+            candidate.is_developmental_candidate = True
+            self.developmental_candidates.append(candidate)
+        
+        # 現在のタブに応じて表示リストを設定
+        if self.current_tab_mode == "main_roster":
+            self.candidates = self.main_roster_candidates
+        else:
+            self.candidates = self.developmental_candidates
             
         self._refresh_table()
         self._update_detail_panel()
@@ -1963,6 +2060,42 @@ class ForeignPlayerScoutingPage(QWidget):
             try:
                 self.last_reset_year = int(self.game_state.current_date.split('-')[0])
             except: pass
+    
+    def _generate_main_roster_candidate(self, pos: Position):
+        """即戦力外国人を生成 (年齢26-35, 総合力330+)"""
+        import player_generator
+        from models import Position as ModelPosition
+        # create_foreign_free_agentを呼び出すが、確実に即戦力層になるまで再試行
+        for _ in range(20):
+            player = player_generator.create_foreign_free_agent(pos)
+            # 年齢と総合力の両方をチェック
+            if pos == ModelPosition.PITCHER:
+                overall = player.stats.overall_pitching()
+            else:
+                overall = player.stats.overall_batting(pos)
+            if player.age >= 26 and overall >= 330:
+                return player
+        # 20回試してダメなら最後のものを使う（年齢だけ調整）
+        player.age = max(26, player.age)
+        return player
+    
+    def _generate_developmental_candidate(self, pos: Position):
+        """育成外国人を生成 (年齢18-25, 総合力330未満)"""
+        import player_generator
+        from models import Position as ModelPosition
+        # create_foreign_free_agentを呼び出すが、確実に育成層になるまで再試行
+        for _ in range(20):
+            player = player_generator.create_foreign_free_agent(pos)
+            # 年齢と総合力の両方をチェック
+            if pos == ModelPosition.PITCHER:
+                overall = player.stats.overall_pitching()
+            else:
+                overall = player.stats.overall_batting(pos)
+            if player.age <= 25 and overall < 330:
+                return player
+        # 20回試してダメなら最後のものを使う（年齢だけ調整）
+        player.age = min(25, player.age)
+        return player
 
     def advance_day(self):
         # Clear daily negotiation limit
@@ -1971,7 +2104,9 @@ class ForeignPlayerScoutingPage(QWidget):
         # Auto-assign unassigned scouts to best candidates
         self._auto_assign_scouts()
         
-        for candidate in self.candidates:
+        # 両方のリストを更新 (即戦力と育成)
+        all_candidates = self.main_roster_candidates + self.developmental_candidates
+        for candidate in all_candidates:
             if candidate.scouting_status == ScoutingStatus.IN_PROGRESS and candidate.assigned_scout:
                 progress = candidate.assigned_scout.daily_progress
                 candidate.scout_level = min(100, candidate.scout_level + progress)
@@ -1991,29 +2126,44 @@ class ForeignPlayerScoutingPage(QWidget):
             self._update_detail_panel()
     
     def _auto_assign_scouts(self):
-        """Automatically assign free scouts to the best unassigned candidates"""
+        """Automatically assign free scouts to the best unassigned candidates (両リストから均等に)"""
         # Get free scouts
         free_scouts = [s for s in self.scouts if s.is_available]
         if not free_scouts:
             return
         
-        # Get candidates that need scouting (not scouted, not being scouted)
-        unscouted = [c for c in self.candidates 
-                     if c.scouting_status == ScoutingStatus.NOT_STARTED 
-                     and not c.assigned_scout]
+        # 両方のリストから未調査候補を取得
+        main_unscouted = [c for c in self.main_roster_candidates 
+                         if c.scouting_status == ScoutingStatus.NOT_STARTED 
+                         and not c.assigned_scout]
+        dev_unscouted = [c for c in self.developmental_candidates 
+                        if c.scouting_status == ScoutingStatus.NOT_STARTED 
+                        and not c.assigned_scout]
         
-        if not unscouted:
-            return
+        # 即戦力を優先してソート (推定能力順)
+        main_unscouted.sort(key=lambda x: x.get_max_estimated_overall(), reverse=True)
+        dev_unscouted.sort(key=lambda x: x.get_max_estimated_overall(), reverse=True)
         
-        # Sort by interest level (highest first) for best candidates
-        unscouted.sort(key=lambda x: x.interest_level, reverse=True)
+        # 交互に割り当て (即戦力優先: 2:1の比率)
+        unscouted_queue = []
+        main_idx, dev_idx = 0, 0
+        while main_idx < len(main_unscouted) or dev_idx < len(dev_unscouted):
+            # 即戦力を2つ追加
+            for _ in range(2):
+                if main_idx < len(main_unscouted):
+                    unscouted_queue.append(main_unscouted[main_idx])
+                    main_idx += 1
+            # 育成を1つ追加
+            if dev_idx < len(dev_unscouted):
+                unscouted_queue.append(dev_unscouted[dev_idx])
+                dev_idx += 1
         
         # Assign scouts to top candidates
         for scout in free_scouts:
-            if not unscouted:
+            if not unscouted_queue:
                 break
             
-            candidate = unscouted.pop(0)
+            candidate = unscouted_queue.pop(0)
             candidate.assigned_scout = scout
             candidate.scouting_status = ScoutingStatus.IN_PROGRESS
             scout.is_available = False
@@ -2024,8 +2174,196 @@ class ForeignPlayerScoutingPage(QWidget):
 # 3. Trade Page
 # ========================================
 
+class DragPlayerTable(QTableWidget):
+    """ドラッグ時にplayer_idxとチーム情報をmimeDataに含めるテーブル"""
+    row_double_clicked = Signal(int)
+    
+    # ソート不可列: 0=名前, 1=Pos
+    NON_SORTABLE_COLS = [0, 1]
+    
+    def __init__(self, parent=None, is_self_team=True):
+        super().__init__(parent)
+        self.theme = get_theme()
+        self.is_self_team = is_self_team  # True=自チーム, False=相手チーム
+        self.setDragEnabled(True)
+        self.setAcceptDrops(False)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        
+        # 手動ソート制御（特定列のソートを無効化するため）
+        self.setSortingEnabled(False)
+        self.horizontalHeader().setSectionsClickable(True)
+        self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self._sort_col = -1
+        self._sort_order = Qt.DescendingOrder
+        
+        self.setAlternatingRowColors(True)
+        self.setShowGrid(False)
+        self.verticalHeader().setVisible(False)
+        self.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {self.theme.bg_card};
+                color: {self.theme.text_primary};
+                border: none;
+                gridline-color: {self.theme.border};
+            }}
+            QTableWidget::item {{
+                padding: 4px;
+                border-bottom: 1px solid {self.theme.border};
+            }}
+            QTableWidget::item:selected {{
+                background-color: {self.theme.accent_blue};
+                color: white;
+            }}
+            QHeaderView::section {{
+                background-color: {self.theme.bg_card_elevated};
+                color: {self.theme.text_secondary};
+                padding: 6px;
+                border: none;
+                font-weight: bold;
+            }}
+        """)
+    
+    def _on_header_clicked(self, logicalIndex: int):
+        """カラムヘッダークリック時のソート処理"""
+        # 名前・ポジション列はソート不可
+        if logicalIndex in self.NON_SORTABLE_COLS:
+            return
+        
+        # 同じ列ならトグル、違う列ならデフォルト降順
+        if self._sort_col == logicalIndex:
+            if self._sort_order == Qt.DescendingOrder:
+                self._sort_order = Qt.AscendingOrder
+            else:
+                self._sort_order = Qt.DescendingOrder
+        else:
+            self._sort_col = logicalIndex
+            self._sort_order = Qt.DescendingOrder
+        
+        self.sortItems(self._sort_col, self._sort_order)
+        self.horizontalHeader().setSortIndicator(self._sort_col, self._sort_order)
+    
+    def startDrag(self, supportedActions):
+        """Override to provide player_idx and team info in mime data with visual"""
+        row = self.currentRow()
+        if row < 0:
+            return
+        
+        name_item = self.item(row, 0)
+        if not name_item:
+            return
+        
+        player_idx = name_item.data(Qt.UserRole)
+        if player_idx is None:
+            return
+        
+        # プレイヤー名を取得
+        player_name = name_item.text()
+        
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        # フォーマット: "player_idx:is_self_team" (例: "5:True")
+        mime_data.setText(f"{player_idx}:{self.is_self_team}")
+        drag.setMimeData(mime_data)
+        
+        # ドラッグ中に表示するピクスマップを作成
+        from PySide6.QtGui import QPixmap
+        pixmap = QPixmap(150, 30)
+        pixmap.fill(QColor(self.theme.bg_card_elevated))
+        painter = QPainter(pixmap)
+        painter.setPen(QColor(self.theme.text_primary))
+        painter.setFont(QFont("Meiryo", 10, QFont.Bold))
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, player_name)
+        painter.end()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(pixmap.rect().center())
+        
+        drag.exec(Qt.CopyAction)
+
+
+class DropZoneFrame(QFrame):
+    """ドロップを受け付けるフレーム（チーム検証付き）"""
+    player_dropped = Signal(int)  # player_idx
+    
+    def __init__(self, parent=None, accepts_self_team=True):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.theme = get_theme()
+        self.accepts_self_team = accepts_self_team  # True=自チーム選手のみ受け付け
+        self._normal_style = ""
+        self._hover_style = ""
+    
+    def set_styles(self, normal: str, hover: str):
+        self._normal_style = normal
+        self._hover_style = hover
+        self.setStyleSheet(normal)
+    
+    def _parse_mime_data(self, mime_data):
+        """mimeDataをパースしてplayer_idxとis_self_teamを返す"""
+        if not mime_data.hasText():
+            return None, None
+        text = mime_data.text()
+        try:
+            parts = text.split(":")
+            if len(parts) == 2:
+                player_idx = int(parts[0])
+                is_self_team = parts[1] == "True"
+                return player_idx, is_self_team
+        except ValueError:
+            pass
+        return None, None
+    
+    def dragEnterEvent(self, event):
+        player_idx, is_self_team = self._parse_mime_data(event.mimeData())
+        if player_idx is None:
+            event.ignore()
+            return
+        
+        # チーム検証: 自チームゾーンには自チーム、相手ゾーンには相手チームのみ
+        if is_self_team == self.accepts_self_team:
+            event.acceptProposedAction()
+            self.setStyleSheet(self._hover_style)
+        else:
+            # 不正なチーム→無視（禁止カーソルなし）
+            event.ignore()
+    
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(self._normal_style)
+    
+    def dropEvent(self, event):
+        self.setStyleSheet(self._normal_style)
+        player_idx, is_self_team = self._parse_mime_data(event.mimeData())
+        
+        if player_idx is None:
+            event.ignore()
+            return
+        
+        # チーム検証
+        if is_self_team == self.accepts_self_team:
+            self.player_dropped.emit(player_idx)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
 class TradePage(QWidget):
-    """トレードページ"""
+    """トレードページ (Order Page Style - 完全リニューアル)
+    
+    特徴:
+    - 各チーム最大3選手まで
+    - 金銭調整（100万円単位）
+    - 支配下70人制限チェック
+    - ドラッグ＆ドロップ選手選択
+    - ダブルクリックで選手詳細へ
+    - 総合力ソート・ポジション絞り込み
+    """
+    
+    player_detail_requested = Signal(object)  # 選手詳細画面へ遷移
+    
+    MAX_TRADE_PLAYERS = 3  # 各チーム最大選手数
+    MAX_SHIHAIKA = 70  # 支配下登録上限
+    MONEY_UNIT = 1000000  # 100万円単位
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2034,12 +2372,11 @@ class TradePage(QWidget):
         self.current_team = None
         self.target_team = None
 
-        self.offered_players: List[int] = []  # 提供する選手のインデックス
-        self.requested_players: List[int] = []  # 要求する選手のインデックス
+        self.offered_players: List[int] = []  # 自チームから放出する選手
+        self.requested_players: List[int] = []  # 相手チームから獲得する選手
+        self.money_adjustment: int = 0  # 自チームが支払う金額（負なら受け取る）
 
         self._setup_ui()
-        
-        # Hide initially to prevent appearing at (0,0) before being properly added to layout
         self.hide()
 
     def _setup_ui(self):
@@ -2051,158 +2388,79 @@ class TradePage(QWidget):
         toolbar = self._create_toolbar()
         layout.addWidget(toolbar)
 
-        # メインコンテンツ
-        main_widget = QWidget()
-        main_layout = QHBoxLayout(main_widget)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(12)
+        # メインコンテンツ（3カラム）
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet(f"QSplitter::handle {{ background: {self.theme.border}; width: 2px; }}")
 
-        # 左: 自チーム
-        self_panel = self._create_team_panel("自チーム (提供)", is_self=True)
-        main_layout.addWidget(self_panel, 1)
+        # 左: 自チーム選手リスト
+        left_panel = self._create_player_list_panel("自チーム", is_self=True)
+        splitter.addWidget(left_panel)
 
-        # 中央: トレード操作
-        center_panel = self._create_trade_center()
-        main_layout.addWidget(center_panel)
+        # 中央: トレード内容
+        center_panel = self._create_trade_content_panel()
+        splitter.addWidget(center_panel)
 
-        # 右: 相手チーム
-        target_panel = self._create_team_panel("相手チーム (獲得)", is_self=False)
-        main_layout.addWidget(target_panel, 1)
+        # 右: 相手チーム選手リスト
+        right_panel = self._create_player_list_panel("相手チーム", is_self=False)
+        splitter.addWidget(right_panel)
 
-        layout.addWidget(main_widget)
+        splitter.setSizes([350, 300, 350])
+        layout.addWidget(splitter)
 
     def _create_toolbar(self) -> QWidget:
         toolbar = QFrame()
-        toolbar.setFixedHeight(50)
+        toolbar.setFixedHeight(55)
         toolbar.setStyleSheet(f"background-color: {self.theme.bg_card}; border-bottom: 1px solid {self.theme.border};")
 
         layout = QHBoxLayout(toolbar)
-        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setContentsMargins(16, 0, 16, 0)
 
+        # タイトル
         title = QLabel("トレード")
-        title.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 16px;")
+        title.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 18px;")
         layout.addWidget(title)
 
-        layout.addSpacing(20)
+        layout.addSpacing(30)
 
+        # 相手チーム選択
         layout.addWidget(QLabel("相手チーム:"))
         self.team_combo = QComboBox()
-        self.team_combo.setMinimumWidth(200)
-        self.team_combo.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 4px;")
+        self.team_combo.setMinimumWidth(180)
+        self.team_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {self.theme.bg_input}; 
+                color: {self.theme.text_primary}; 
+                border: 1px solid {self.theme.border}; 
+                padding: 6px 12px;
+                border-radius: 4px;
+            }}
+        """)
         self.team_combo.currentIndexChanged.connect(self._on_target_team_changed)
         layout.addWidget(self.team_combo)
 
         layout.addStretch()
 
-        return toolbar
-
-    def _create_team_panel(self, title: str, is_self: bool) -> QWidget:
-        panel = QFrame()
-        color = self.theme.accent_blue if is_self else self.theme.accent_orange
-        panel.setStyleSheet(f"background-color: {self.theme.bg_card}; border: 2px solid {color}; border-radius: 4px;")
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-
-        header = QLabel(title)
-        header.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
-        layout.addWidget(header)
-
-        # 選手リスト
-        if is_self:
-            self.self_table = ContractsTableWidget()
-            table = self.self_table
-        else:
-            self.target_table = ContractsTableWidget()
-            table = self.target_table
-
-        cols = ["名前", "Pos", "年齢", "総合"]
-        widths = [100, 40, 40, 50]
-
-        table.setColumnCount(len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        for i, w in enumerate(widths):
-            table.setColumnWidth(i, w)
-
-        table.row_double_clicked.connect(
-            lambda row: self._add_to_offer(row, is_self)
-        )
-
-        layout.addWidget(table, 2)
-
-        # トレード対象リスト
-        offer_label = QLabel("トレード対象:")
-        offer_label.setStyleSheet(f"color: {self.theme.text_secondary}; margin-top: 8px;")
-        layout.addWidget(offer_label)
-
-        if is_self:
-            self.self_offer_table = ContractsTableWidget()
-            offer_table = self.self_offer_table
-        else:
-            self.target_offer_table = ContractsTableWidget()
-            offer_table = self.target_offer_table
-
-        offer_table.setColumnCount(len(cols))
-        offer_table.setHorizontalHeaderLabels(cols)
-        for i, w in enumerate(widths):
-            offer_table.setColumnWidth(i, w)
-
-        offer_table.setMaximumHeight(150)
-        offer_table.row_double_clicked.connect(
-            lambda row: self._remove_from_offer(row, is_self)
-        )
-
-        layout.addWidget(offer_table, 1)
-
-        # 合計評価
-        if is_self:
-            self.self_value_label = QLabel("合計評価: 0")
-        else:
-            self.target_value_label = QLabel("合計評価: 0")
-
-        value_label = self.self_value_label if is_self else self.target_value_label
-        value_label.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold;")
-        layout.addWidget(value_label)
-
-        return panel
-
-    def _create_trade_center(self) -> QWidget:
-        panel = QWidget()
-        panel.setFixedWidth(150)
-        layout = QVBoxLayout(panel)
-        layout.setAlignment(Qt.AlignCenter)
-        layout.setSpacing(12)
-
-        layout.addStretch()
-
-        # 評価バランス表示
-        self.balance_label = QLabel("評価差: 0")
-        self.balance_label.setAlignment(Qt.AlignCenter)
-        self.balance_label.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 16px; font-weight: bold;")
-        layout.addWidget(self.balance_label)
-
-        self.balance_indicator = QLabel("---")
-        self.balance_indicator.setAlignment(Qt.AlignCenter)
-        self.balance_indicator.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 14px;")
-        layout.addWidget(self.balance_indicator)
+        # 支配下人数表示
+        self.roster_info_label = QLabel("支配下: --/70人")
+        self.roster_info_label.setStyleSheet(f"color: {self.theme.text_secondary}; font-weight: bold;")
+        layout.addWidget(self.roster_info_label)
 
         layout.addSpacing(20)
 
-        # トレードボタン
+        # トレード提案ボタン
         self.trade_btn = QPushButton("トレード提案")
         self.trade_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {self.theme.accent_blue};
-                color: white;
+                background-color: {self.theme.primary};
+                color: {self.theme.text_highlight};
                 border: none;
                 border-radius: 4px;
-                padding: 12px 24px;
+                padding: 8px 20px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 13px;
             }}
             QPushButton:hover {{
-                background-color: {self.theme.accent_blue_hover};
+                background-color: {self.theme.primary_hover};
             }}
             QPushButton:disabled {{
                 background-color: {self.theme.bg_input};
@@ -2217,22 +2475,237 @@ class TradePage(QWidget):
         clear_btn = QPushButton("クリア")
         clear_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {self.theme.bg_card};
-                color: {self.theme.text_secondary};
-                border: 1px solid {self.theme.border};
+                background-color: transparent;
+                color: {self.theme.error};
+                border: 1px solid {self.theme.error};
                 border-radius: 4px;
                 padding: 8px 16px;
             }}
             QPushButton:hover {{
-                background-color: {self.theme.bg_hover};
+                background-color: {self.theme.error}22;
             }}
         """)
         clear_btn.clicked.connect(self._clear_trade)
         layout.addWidget(clear_btn)
 
+        return toolbar
+
+    def _create_player_list_panel(self, title: str, is_self: bool) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # ヘッダー
+        color = self.theme.accent_blue if is_self else self.theme.accent_orange
+        header = QLabel(title)
+        header.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 14px;")
+        layout.addWidget(header)
+
+        # フィルターのみ（ソートはヘッダークリック）
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(6)
+
+        # ポジションフィルター
+        pos_combo = QComboBox()
+        pos_combo.addItem("全ポジション", None)
+        pos_combo.addItem("投手", "投手")
+        pos_combo.addItem("捕手", "捕手")
+        pos_combo.addItem("内野手", "内野手")
+        pos_combo.addItem("外野手", "外野手")
+        pos_combo.setStyleSheet(f"background: {self.theme.bg_input}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 3px;")
+        pos_combo.setMaximumWidth(100)
+        filter_layout.addWidget(pos_combo)
+        filter_layout.addStretch()
+
+        layout.addLayout(filter_layout)
+
+        # 選手テーブル (ドラッグ専用 - DragPlayerTable使用)
+        table = DragPlayerTable(is_self_team=is_self)
+        
+        cols = ["名前", "Pos", "年齢", "総合", "年俸"]
+        widths = [100, 35, 35, 50, 70]
+        
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+        for i, w in enumerate(widths):
+            table.setColumnWidth(i, w)
+        
+        # 最後の列を広げてスペースを消す
+        table.horizontalHeader().setStretchLastSection(True)
+
+        # ダブルクリックで選手詳細へ
+        table.itemDoubleClicked.connect(lambda item: self._on_player_table_double_clicked(item, is_self))
+
+        if is_self:
+            self.self_table = table
+            self.self_pos_filter = pos_combo
+            pos_combo.currentIndexChanged.connect(lambda: self._apply_filter(is_self=True))
+        else:
+            self.target_table = table
+            self.target_pos_filter = pos_combo
+            pos_combo.currentIndexChanged.connect(lambda: self._apply_filter(is_self=False))
+
+        layout.addWidget(table)
+        
+        return panel
+
+    def _on_player_table_double_clicked(self, item, is_self: bool):
+        """ダブルクリックで選手詳細画面へ"""
+        if item is None:
+            return
+        row = item.row()
+        team = self.current_team if is_self else self.target_team
+        table = self.self_table if is_self else self.target_table
+        
+        if not team:
+            return
+            
+        name_item = table.item(row, 0)
+        if name_item:
+            player_idx = name_item.data(Qt.UserRole)
+            if player_idx is not None and 0 <= player_idx < len(team.players):
+                player = team.players[player_idx]
+                self.player_detail_requested.emit(player)
+
+    def _apply_filter(self, is_self: bool):
+        """ソート・フィルターを適用してテーブルを再描画"""
+        if is_self:
+            self._refresh_self_table()
+        else:
+            self._refresh_target_table()
+
+    def _create_trade_content_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setStyleSheet(f"background-color: {self.theme.bg_card};")
+        
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # --- 自チーム放出 ---
+        self_header = QLabel("▼ 放出選手（自チーム）")
+        self_header.setStyleSheet(f"color: {self.theme.accent_blue}; font-weight: bold;")
+        layout.addWidget(self_header)
+
+        self.self_offer_list = DropZoneFrame(accepts_self_team=True)  # 自チーム選手のみ受け付け
+        normal_style = f"background-color: {self.theme.bg_input};"
+        hover_style = f"background-color: {self.theme.accent_blue}; border: 2px dashed white;"
+        self.self_offer_list.set_styles(normal_style, hover_style)
+        self.self_offer_list.setMinimumHeight(100)
+        self.self_offer_list.player_dropped.connect(lambda idx: self._on_drop_player(idx, is_self=True))
+        self.self_offer_layout = QVBoxLayout(self.self_offer_list)
+        self.self_offer_layout.setContentsMargins(8, 8, 8, 8)
+        self.self_offer_layout.setSpacing(4)
+        
+        self.self_offer_placeholder = QLabel("ここにドラッグして放出選手を追加（最大3人）")
+        self.self_offer_placeholder.setStyleSheet(f"color: {self.theme.text_muted}; font-style: italic;")
+        self.self_offer_placeholder.setAlignment(Qt.AlignCenter)
+        self.self_offer_layout.addWidget(self.self_offer_placeholder)
+        
+        layout.addWidget(self.self_offer_list)
+
+        # --- 金銭調整 ---
+        money_frame = QFrame()
+        money_frame.setStyleSheet(f"background-color: {self.theme.bg_card_elevated};")
+        money_layout = QVBoxLayout(money_frame)
+        money_layout.setContentsMargins(10, 10, 10, 10)
+        money_layout.setSpacing(6)
+
+        money_header = QLabel("金銭調整")
+        money_header.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold;")
+        money_layout.addWidget(money_header)
+
+        money_input_layout = QHBoxLayout()
+        money_input_layout.setSpacing(4)
+
+        # QLineEditに変更（編集可能な数値入力）
+        self.money_input = QLineEdit()
+        self.money_input.setText("0")
+        self.money_input.setAlignment(Qt.AlignRight)
+        self.money_input.setMaximumWidth(100)
+        self.money_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {self.theme.bg_input};
+                color: {self.theme.text_primary};
+                border: 1px solid {self.theme.border};
+                padding: 6px;
+                border-radius: 4px;
+            }}
+        """)
+        self.money_input.textChanged.connect(self._on_money_text_changed)
+        money_input_layout.addWidget(self.money_input)
+        
+        # 単位を外に表示
+        money_unit_label = QLabel("百万円")
+        money_unit_label.setStyleSheet(f"color: {self.theme.text_secondary};")
+        money_input_layout.addWidget(money_unit_label)
+        
+        money_input_layout.addStretch()
+        money_layout.addLayout(money_input_layout)
+
+        self.money_desc_label = QLabel("正: 自チーム支払い / 負: 自チーム受取")
+        self.money_desc_label.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 11px;")
+        money_layout.addWidget(self.money_desc_label)
+
+        layout.addWidget(money_frame)
+
+        # --- 相手チーム獲得 ---
+        target_header = QLabel("▲ 獲得選手（相手チーム）")
+        target_header.setStyleSheet(f"color: {self.theme.accent_orange}; font-weight: bold;")
+        layout.addWidget(target_header)
+
+        self.target_offer_list = DropZoneFrame(accepts_self_team=False)  # 相手チーム選手のみ受け付け
+        target_normal = f"background-color: {self.theme.bg_input};"
+        target_hover = f"background-color: {self.theme.accent_orange}; border: 2px dashed white;"
+        self.target_offer_list.set_styles(target_normal, target_hover)
+        self.target_offer_list.setMinimumHeight(100)
+        self.target_offer_list.player_dropped.connect(lambda idx: self._on_drop_player(idx, is_self=False))
+        self.target_offer_layout = QVBoxLayout(self.target_offer_list)
+        self.target_offer_layout.setContentsMargins(8, 8, 8, 8)
+        self.target_offer_layout.setSpacing(4)
+        
+        self.target_offer_placeholder = QLabel("ここにドラッグして獲得選手を追加（最大3人）")
+        self.target_offer_placeholder.setStyleSheet(f"color: {self.theme.text_muted}; font-style: italic;")
+        self.target_offer_placeholder.setAlignment(Qt.AlignCenter)
+        self.target_offer_layout.addWidget(self.target_offer_placeholder)
+        
+        layout.addWidget(self.target_offer_list)
+
+        # --- 評価バランス ---
+        balance_frame = QFrame()
+        balance_frame.setStyleSheet(f"background-color: {self.theme.bg_dark};")
+        balance_layout = QVBoxLayout(balance_frame)
+        balance_layout.setContentsMargins(10, 10, 10, 10)
+
+        self.balance_label = QLabel("評価差: 0")
+        self.balance_label.setAlignment(Qt.AlignCenter)
+        self.balance_label.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 16px; font-weight: bold;")
+        balance_layout.addWidget(self.balance_label)
+
+        self.balance_indicator = QLabel("---")
+        self.balance_indicator.setAlignment(Qt.AlignCenter)
+        self.balance_indicator.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 13px;")
+        balance_layout.addWidget(self.balance_indicator)
+
+        self.success_rate_label = QLabel("成功率: --%")
+        self.success_rate_label.setAlignment(Qt.AlignCenter)
+        self.success_rate_label.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 12px;")
+        balance_layout.addWidget(self.success_rate_label)
+
+        layout.addWidget(balance_frame)
         layout.addStretch()
 
         return panel
+    
+    def _on_money_text_changed(self, text: str):
+        """金銭入力テキスト変更時"""
+        try:
+            value = int(text) if text else 0
+            self.money_adjustment = value * self.MONEY_UNIT
+        except ValueError:
+            self.money_adjustment = 0
+        self._update_trade_balance()
 
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
@@ -2241,6 +2714,7 @@ class TradePage(QWidget):
             self.current_team = game_state.player_team
             self._update_team_combo()
             self._refresh_self_table()
+            self._update_roster_info()
 
     def _update_team_combo(self):
         """チームコンボボックスを更新"""
@@ -2259,54 +2733,127 @@ class TradePage(QWidget):
         self._refresh_target_table()
         self._clear_trade()
 
+    def _update_roster_info(self):
+        """支配下人数表示を更新"""
+        if not self.current_team:
+            self.roster_info_label.setText("支配下: --/70人")
+            return
+        
+        shihaika = len([p for p in self.current_team.players if not p.is_developmental])
+        color = self.theme.success if shihaika < self.MAX_SHIHAIKA else self.theme.danger
+        self.roster_info_label.setText(f"支配下: <span style='color:{color}'>{shihaika}</span>/{self.MAX_SHIHAIKA}人")
+
     def _refresh_self_table(self):
-        """自チームテーブルを更新"""
+        """自チームテーブルを更新（フィルター適用）"""
         if not self.current_team:
             return
-
         players = [p for p in self.current_team.players if not p.is_developmental]
+        
+        # ポジションフィルター適用
+        if hasattr(self, 'self_pos_filter'):
+            pos_filter = self.self_pos_filter.currentData()
+            if pos_filter:
+                players = [p for p in players if self._match_position_filter(p, pos_filter)]
+        
+        # ソートはテーブルヘッダークリックでQtが処理
         self._fill_player_table(self.self_table, players, self.current_team)
 
     def _refresh_target_table(self):
-        """相手チームテーブルを更新"""
+        """相手チームテーブルを更新（フィルター適用）"""
         if not self.target_team:
             self.target_table.setRowCount(0)
             return
-
         players = [p for p in self.target_team.players if not p.is_developmental]
+        
+        # ポジションフィルター適用
+        if hasattr(self, 'target_pos_filter'):
+            pos_filter = self.target_pos_filter.currentData()
+            if pos_filter:
+                players = [p for p in players if self._match_position_filter(p, pos_filter)]
+        
+        # ソートはテーブルヘッダークリックでQtが処理
         self._fill_player_table(self.target_table, players, self.target_team)
+    
+    def _match_position_filter(self, player, filter_name: str) -> bool:
+        """ポジションフィルターに一致するか"""
+        pos_str = short_pos_name(player.position)
+        if filter_name == "投手":
+            return pos_str == "投"
+        elif filter_name == "捕手":
+            return pos_str == "捕"
+        elif filter_name == "内野手":
+            return pos_str in ["一", "二", "三", "遊"]
+        elif filter_name == "外野手":
+            return pos_str in ["左", "中", "右", "外"]
+        return True
 
-    def _fill_player_table(self, table: ContractsTableWidget, players: List[Player], team: Team):
-        """選手テーブルを埋める"""
+    def _fill_player_table(self, table: DragPlayerTable, players: List[Player], team: Team):
+        """選手テーブルを埋める（SortableTableWidgetItem使用）"""
         table.setRowCount(len(players))
 
         for row, player in enumerate(players):
             player_idx = team.players.index(player)
 
-            # 名前
-            name_item = create_text_item(player.name, Qt.AlignLeft | Qt.AlignVCenter)
+            # 名前 (ソート不可だがplayer_idxを保持)
+            name_item = SortableTableWidgetItem(player.name)
+            name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             name_item.setData(Qt.UserRole, player_idx)
             table.setItem(row, 0, name_item)
 
-            # ポジション
-            pos_item = create_text_item(short_pos_name(player.position))
+            # ポジション (ソート不可)
+            pos_item = SortableTableWidgetItem(short_pos_name(player.position))
+            pos_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 1, pos_item)
 
-            # 年齢
-            age_item = create_text_item(str(player.age))
+            # 年齢 (数値ソート用にUserRoleに値設定)
+            age_item = SortableTableWidgetItem(str(player.age))
+            age_item.setData(Qt.UserRole, player.age)
+            age_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 2, age_item)
 
-            # 総合
+            # 総合 (★ゴールド表記、数値ソート用)
             ovr = player.overall_rating
-            ovr_item = create_text_item(f"★{ovr}")
-            ovr_item.setForeground(QColor("#FFD700"))
+            ovr_item = SortableTableWidgetItem(f"★{ovr}")
+            ovr_item.setData(Qt.UserRole, ovr)
+            ovr_item.setForeground(QColor("#FFD700"))  # ゴールド
             font = ovr_item.font()
             font.setBold(True)
             ovr_item.setFont(font)
+            ovr_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 3, ovr_item)
 
+            # 年俸（百万円、数値ソート用）
+            salary_mil = getattr(player, 'salary', 0) // 1000000
+            salary_item = SortableTableWidgetItem(f"{salary_mil}百万")
+            salary_item.setData(Qt.UserRole, salary_mil)
+            salary_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(row, 4, salary_item)
+
+    def _on_drop_player(self, player_idx: int, is_self: bool):
+        """ドロップ時に選手をトレード対象に追加"""
+        if is_self:
+            offer_list = self.offered_players
+            team = self.current_team
+        else:
+            offer_list = self.requested_players
+            team = self.target_team
+        
+        if not team:
+            return
+            
+        if player_idx is None or player_idx in offer_list:
+            return
+        
+        if len(offer_list) >= self.MAX_TRADE_PLAYERS:
+            QMessageBox.warning(self, "上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。")
+            return
+        
+        offer_list.append(player_idx)
+        self._refresh_offer_display()
+        self._update_trade_balance()
+
     def _add_to_offer(self, row: int, is_self: bool):
-        """トレード対象に追加"""
+        """選手をトレード対象に追加"""
         if is_self:
             table = self.self_table
             offer_list = self.offered_players
@@ -2327,70 +2874,100 @@ class TradePage(QWidget):
         if player_idx is None or player_idx in offer_list:
             return
 
-        if len(offer_list) >= 5:
-            QMessageBox.warning(self, "上限", "一度にトレードできる選手は5人までです。")
+        if len(offer_list) >= self.MAX_TRADE_PLAYERS:
+            QMessageBox.warning(self, "上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。")
             return
 
         offer_list.append(player_idx)
-        self._refresh_offer_tables()
+        self._refresh_offer_display()
         self._update_trade_balance()
 
-    def _remove_from_offer(self, row: int, is_self: bool):
-        """トレード対象から削除"""
+    def _remove_from_offer(self, player_idx: int, is_self: bool):
+        """選手をトレード対象から削除"""
         if is_self:
-            offer_table = self.self_offer_table
             offer_list = self.offered_players
         else:
-            offer_table = self.target_offer_table
             offer_list = self.requested_players
 
-        item = offer_table.item(row, 0)
-        if not item:
-            return
-
-        player_idx = item.data(Qt.UserRole)
         if player_idx in offer_list:
             offer_list.remove(player_idx)
 
-        self._refresh_offer_tables()
+        self._refresh_offer_display()
         self._update_trade_balance()
 
-    def _refresh_offer_tables(self):
-        """トレード対象テーブルを更新"""
+    def _refresh_offer_display(self):
+        """トレード対象表示を更新"""
         # 自チーム
-        if self.current_team:
-            players = [self.current_team.players[i] for i in self.offered_players if 0 <= i < len(self.current_team.players)]
-            self._fill_offer_table(self.self_offer_table, players, self.current_team)
+        self._clear_offer_layout(self.self_offer_layout)
+        if self.offered_players and self.current_team:
+            self.self_offer_placeholder.hide()
+            for idx in self.offered_players:
+                if 0 <= idx < len(self.current_team.players):
+                    p = self.current_team.players[idx]
+                    row = self._create_offer_row(p, idx, is_self=True)
+                    self.self_offer_layout.addWidget(row)
+        else:
+            self.self_offer_placeholder.show()
 
         # 相手チーム
-        if self.target_team:
-            players = [self.target_team.players[i] for i in self.requested_players if 0 <= i < len(self.target_team.players)]
-            self._fill_offer_table(self.target_offer_table, players, self.target_team)
+        self._clear_offer_layout(self.target_offer_layout)
+        if self.requested_players and self.target_team:
+            self.target_offer_placeholder.hide()
+            for idx in self.requested_players:
+                if 0 <= idx < len(self.target_team.players):
+                    p = self.target_team.players[idx]
+                    row = self._create_offer_row(p, idx, is_self=False)
+                    self.target_offer_layout.addWidget(row)
+        else:
+            self.target_offer_placeholder.show()
 
-    def _fill_offer_table(self, table: ContractsTableWidget, players: List[Player], team: Team):
-        """オファーテーブルを埋める"""
-        table.setRowCount(len(players))
+    def _clear_offer_layout(self, layout):
+        """レイアウト内のウィジェットをクリア（プレースホルダー以外）"""
+        for i in reversed(range(layout.count())):
+            widget = layout.itemAt(i).widget()
+            if widget and widget not in (self.self_offer_placeholder, self.target_offer_placeholder):
+                widget.deleteLater()
 
-        for row, player in enumerate(players):
-            player_idx = team.players.index(player)
+    def _create_offer_row(self, player, player_idx: int, is_self: bool) -> QWidget:
+        """トレード対象選手の行を作成"""
+        row = QFrame()
+        row.setStyleSheet(f"background-color: {self.theme.bg_card}; border-radius: 3px;")
+        
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
 
-            name_item = create_text_item(player.name, Qt.AlignLeft | Qt.AlignVCenter)
-            name_item.setData(Qt.UserRole, player_idx)
-            table.setItem(row, 0, name_item)
+        # 選手情報
+        info = QLabel(f"{player.name} ({short_pos_name(player.position)}) ★{player.overall_rating}")
+        info.setStyleSheet(f"color: {self.theme.text_primary};")
+        layout.addWidget(info)
 
-            pos_item = create_text_item(short_pos_name(player.position))
-            table.setItem(row, 1, pos_item)
+        layout.addStretch()
 
-            age_item = create_text_item(str(player.age))
-            table.setItem(row, 2, age_item)
+        # 削除ボタン
+        remove_btn = QPushButton("×")
+        remove_btn.setFixedSize(24, 24)
+        remove_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme.danger};
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme.danger_hover};
+            }}
+        """)
+        remove_btn.clicked.connect(lambda: self._remove_from_offer(player_idx, is_self))
+        layout.addWidget(remove_btn)
 
-            ovr = player.overall_rating
-            ovr_item = create_text_item(f"★{ovr}")
-            ovr_item.setForeground(QColor("#FFD700"))
-            font = ovr_item.font()
-            font.setBold(True)
-            ovr_item.setFont(font)
-            table.setItem(row, 3, ovr_item)
+        return row
+
+    def _on_money_changed(self, value):
+        """金銭調整値が変更された"""
+        self.money_adjustment = value * self.MONEY_UNIT
+        self._update_trade_balance()
 
     def _update_trade_balance(self):
         """トレードバランスを更新"""
@@ -2407,61 +2984,92 @@ class TradePage(QWidget):
                 if 0 <= idx < len(self.target_team.players):
                     target_value += self.target_team.players[idx].overall_rating
 
-        self.self_value_label.setText(f"合計評価: {self_value}")
-        self.target_value_label.setText(f"合計評価: {target_value}")
+        # 金銭を評価値に換算（1億円 = 10ポイント）
+        money_value = self.money_adjustment // 10000000  # 1億円単位
 
-        diff = self_value - target_value
+        # 自チームが支払う金銭は自チーム評価に加算
+        adjusted_self = self_value + money_value
+
+        diff = adjusted_self - target_value
         self.balance_label.setText(f"評価差: {diff:+d}")
 
+        # 成功率計算
+        if diff >= 100:
+            base_chance = 95
+        elif diff >= 50:
+            base_chance = 80
+        elif diff >= 20:
+            base_chance = 65
+        elif diff >= 0:
+            base_chance = 50
+        elif diff >= -20:
+            base_chance = 35
+        elif diff >= -50:
+            base_chance = 20
+        else:
+            base_chance = 5
+
         if diff >= 50:
-            self.balance_indicator.setText("相手有利")
-            self.balance_indicator.setStyleSheet(f"color: {self.theme.success}; font-size: 14px;")
+            self.balance_indicator.setText("相手有利 (高確率)")
+            self.balance_indicator.setStyleSheet(f"color: {self.theme.success}; font-size: 13px;")
         elif diff >= 10:
             self.balance_indicator.setText("やや相手有利")
-            self.balance_indicator.setStyleSheet(f"color: {self.theme.success}; font-size: 14px;")
+            self.balance_indicator.setStyleSheet(f"color: {self.theme.success}; font-size: 13px;")
         elif diff >= -10:
             self.balance_indicator.setText("均衡")
-            self.balance_indicator.setStyleSheet(f"color: {self.theme.warning}; font-size: 14px;")
+            self.balance_indicator.setStyleSheet(f"color: {self.theme.warning}; font-size: 13px;")
         elif diff >= -50:
             self.balance_indicator.setText("やや自チーム有利")
-            self.balance_indicator.setStyleSheet(f"color: {self.theme.danger}; font-size: 14px;")
+            self.balance_indicator.setStyleSheet(f"color: {self.theme.accent_orange}; font-size: 13px;")
         else:
-            self.balance_indicator.setText("自チーム有利")
-            self.balance_indicator.setStyleSheet(f"color: {self.theme.danger}; font-size: 14px;")
+            self.balance_indicator.setText("自チーム有利 (低確率)")
+            self.balance_indicator.setStyleSheet(f"color: {self.theme.danger}; font-size: 13px;")
 
-        # トレードボタン有効化
-        self.trade_btn.setEnabled(
-            len(self.offered_players) > 0 and
-            len(self.requested_players) > 0
-        )
+        self.success_rate_label.setText(f"成功率: 約{base_chance}%")
+
+        # ボタン有効化条件
+        can_trade = (len(self.offered_players) > 0 or self.money_adjustment > 0) and len(self.requested_players) > 0
+        self.trade_btn.setEnabled(can_trade)
 
     def _propose_trade(self):
         """トレード提案"""
         if not self.current_team or not self.target_team:
             return
 
-        if not self.offered_players or not self.requested_players:
+        if not self.requested_players:
             return
 
-        # トレード成功率計算
+        # 支配下上限チェック
+        current_shihaika = len([p for p in self.current_team.players if not p.is_developmental])
+        net_change = len(self.requested_players) - len(self.offered_players)
+        
+        if current_shihaika + net_change > self.MAX_SHIHAIKA:
+            QMessageBox.warning(self, "登録枠超過", 
+                f"このトレードが成立すると支配下登録が{self.MAX_SHIHAIKA}人を超えます。\n"
+                f"現在: {current_shihaika}人 + 獲得{len(self.requested_players)}人 - 放出{len(self.offered_players)}人 = {current_shihaika + net_change}人\n"
+                "先に選手を自由契約にするか、放出選手を追加してください。")
+            return
+
+        # 成功率計算
         self_value = sum(self.current_team.players[i].overall_rating for i in self.offered_players if 0 <= i < len(self.current_team.players))
         target_value = sum(self.target_team.players[i].overall_rating for i in self.requested_players if 0 <= i < len(self.target_team.players))
+        
+        money_value = self.money_adjustment // 10000000
+        adjusted_self = self_value + money_value
+        diff = adjusted_self - target_value
 
-        diff = self_value - target_value
-
-        # 基本成功率
         if diff >= 100:
-            base_chance = 90
+            base_chance = 95
         elif diff >= 50:
-            base_chance = 75
+            base_chance = 80
         elif diff >= 20:
-            base_chance = 60
+            base_chance = 65
         elif diff >= 0:
-            base_chance = 45
+            base_chance = 50
         elif diff >= -20:
-            base_chance = 30
+            base_chance = 35
         elif diff >= -50:
-            base_chance = 15
+            base_chance = 20
         else:
             base_chance = 5
 
@@ -2476,6 +3084,7 @@ class TradePage(QWidget):
             offered_copy = list(self.offered_players)
             requested_copy = list(self.requested_players)
 
+            # 先に選手を追加
             for idx in offered_copy:
                 if 0 <= idx < len(self.current_team.players):
                     player = self.current_team.players[idx]
@@ -2495,9 +3104,15 @@ class TradePage(QWidget):
                 if 0 <= idx < len(self.target_team.players):
                     self.target_team.players.pop(idx)
 
+            # 金銭処理
+            if self.money_adjustment != 0:
+                self.current_team.budget -= self.money_adjustment
+                self.target_team.budget += self.money_adjustment
+
             self._clear_trade()
             self._refresh_self_table()
             self._refresh_target_table()
+            self._update_roster_info()
         else:
             QMessageBox.warning(self, "トレード不成立",
                 f"相手チームがトレードを拒否しました。\n(成功率: {base_chance}%)")
@@ -2506,7 +3121,9 @@ class TradePage(QWidget):
         """トレード内容をクリア"""
         self.offered_players.clear()
         self.requested_players.clear()
-        self._refresh_offer_tables()
+        self.money_adjustment = 0
+        self.money_input.setText("0")
+        self._refresh_offer_display()
         self._update_trade_balance()
 
 
@@ -2572,6 +3189,9 @@ class ContractsPage(QWidget):
         self.draft_page = DraftScoutingPage(self)
         self.foreign_page = ForeignPlayerScoutingPage(self)
         self.trade_page = TradePage(self)
+        
+        # TradePage's player detail signal to ContractsPage's signal
+        self.trade_page.player_detail_requested.connect(self.go_to_player_detail.emit)
 
         self.stacked_widget.addWidget(self.draft_page)
         self.stacked_widget.addWidget(self.foreign_page)
@@ -2609,6 +3229,14 @@ class ContractsPage(QWidget):
 
         def on_clicked(checked):
             if checked:
+                # 新外国人調査タブ (index 1) の制限期間チェック
+                if index == 1 and self._is_foreign_tab_closed():
+                    QMessageBox.warning(self, "期間外", 
+                        "新外国人調査は8月～10月の間は行えません。\n"
+                        "外国人選手の調査・獲得は11月から7月までの期間に行ってください。")
+                    btn.setChecked(False)
+                    return
+                
                 self.stacked_widget.setCurrentIndex(index)
                 self.current_index = index
                 self._update_nav_buttons(index)
@@ -2622,6 +3250,16 @@ class ContractsPage(QWidget):
         for i, btn in enumerate(self.nav_buttons):
             if i != active_index:
                 btn.setChecked(False)
+    
+    def _is_foreign_tab_closed(self) -> bool:
+        """新外国人調査タブが閉鎖期間かどうかを判定"""
+        if not hasattr(self, 'game_state') or not self.game_state or not self.game_state.current_date:
+            return False
+        try:
+            m = int(self.game_state.current_date.split('-')[1])
+            return m in [8, 9, 10]
+        except:
+            return False
 
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
@@ -2646,19 +3284,49 @@ class ContractsPage(QWidget):
             except: pass
 
     def _update_tab_availability(self):
-        """日付に応じてタブの有効/無効を切り替え"""
+        """日付に応じてタブの有効/無効を切り替え (スタイル変更のみ)"""
         if not hasattr(self, 'game_state') or not self.game_state or not self.game_state.current_date:
             return
             
         try:
-            m = int(self.game_state.current_date.split('-')[1])
-            # Foreign Scout (Index 1) Disabled: 8(Aug), 9(Sep), 10(Oct)
-            is_foreign_disabled = (m in [8, 9, 10])
+            is_foreign_disabled = self._is_foreign_tab_closed()
             
-            # Button 1 is "新外国人調査"
+            # Button 1 is "新外国人調査" - グレーアウト表示 (ただしクリックは可能)
             if len(self.nav_buttons) > 1:
                 btn = self.nav_buttons[1]
-                btn.setEnabled(not is_foreign_disabled)
+                if is_foreign_disabled:
+                    btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {self.theme.bg_card_elevated};
+                            color: {self.theme.text_muted};
+                            border: none;
+                            border-bottom: 3px solid transparent;
+                            padding: 12px 20px;
+                            font-weight: 700;
+                            font-size: 13px;
+                        }}
+                    """)
+                else:
+                    btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {self.theme.bg_card_elevated};
+                            color: {self.theme.text_secondary};
+                            border: none;
+                            border-bottom: 3px solid transparent;
+                            padding: 12px 20px;
+                            font-weight: 700;
+                            font-size: 13px;
+                        }}
+                        QPushButton:hover {{
+                            background-color: {self.theme.bg_hover};
+                            color: {self.theme.text_primary};
+                        }}
+                        QPushButton:checked {{
+                            background-color: {self.theme.bg_dark};
+                            color: {self.theme.text_primary};
+                            border-bottom: 3px solid {self.theme.accent_blue};
+                        }}
+                    """)
                 
                 # If currently selected and disabled, switch to Draft
                 if is_foreign_disabled and self.stacked_widget.currentIndex() == 1:
