@@ -172,9 +172,27 @@ class TeamColorBar(QWidget):
         self.team = team
         self.setFixedSize(width, height)
         self.theme = get_theme()
+        
+        # NPB Color Map (Consistent with SchedulePage)
+        npb_colors = {
+            "Tokyo Bravers": "#002569", # Chunichi Blue
+            "Nagoya Sparks": "#F97709", # Giants Orange
+            "Chiba Mariners": "#0055A5", # DeNA Blue
+            "Sapporo Fighters": "#F6C900", # Tigers Yellow
+            "Osaka Thunders": "#FF0000", # Carp Red
+            "Hiroshima Phoenix": "#072C58", # Yakult Navy
+            "Fukuoka Phoenix": "#F9C304", # Softbank Yellow
+            "Sendai Flames": "#860010", # Rakuten Crimson
+            "Yokohama Mariners": "#006298", # Nippon-Ham Blue/Gold
+            "Saitama Bears": "#1F366A", # Seibu Blue
+            "Kobe Buffaloes": "#000019", # Orix Navy
+            "Shinjuku Spirits": "#333333", # Lotte Black
+        }
+        
         color = getattr(team, 'color', None)
         if not color:
-            color = TEAM_COLORS.get(getattr(team, 'name', ''), self.theme.primary)
+            color = npb_colors.get(getattr(team, 'name', ''), self.theme.primary)
+            
         self.setStyleSheet(f"background-color: {color}; border-radius: 0px;")
 
 
@@ -791,6 +809,13 @@ class HomePage(ContentPanel):
             letter-spacing: 1px;
             border: none;
         """)
+        
+        # Color Bar Container (Inserted before info_layout)
+        self.color_bar_container = QWidget()
+        self.color_bar_layout = QVBoxLayout(self.color_bar_container)
+        self.color_bar_layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(self.color_bar_container)
+        
         info_layout.addWidget(self.team_name_label)
 
         self.season_label = QLabel("2027 SEASON")
@@ -990,6 +1015,15 @@ class HomePage(ContentPanel):
         league_name = "North League" if getattr(team.league, 'value', None) == "North League" else ("South League" if getattr(team.league, 'value', None) == "South League" else (team.league.value if team.league else ""))
         date_str = getattr(game_state, 'current_date', '2027-03-29')
         self.season_label.setText(f"{game_state.current_year} SEASON  |  {league_name}  |  {date_str}")
+        
+        # Update Color Bar
+        # Clear previous
+        while self.color_bar_layout.count():
+            item = self.color_bar_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            
+        color_bar = TeamColorBar(team, height=50, width=6)
+        self.color_bar_layout.addWidget(color_bar)
 
         # Record
         self.record_card.set_value(f"{team.wins}-{team.losses}-{team.draws}")
@@ -1210,8 +1244,42 @@ class HomePage(ContentPanel):
         """Update news display with game highlights"""
         news_items = []
         
-        # Get news from game_state
-        if hasattr(game_state, 'get_recent_news'):
+        # Calculate 5-day cutoff date for non-game news expiry
+        from datetime import datetime, timedelta
+        current_date = game_state.current_date if hasattr(game_state, 'current_date') else None
+        cutoff_date = None
+        if current_date:
+            try:
+                current_dt = datetime.strptime(current_date, "%Y-%m-%d")
+                cutoff_dt = current_dt - timedelta(days=5)
+                cutoff_date = cutoff_dt.strftime("%Y-%m-%d")
+            except:
+                pass
+        
+        # Get news from game_state.news_feed (injuries, trades, etc.)
+        if hasattr(game_state, 'news_feed') and game_state.news_feed:
+            for n in game_state.news_feed[:20]:  # Check more items but filter by date
+                if isinstance(n, dict):
+                    date = n.get('date', '')
+                    message = n.get('message', '')
+                    category = n.get('category', '')
+                    
+                    # Filter out news older than 5 days
+                    if cutoff_date and date < cutoff_date:
+                        continue
+                    
+                    # Determine news type based on category
+                    if category == '怪我':
+                        news_type = 'injury'
+                    elif 'トレード' in category:
+                        news_type = 'trade'
+                    else:
+                        news_type = 'general'
+                    news_items.append((date, message, news_type))
+
+        
+        # Get news from game_state (legacy methods)
+        elif hasattr(game_state, 'get_recent_news'):
             raw_news = game_state.get_recent_news(limit=5)
             for n in raw_news:
                 date = n.get('date', '')
@@ -1224,6 +1292,7 @@ class HomePage(ContentPanel):
                 headline = n.get('headline', n.get('title', ''))
                 news_type = n.get('type', 'general')
                 news_items.append((date, headline, news_type))
+
         
         # Add game highlights from recent games
         if hasattr(game_state, 'schedule') and game_state.schedule:

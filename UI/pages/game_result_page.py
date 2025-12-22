@@ -126,9 +126,18 @@ class PitchingResultCard(Card):
         return name
 
     def set_pitchers(self, win, loss, save):
-        self.win_lbl.setText(win.name if win else "なし")
-        self.loss_lbl.setText(loss.name if loss else "なし")
-        self.save_lbl.setText(save.name if save else "なし")
+        # Handle both Player objects and strings
+        def get_name(p):
+            if p is None:
+                return "なし"
+            if isinstance(p, str):
+                return p
+            return getattr(p, 'name', str(p))
+        
+        self.win_lbl.setText(get_name(win))
+        self.loss_lbl.setText(get_name(loss))
+        self.save_lbl.setText(get_name(save))
+
 
 
 class HighlightsCard(Card):
@@ -247,7 +256,7 @@ class BoxScoreCard(Card):
         """)
         self.add_widget(self.tabs)
 
-    def set_data(self, h_team, a_team, game_stats):
+    def set_data(self, h_team, a_team, game_stats, home_pitchers_used=None, away_pitchers_used=None):
         self.tabs.clear()
         
         # 1. Batting Tab
@@ -268,12 +277,12 @@ class BoxScoreCard(Card):
         pit_layout.setContentsMargins(0, 10, 0, 0)
         pit_layout.setSpacing(20)
         
-        pit_layout.addWidget(self._create_stats_panel(a_team, game_stats, is_home=False, mode="pitching"), stretch=1)
-        pit_layout.addWidget(self._create_stats_panel(h_team, game_stats, is_home=True, mode="pitching"), stretch=1)
+        pit_layout.addWidget(self._create_stats_panel(a_team, game_stats, is_home=False, mode="pitching", pitchers_used=away_pitchers_used), stretch=1)
+        pit_layout.addWidget(self._create_stats_panel(h_team, game_stats, is_home=True, mode="pitching", pitchers_used=home_pitchers_used), stretch=1)
         
         self.tabs.addTab(pit_widget, "Pitching Stats")
 
-    def _create_stats_panel(self, team, game_stats, is_home, mode):
+    def _create_stats_panel(self, team, game_stats, is_home, mode, pitchers_used=None):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -285,7 +294,7 @@ class BoxScoreCard(Card):
         layout.addWidget(header)
 
         # Extract stats
-        batters, pitchers = self._extract_stats(team, game_stats)
+        batters, pitchers = self._extract_stats(team, game_stats, pitchers_used)
         
         if mode == "batting":
             layout.addWidget(self._create_batter_table(batters))
@@ -294,7 +303,7 @@ class BoxScoreCard(Card):
         
         return container
 
-    def _extract_stats(self, team, game_stats):
+    def _extract_stats(self, team, game_stats, pitchers_used=None):
         batters = []
         pitchers = []
         
@@ -319,11 +328,18 @@ class BoxScoreCard(Card):
                 batters.append((p, s))
                 processed_pids.add(p)
                 
-        # Pitchers (Anyone with pitching stats)
-        for p in team.players:
-            s = self._get_player_stats(p, game_stats)
-            if s.get('innings_pitched', 0) > 0 or s.get('games_pitched', 0) > 0:
-                pitchers.append((p, s))
+        # Pitchers - use pitchers_used list if available for correct appearance order
+        if pitchers_used:
+            for p in pitchers_used:
+                s = self._get_player_stats(p, game_stats)
+                if s.get('innings_pitched', 0) > 0 or s.get('games_pitched', 0) > 0:
+                    pitchers.append((p, s))
+        else:
+            # Fallback: iterate through team.players (may not be in order)
+            for p in team.players:
+                s = self._get_player_stats(p, game_stats)
+                if s.get('innings_pitched', 0) > 0 or s.get('games_pitched', 0) > 0:
+                    pitchers.append((p, s))
                 
         return batters, pitchers
 
@@ -508,20 +524,36 @@ class GameResultPage(ContentPanel):
             top_scores = data.get("away_innings", [])
             bot_scores = data.get("home_innings", [])
         
-        # Determine max inning (remove trailing zeros/nones?)
-        # Use actual length
-        max_inn = max(len(top_scores), len(bot_scores))
-        if max_inn < 9: max_inn = 9 # Minimum 9
+        # Determine actual innings played by trimming trailing zeros (for innings not played)
+        # But only for extra innings (beyond 9), 9 innings minimum should always show
+        def get_actual_innings(scores):
+            # Find last non-zero or first 9, whichever is larger
+            count = len(scores)
+            if count <= 9:
+                return count
+            # For extra innings, trim trailing zeros that weren't actually played
+            while count > 9 and scores[count-1] == 0:
+                count -= 1
+            return count
+        
+        actual_away_innings = get_actual_innings(top_scores)
+        actual_home_innings = get_actual_innings(bot_scores)
+        max_inn = max(actual_away_innings, actual_home_innings, 9)
+        
+        # Trim the score lists to actual innings
+        top_scores = top_scores[:actual_away_innings] if len(top_scores) > actual_away_innings else top_scores
+        bot_scores = bot_scores[:actual_home_innings] if len(bot_scores) > actual_home_innings else bot_scores
             
         self.score_card.line_score_table.set_inning_count(max_inn)
         self.score_card.line_score_table.update_names(h_team.name, a_team.name)
         
-        # Set innings
+        # Set innings - only set actually played innings
         for i in range(len(top_scores)):
              if top_scores[i] is not None:
                 self.score_card.line_score_table.set_inning_score(i+1, True, top_scores[i])
         for i in range(len(bot_scores)):
              if bot_scores[i] is not None:
+
                 self.score_card.line_score_table.set_inning_score(i+1, False, bot_scores[i])
                 
         # Total Stats (R, H, E)
@@ -541,7 +573,10 @@ class GameResultPage(ContentPanel):
         
         # Box Score
         g_stats = data.get("game_stats", {})
-        self.box_score_card.set_data(h_team, a_team, g_stats)
+        home_pitchers_used = data.get("home_pitchers_used", None)
+        away_pitchers_used = data.get("away_pitchers_used", None)
+        self.box_score_card.set_data(h_team, a_team, g_stats, home_pitchers_used, away_pitchers_used)
+
 
         
 

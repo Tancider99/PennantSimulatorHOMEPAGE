@@ -127,7 +127,11 @@ class GameController(QMainWindow):
         self.stack = QStackedWidget()
         # 修正: QMainWindowのメソッド名は setCentralWidget のままである必要があります
         self.setCentralWidget(self.stack)
-
+        
+        # Disable default status bar to prevent unwanted white bar at bottom
+        self.statusBar().hide()
+        self.statusBar().setStyleSheet("background: transparent; min-height: 0px; height: 0px; border: none;")
+        
         # Create screens
         self.loading_screen = self.LoadingScreen()
         self.title_screen = self.TitleScreen()
@@ -137,6 +141,11 @@ class GameController(QMainWindow):
         self.stack.addWidget(self.loading_screen)      # Index 0
         self.stack.addWidget(self.title_screen)         # Index 1
         self.stack.addWidget(self.team_select_screen)   # Index 2
+
+        # Robustly ensure no frame on stack
+        from PySide6.QtWidgets import QFrame
+        self.stack.setFrameShape(QFrame.NoFrame)
+        self.stack.setLineWidth(0)
 
         # Connect signals
         self.loading_screen.loading_complete.connect(self._on_loading_complete)

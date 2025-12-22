@@ -180,7 +180,12 @@ def get_effective_stat(player: Player, stat_name: str, opponent: Optional[Player
                 mitigation = (stability - 50) * 0.2
                 value += max(0, mitigation)
 
+    # Special handling for velocity (measured in km/h, not 1-99 scale)
+    if stat_name == 'velocity':
+        return max(100.0, min(175.0, value))  # Realistic velocity range: 100-175 km/h
+    
     return max(20.0, min(120.0, value))
+
 
 # ========================================
 # 列挙型
@@ -852,11 +857,19 @@ class PitchGenerator:
         p_stuff = max(1, p_stuff * cond_mult)
         p_move = max(1, p_move * cond_mult)
 
-        base_velo = velocity * fatigue
+        # Random variation, but never exceed pitcher's base velocity
+        # Generate velocity between 97% and 100% of max ability
+        max_velo = pitcher.stats.velocity  # Original ability is the max
+        min_velo = max_velo * 0.97  # 97% of max
+        base_velo = random.uniform(min_velo, max_velo) * fatigue
+        
         if pitch_type != "ストレート":
             speed_ratio = base["base_speed"] / 145.0
             base_velo *= speed_ratio
-        velo = random.gauss(base_velo, 1.5); velo = max(80, min(170, velo))
+        
+        velo = max(80, min(max_velo, base_velo))  # Cap at pitcher's actual ability
+
+
 
         base_spin = velo * 15.5
         spin_ratio = base.get("spin_ratio", 1.0)
@@ -1868,10 +1881,17 @@ class LiveGameEngine:
         return False
 
     def simulate_pitch(self, manual_strategy=None, shifts=None):
+        # === 超強力試合終了チェック ===
+        # 8回以降、次の攻撃が始まる前に必ず試合終了判定を行う
+        # 試合終了時は絶対に処理を終了する
+        if self.is_game_over():
+            return None  # 試合終了、これ以上の処理なし
+        
         defense_team = self.home_team if self.state.is_top else self.away_team
         offense_team = self.away_team if self.state.is_top else self.home_team
         batter, _ = self.get_current_batter()
         pitcher, _ = self.get_current_pitcher()
+
 
         # --- AI Shift Logic ---
         # If user didn't specify shifts (e.g. AI vs AI, or User is batting), let AI decide
@@ -2263,7 +2283,10 @@ class LiveGameEngine:
         batter, _ = self.get_current_batter()
         self._record_pf(batter, pitcher)
         self._reset_count(); self._next_batter()
-        if self.state.outs >= 3: self._change_inning()
+        # Only advance inning if game is not over (prevents 10th inning score recording when game ends in 9th)
+        if self.state.outs >= 3 and not self.is_game_over():
+            self._change_inning()
+
 
     def _resolve_play(self, play, strategy, ball=None):
         batter, _ = self.get_current_batter(); pitcher, _ = self.get_current_pitcher()
@@ -2416,6 +2439,10 @@ class LiveGameEngine:
 
     def _advance_runners_bunt(self) -> int:
         score = 0
+        if self.state.runner_3b: score += 1; self.state.runner_3b = None
+        if self.state.runner_2b: self.state.runner_3b = self.state.runner_2b; self.state.runner_2b = None
+        if self.state.runner_1b: self.state.runner_2b = self.state.runner_1b; self.state.runner_1b = None
+        return score
 
     def get_realtime_stats(self, player: Player) -> Dict[str, Any]:
         """リアルタイム成績（シーズン成績 + 今日の成績）を取得"""
@@ -2440,10 +2467,6 @@ class LiveGameEngine:
             "era": era, "so": total_so,
             "ip": total_ip
         }
-        if self.state.runner_3b: score += 1; self.state.runner_3b = None
-        if self.state.runner_2b: self.state.runner_3b = self.state.runner_2b; self.state.runner_2b = None
-        if self.state.runner_1b: self.state.runner_2b = self.state.runner_1b; self.state.runner_1b = None
-        return score
 
     def _advance_runners(self, bases, batter, is_walk=False):
         scored_players = []
@@ -2555,31 +2578,60 @@ class LiveGameEngine:
         self.state.runner_1b = self.state.runner_2b = self.state.runner_3b = None
         if not self.state.is_top: self.state.inning += 1
         self.state.is_top = not self.state.is_top
-        
-    def is_game_over(self):
-        # 1. 9回裏以降のサヨナラ勝ち (後攻がリードした時点)
-        # Note: This checks state *during* the inning.
-        if self.state.inning >= 9 and not self.state.is_top and self.state.home_score > self.state.away_score:
-            return True
-            
-        # 2. 9回表(または延長表)終了時点で後攻がリード (Xゲーム)
-        # 3アウトになった瞬間にコールされることを想定
-        if self.state.inning >= 9 and self.state.is_top and self.state.outs >= 3:
-             if self.state.home_score > self.state.away_score:
-                 return True
 
-        # 3. 9回裏(または延長裏)終了時の勝敗判定 (後攻が勝ち越し、または先攻が逃げ切り)
-        if self.state.inning >= 9 and not self.state.is_top and self.state.outs >= 3:
-            if self.state.home_score != self.state.away_score: return True
-            
-        # 4. 12回終了 (引き分け)
-        if self.state.inning >= 12 and not self.state.is_top and self.state.outs >= 3:
-             return True
-             
-        # Hard limit
-        if self.state.inning >= 13: return True
+    def is_game_over(self):
+        """
+        NPB公式規則に基づく試合終了判定
+        
+        終了条件:
+        1. 9回表終了時点でホーム得点＞ビジター得点 → 試合終了（Xゲーム）
+        2. 9回裏途中でホーム得点＞ビジター得点 → 試合終了（サヨナラ）
+        3. 9回裏終了時点でホーム得点＜ビジター得点 → 試合終了（ビジター勝利）
+        4. 9回裏終了時点でホーム得点＝ビジター得点 → 延長
+        5. 延長のあるイニングの裏終了時点でホーム＜ビジター → 試合終了
+        6. 延長のあるイニングの裏途中でホーム＞ビジター → 試合終了（サヨナラ）
+        7. 延長12回裏終了 → 試合終了（引き分け）
+        """
+        inning = self.state.inning
+        is_top = self.state.is_top
+        outs = self.state.outs
+        home = self.state.home_score
+        away = self.state.away_score
+        
+        # [規則1] 9回以降の表、3アウト時点でホームがリード → Xゲーム終了
+        if inning >= 9 and is_top and outs >= 3:
+            if home > away:
+                return True
+        
+        # [規則2+6] 9回以降の裏、途中でホームがリード → サヨナラ勝ち
+        # Note: これはイニング中のどのタイミングでも判定（得点した瞬間）
+        if inning >= 9 and not is_top and outs < 3:
+            if home > away:
+                return True
+        
+        # [規則3+5] 9回以降の裏、3アウト時点で勝敗が決した場合
+        if inning >= 9 and not is_top and outs >= 3:
+            # ビジターがリード → ビジター勝利
+            if away > home:
+                return True
+            # ホームがリード → ホーム勝利（サヨナラ、念のため）
+            if home > away:
+                return True
+            # 同点の場合:
+            # - 12回以降なら引き分け終了
+            # - それ未満なら延長継続（False）
+            if home == away:
+                if inning >= 12:
+                    return True  # [規則7] 12回終了で引き分け
+                else:
+                    return False  # 延長継続
+        
+        # ハードリミット（13回以上は強制終了）
+        if inning >= 13:
+            return True
         
         return False
+
 
     def finalize_game_stats(self, date_str: str = "2027-01-01"):
         """
@@ -2773,19 +2825,59 @@ class LiveGameEngine:
         highlights = self._analyze_highlights(win_p, loss_p, save_p, home_win, away_win)
 
         # Trim score lists to actual game length
+        # Calculate actual completed innings based on game state
         final_inning = self.state.inning
-        if len(self.state.home_inning_scores) > final_inning:
-            self.state.home_inning_scores = self.state.home_inning_scores[:final_inning]
-        if len(self.state.away_inning_scores) > final_inning:
-            self.state.away_inning_scores = self.state.away_inning_scores[:final_inning]
+        
+        # For X-game (home wins without batting in bottom half), 
+        # home_inning_scores should be 1 shorter than away_inning_scores
+        # For normal games ending in bottom half, both are same length
+        
+        # Away team (top) always completes their final inning
+        away_completed_innings = final_inning
+        
+        # Home team (bottom) might not bat in final inning (X-game)
+        if self.state.is_top:
+            # Game ended after top half = X-game, home didn't bat this inning
+            home_completed_innings = final_inning - 1
+        else:
+            # Game ended during/after bottom half
+            home_completed_innings = final_inning
+        
+        # Strict trimming: only keep actually played innings
+        # Minimum 9 innings unless game was shorter (impossible in normal play)
+        away_completed_innings = max(9, away_completed_innings)
+        home_completed_innings = max(8, home_completed_innings)  # X-game in 9th = 8 batting innings for home
+        
+        # Trim arrays
+        if len(self.state.home_inning_scores) > home_completed_innings:
+            self.state.home_inning_scores = self.state.home_inning_scores[:home_completed_innings]
+        if len(self.state.away_inning_scores) > away_completed_innings:
+            self.state.away_inning_scores = self.state.away_inning_scores[:away_completed_innings]
+        
+        # Also remove trailing zeros beyond 9 innings that were never actually played
+        while len(self.state.home_inning_scores) > 9 and self.state.home_inning_scores[-1] == 0:
+            # Only trim if this inning wasn't actually played (no scoring AND beyond regulation)
+            if len(self.state.home_inning_scores) > home_completed_innings:
+                self.state.home_inning_scores.pop()
+            else:
+                break
+        while len(self.state.away_inning_scores) > 9 and self.state.away_inning_scores[-1] == 0:
+            if len(self.state.away_inning_scores) > away_completed_innings:
+                self.state.away_inning_scores.pop()
+            else:
+                break
+
 
         return {
             "win": win_p,
             "loss": loss_p,
             "save": save_p,
             "game_stats": self.game_stats,
-            "highlights": highlights
+            "highlights": highlights,
+            "home_pitchers_used": list(self.state.home_pitchers_used),
+            "away_pitchers_used": list(self.state.away_pitchers_used)
         }
+
 
     def _analyze_highlights(self, win_p, loss_p, save_p, home_win, away_win):
         """Analyze game stats for highlight news"""

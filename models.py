@@ -1359,8 +1359,8 @@ class Player:
         """
         import random
         
-        # 基本リスク: 1プレイあたり0.00001 (0.001%) - 大幅に低下
-        base_risk = 0.00001
+        # 基本リスク: 1プレイあたり0.00002 (0.002%) - 少し上昇
+        base_risk = 0.00002
         
         # 疲労補正: 疲労度50で2倍、100で3倍
         fatigue_mult = 1.0 + (self.fatigue / 50)
@@ -1375,7 +1375,7 @@ class Player:
             # ケガ発生
             injury_days = random.randint(7, 60)
             injury_names = ["肉離れ", "捻挫", "打撲", "張り", "疲労骨折", "腱炎"]
-            self.apply_injury(random.choice(injury_names), injury_days)
+            self.inflict_injury(injury_days, random.choice(injury_names))
             return True
         return False
 
@@ -1427,7 +1427,7 @@ class Player:
         
         # 5. 疲労回復（全選手）
         recovery_stat = getattr(self.stats, 'recovery', 50)
-        fatigue_recovery = int(15 + (recovery_stat - 50) * 0.3)  # 10-20/日
+        fatigue_recovery = int(20 + (recovery_stat - 50) * 0.3)  # 15-25/日
         self.fatigue = max(0, self.fatigue - fatigue_recovery)
         
         # 6. 当日出場フラグリセット

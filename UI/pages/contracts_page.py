@@ -30,7 +30,12 @@ try:
     from models import Position, PitchType, PlayerStats, Player, Team
     import player_generator
 except ImportError:
+    import player_generator
+except ImportError:
     pass
+
+from game_state import PendingTrade
+
 
 THEME = get_theme()
 
@@ -2420,7 +2425,13 @@ class TradePage(QWidget):
         title.setStyleSheet(f"color: {self.theme.text_primary}; font-weight: bold; font-size: 18px;")
         layout.addWidget(title)
 
-        layout.addSpacing(30)
+        # トレード承認待ちステータス
+        self.pending_status_label = QLabel("")
+        self.pending_status_label.setStyleSheet(f"color: {self.theme.warning}; font-weight: bold; background-color: {self.theme.bg_dark}; padding: 4px 8px; border-radius: 4px;")
+        self.pending_status_label.hide()
+        layout.addWidget(self.pending_status_label)
+        
+        layout.addSpacing(20)
 
         # 相手チーム選択
         layout.addWidget(QLabel("相手チーム:"))
@@ -2714,7 +2725,53 @@ class TradePage(QWidget):
             self.current_team = game_state.player_team
             self._update_team_combo()
             self._refresh_self_table()
+            self.current_team = game_state.player_team
+            self._update_team_combo()
+            self._refresh_self_table()
             self._update_roster_info()
+            self._check_pending_trade()
+
+    def _check_pending_trade(self):
+        """承認待ちトレードがあるかチェックしてUI更新"""
+        if not self.game_state or not self.current_team:
+            return
+
+        # 自チームが関わる承認待ちトレードを探す
+        pending = next((t for t in self.game_state.pending_trades 
+                       if t.offering_team_name == self.current_team.name), None)
+        
+        if pending:
+            self.pending_status_label.setText(f"申請中: 残り{pending.days_remaining}日")
+            self.pending_status_label.show()
+            self.trade_btn.setEnabled(False)
+            self.trade_btn.setText("申請中")
+            self.trade_btn.setToolTip("現在進行中のトレード交渉があります")
+            
+            # 入力系の無効化
+            self.team_combo.setEnabled(False)
+            self.self_offer_list.setEnabled(False)
+            self.target_offer_list.setEnabled(False)
+            self.money_input.setEnabled(False)
+            
+            # 相手チームを合わせる
+            idx = self.team_combo.findText(pending.target_team_name)
+            if idx >= 0:
+                self.team_combo.setCurrentIndex(idx)
+                
+            # TODO: 申請中の内容を表示復元できるとベストだが、今回はロックのみ
+            
+        else:
+            self.pending_status_label.hide()
+            self.trade_btn.setText("トレード提案")
+            self.trade_btn.setToolTip("")
+            
+            self.team_combo.setEnabled(True)
+            self.self_offer_list.setEnabled(True)
+            self.target_offer_list.setEnabled(True)
+            self.money_input.setEnabled(True)
+            
+            self._update_trade_balance() # ボタン有効無効の再計算
+
 
     def _update_team_combo(self):
         """チームコンボボックスを更新"""
@@ -3073,49 +3130,31 @@ class TradePage(QWidget):
         else:
             base_chance = 5
 
-        result = random.randint(1, 100)
+        # PendingTrade作成
+        pending_trade = PendingTrade(
+            offering_team_name=self.current_team.name,
+            target_team_name=self.target_team.name,
+            offered_player_ids=list(self.offered_players),
+            requested_player_ids=list(self.requested_players),
+            money_adjustment=self.money_adjustment,
+            days_remaining=5,
+            success_chance=base_chance
+        )
+        
+        self.game_state.pending_trades.append(pending_trade)
+        
+        QMessageBox.information(self, "提案完了", 
+            f"トレードを申し込みました。\n相手球団の回答まで約5日かかります。")
+            
+        self._check_pending_trade()
+        self._clear_trade() # UI上の選択状態はクリア（あるいは残してもいいが、混乱避けるためクリア推奨だがロックされているのでクリアしないほうがいいかも？今回は_check_pending_tradeでロックするのでクリアはしない、またはロック状態で表示維持）
+        # _check_pending_tradeでロックされるので、その前にクリアすると見えなくなる
+        # UI的には「申請中」としてロックされた状態で見えている方が親切
+        # ただし、_clear_tradeを呼ぶとリストが消える
+        
+        # ここではクリアせずロックだけかける
 
-        if result <= base_chance:
-            # 成功
-            QMessageBox.information(self, "トレード成立",
-                f"トレードが成立しました！\n(成功率: {base_chance}%)")
 
-            # 選手交換処理
-            offered_copy = list(self.offered_players)
-            requested_copy = list(self.requested_players)
-
-            # 先に選手を追加
-            for idx in offered_copy:
-                if 0 <= idx < len(self.current_team.players):
-                    player = self.current_team.players[idx]
-                    self.target_team.players.append(player)
-
-            for idx in requested_copy:
-                if 0 <= idx < len(self.target_team.players):
-                    player = self.target_team.players[idx]
-                    self.current_team.players.append(player)
-
-            # 元のリストから削除 (逆順で)
-            for idx in sorted(offered_copy, reverse=True):
-                if 0 <= idx < len(self.current_team.players):
-                    self.current_team.players.pop(idx)
-
-            for idx in sorted(requested_copy, reverse=True):
-                if 0 <= idx < len(self.target_team.players):
-                    self.target_team.players.pop(idx)
-
-            # 金銭処理
-            if self.money_adjustment != 0:
-                self.current_team.budget -= self.money_adjustment
-                self.target_team.budget += self.money_adjustment
-
-            self._clear_trade()
-            self._refresh_self_table()
-            self._refresh_target_table()
-            self._update_roster_info()
-        else:
-            QMessageBox.warning(self, "トレード不成立",
-                f"相手チームがトレードを拒否しました。\n(成功率: {base_chance}%)")
 
     def _clear_trade(self):
         """トレード内容をクリア"""

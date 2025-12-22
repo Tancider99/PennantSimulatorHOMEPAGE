@@ -59,6 +59,9 @@ class MainWindow(QMainWindow):
 
         # Start with home page
         self._navigate_to("home")
+        
+        # Disable default status bar (Inner Window)
+        self.statusBar().hide()
 
     def _setup_window(self):
         """Configure main window properties"""
@@ -651,6 +654,24 @@ class MainWindow(QMainWindow):
             pass
         
         # Construct result dict
+        # Use game.pitcher_result dict if available (from All-Star or saved games)
+        stored_pitcher = getattr(game, 'pitcher_result', None)
+        if stored_pitcher and isinstance(stored_pitcher, dict):
+            pitcher_result = stored_pitcher
+        else:
+            pitcher_result = {
+                'win': getattr(game, 'pitcher_win', None),
+                'loss': getattr(game, 'pitcher_loss', None),
+                'save': getattr(game, 'pitcher_save', None)
+            }
+        
+        # Use pre-saved home_runs if available (from All-Star), else extract
+        stored_hrs = getattr(game, 'home_runs', None)
+        if stored_hrs:
+            home_runs = stored_hrs
+        else:
+            home_runs = self._extract_home_runs(game) if hasattr(game, 'game_stats') else []
+        
         result = {
             'home_team': home_team,
             'away_team': away_team,
@@ -661,13 +682,10 @@ class MainWindow(QMainWindow):
             'hits': (getattr(game, 'home_hits', 0), getattr(game, 'away_hits', 0)),
             'errors': (getattr(game, 'home_errors', 0), getattr(game, 'away_errors', 0)),
             'game_stats': getattr(game, 'game_stats', {}) or {},
-            'pitcher_result': {
-                'win': getattr(game, 'pitcher_win', None),
-                'loss': getattr(game, 'pitcher_loss', None),
-                'save': getattr(game, 'pitcher_save', None)
-            },
-            'home_runs': self._extract_home_runs(game) if hasattr(game, 'game_stats') else []
+            'pitcher_result': pitcher_result,
+            'home_runs': home_runs
         }
+
         
         
         # Navigate to result page
@@ -687,16 +705,36 @@ class MainWindow(QMainWindow):
         if not game_stats:
             return []
         
+        # Pre-determine which players belong to which team
+        # Build player sets for home/away if teams are available
+        home_players = set()
+        away_players = set()
+        
+        # Try to get team objects to determine player membership
+        if self.game_state:
+            for team in self.game_state.teams:
+                if team.name == game.home_team_name:
+                    home_players = set(team.players)
+                elif team.name == game.away_team_name:
+                    away_players = set(team.players)
+        
         for player, stats in game_stats.items():
             hr_count = stats.get('home_runs', 0)
             if hr_count > 0:
                 # Get player name and team
                 player_name = getattr(player, 'name', str(player))
-                # Try to determine team name
+                
+                # Determine team name by checking player membership
                 team_name = ""
-                if hasattr(game, 'home_team_name') and hasattr(game, 'away_team_name'):
-                    # Guess team based on context (not 100% accurate but reasonable)
+                if player in home_players:
                     team_name = game.home_team_name
+                elif player in away_players:
+                    team_name = game.away_team_name
+                elif hasattr(player, 'team_name'):
+                    team_name = player.team_name
+                else:
+                    # Fallback: still unknown
+                    team_name = "?"
                 
                 # Get current HR count (season total + this game)
                 season_hr = getattr(player, 'record', None)
@@ -705,6 +743,7 @@ class MainWindow(QMainWindow):
                 home_runs.append((player_name, hr_number, team_name))
         
         return home_runs
+
 
     def _on_training_saved(self):
         """Handle training saved"""
@@ -1101,49 +1140,26 @@ class MainWindow(QMainWindow):
         if not self.game_state or not self.game_state.season_manager: return
         
         sm = self.game_state.season_manager
-        if not hasattr(sm, 'allstar_engine') or not sm.allstar_engine:
-             sm.initialize_allstar(self.game_state.teams)
-
-        if not sm.allstar_engine:
-            QMessageBox.warning(self, "エラー", "オールスターエンジンの初期化に失敗しました")
+        
+        # Determine current date
+        current_date_str = self.game_state.current_date
+        
+        # Use shared simulation method from GameStateManager
+        engine = self.game_state.simulate_allstar_for_date(current_date_str)
+        
+        if not engine:
+            QMessageBox.information(self, "Info", "オールスター試合がありません。")
             return
-            
-        # Determine Game Number based on date
+        
+        # Determine game number for result display
         cal = sm.calendar
-        current_date_obj = datetime.datetime.strptime(self.game_state.current_date, "%Y-%m-%d").date()
-        
-        game_num = 0
-        if current_date_obj == cal.allstar_day1:
-            game_num = 1
-        elif current_date_obj == cal.allstar_day2:
-            game_num = 2
-        else:
-            # Fallback: check results
-            if not getattr(sm.allstar_engine, 'game1_result', None):
-                game_num = 1
-            elif not getattr(sm.allstar_engine, 'game2_result', None):
-                game_num = 2
-            else:
-                 QMessageBox.information(self, "Info", "All-Star games already finished.")
-                 return
-
-        # Simulate Single Game
-        engine = sm.allstar_engine.simulate_single_allstar_game(game_num)
-        
-        # Sync result to schedule.games for Schedule Tab consistency
-        if engine and self.game_state.schedule:
-            for g in self.game_state.schedule.games:
-                if hasattr(g, 'game_number') and g.game_number == game_num:
-                    if g.home_team_name in ["ALL-NORTH", "ALL-SOUTH"]:
-                        from models import GameStatus
-                        g.home_score = engine.state.home_score
-                        g.away_score = engine.state.away_score
-                        g.status = GameStatus.COMPLETED
-                        break
+        current_date_obj = datetime.datetime.strptime(current_date_str, "%Y-%m-%d").date()
+        game_num = 1 if current_date_obj == cal.allstar_day1 else 2
         
         # Advance Day Logically
         self.game_state.finish_day_and_advance()
         self._on_page_changed(0) 
+
         
         # Navigate to Result Page
         self._navigate_to("result")

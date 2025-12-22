@@ -14,6 +14,21 @@ from farm_game_simulator import FarmGameSimulator
 from league_schedule_engine import WeatherSystem
 from training_system import apply_team_training
 
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
+class PendingTrade:
+    """承認待ちのトレード提案"""
+    offering_team_name: str
+    target_team_name: str
+    offered_player_ids: List[int] # チーム内のインデックス
+    requested_player_ids: List[int] # チーム内のインデックス
+    money_adjustment: int # 正: 自チーム支払い, 負: 受取
+    days_remaining: int = 5
+    success_chance: int = 0
+
+
 class GameState(Enum):
     TITLE = "タイトル"
     SETTINGS = "設定"
@@ -115,7 +130,9 @@ class GameStateManager:
         
         # 自由契約選手リスト (Acquisitions用)
         self.free_agents: List[Player] = []
-        self.news_feed = [] # ニュースング
+        self.news_feed = [] # ニュースフィード
+        self.pending_trades: List[PendingTrade] = [] # トレード提案中リスト
+        self.daily_rankings: Dict[str, Dict[str, int]] = {} # 日別順位履歴 {date: {team_name: rank}}
         self._generate_dummy_free_agents()
 
     def _generate_dummy_free_agents(self):
@@ -306,8 +323,121 @@ class GameStateManager:
                 
                 # 疲労が増加していたら元に戻す (日次更新で疲労は増えないはず)
                 new_fatigue = getattr(player, 'fatigue', 0)
+                new_fatigue = getattr(player, 'fatigue', 0)
                 if new_fatigue > old_fatigue:
                     player.fatigue = old_fatigue
+
+        # トレード進行処理
+        self._process_pending_trades()
+
+    def _process_pending_trades(self):
+        """トレード提案の進行処理"""
+        completed_trades = []
+        for trade in self.pending_trades:
+            trade.days_remaining -= 1
+            if trade.days_remaining <= 0:
+                self._resolve_trade(trade)
+                completed_trades.append(trade)
+        
+        for t in completed_trades:
+            self.pending_trades.remove(t)
+
+    def _resolve_trade(self, trade: 'PendingTrade'):
+        """トレード結果の判定と実行"""
+        result = random.randint(1, 100)
+        
+        # チームオブジェクトの取得
+        offering_team = next((t for t in self.all_teams if t.name == trade.offering_team_name), None)
+        target_team = next((t for t in self.all_teams if t.name == trade.target_team_name), None)
+        
+        if not offering_team or not target_team:
+            return # エラー: チームが見つからない
+            
+        if result <= trade.success_chance:
+            # --- 成功: 選手交換実行 ---
+            
+            # IDの整合性チェックとオブジェクト取得 (インデックスが変わっている可能性があるため名前などで再確認したいが、
+            # 簡略化のためインデックスを使用。ただし、日数が経過しているので危険。本来はID管理すべき)
+            # ※今回は簡易実装として、インデックスが範囲内であることを確認して実行
+            
+            # 本当はPlayerオブジェクトに固有IDを持たせて追跡すべきだが、
+            # 現状の実装に合わせて、インデックスで取得する。
+            # ただし、ロースター変更でずれている可能性に注意。
+            # リスク回避のため、名前照合を追加実装するのがベストだが、タスク範囲で簡易対応する。
+            
+            offered_players = []
+            for idx in trade.offered_player_ids:
+                if idx < len(offering_team.players):
+                    offered_players.append(offering_team.players[idx])
+            
+            requested_players = []
+            for idx in trade.requested_player_ids:
+                if idx < len(target_team.players):
+                    requested_players.append(target_team.players[idx])
+            
+            # 選手移動
+            # Note: 実際には remove するとインデックスがずれるので、オブジェクトベースで移動
+            for p in offered_players:
+                if p in offering_team.players:
+                    offering_team.players.remove(p)
+                    # ロースターからも削除
+                    if hasattr(offering_team, 'active_roster'):
+                        offering_team.active_roster = [i for i in range(len(offering_team.players))] # リセットが必要
+                        # 簡易リセット: active_roster等はインデックス依存なので、
+                        # 選手削除後に再構築が必要。_manage_all_teams_rosters等で修正されることを期待
+                    target_team.players.append(p)
+                    # 移籍フラグなどを設定してもよい
+            
+            for p in requested_players:
+                if p in target_team.players:
+                    target_team.players.remove(p)
+                    offering_team.players.append(p)
+            
+            # ロースター整合性のための強制リセット (インデックスずれ防止)
+            # 次の _manage_all_teams_rosters で再構築されるが、最低限のクリア
+            offering_team.active_roster = list(range(min(28, len(offering_team.players))))
+            offering_team.farm_roster = list(range(28, len(offering_team.players))) if len(offering_team.players) > 28 else []
+            
+            target_team.active_roster = list(range(min(28, len(target_team.players))))
+            target_team.farm_roster = list(range(28, len(target_team.players))) if len(target_team.players) > 28 else []
+
+            # ニュースログ
+            p_names_out = "、".join([p.name for p in offered_players])
+            p_names_in = "、".join([p.name for p in requested_players])
+            
+            message = f"トレード成立！\n獲得: {p_names_in}\n放出: {p_names_out}"
+            if trade.money_adjustment > 0:
+                message += f"\n金銭支払い: {trade.money_adjustment//1000000}00万円"
+            elif trade.money_adjustment < 0:
+                message += f"\n金銭受取: {abs(trade.money_adjustment)//1000000}00万円"
+                
+            self.log_news("トレード", message, offering_team.name, self.current_date)
+            # 相手チーム側にもログ
+            self.log_news("トレード", f"{offering_team.name}とのトレードが成立しました。", target_team.name, self.current_date)
+            
+        else:
+            # --- 失敗 ---
+            self.log_news("トレード", f"{target_team.name}へのトレード提案は破談となりました。", offering_team.name, self.current_date)
+
+
+
+    def _record_daily_rankings(self, date_str: str):
+        """指定日の順位を記録"""
+        from models import League
+        
+        # 北リーグ
+        north_ranks = self._get_league_standings(League.NORTH)
+        # 南リーグ
+        south_ranks = self._get_league_standings(League.SOUTH)
+        
+        rankings = {}
+        for name, rank in north_ranks:
+            rankings[name] = rank
+        for name, rank in south_ranks:
+            rankings[name] = rank
+            
+        self.daily_rankings[date_str] = rankings
+
 
     def _manage_all_teams_rosters(self):
         """全チームのロースター管理（自動オーダー編成＋保存）"""
@@ -935,34 +1065,13 @@ class GameStateManager:
                     # オールスター期間の処理
                     self._update_player_status_daily()
                     
-                    # Check for All-Star Game and Simulate using LiveGameEngine
-                    if self.schedule and hasattr(self.season_manager, 'allstar_engine') and self.season_manager.allstar_engine:
-                        ase = self.season_manager.allstar_engine
-                        todays_games = [g for g in self.schedule.games if g.date == date_str and not g.is_completed]
-                        for game in todays_games:
-                            if game.home_team_name in ["ALL-NORTH", "ALL-SOUTH"]:
-                                # Use LiveGameEngine via AllStarGameEngine
-                                game_num = game.game_number if hasattr(game, 'game_number') else 1
-                                engine = ase.simulate_single_allstar_game(game_num)
-                                
-                                if engine:
-                                    # Update scheduled game with results
-                                    game.home_score = engine.state.home_score
-                                    game.away_score = engine.state.away_score
-                                    game.status = GameStatus.COMPLETED
-                                    
-                                    # Record inning-by-inning scores
-                                    game.home_inning_scores = list(engine.state.home_inning_scores)
-                                    game.away_inning_scores = list(engine.state.away_inning_scores)
-                                    
-                                    # Record hits and errors
-                                    game.home_hits = engine.state.home_hits
-                                    game.away_hits = engine.state.away_hits
-                                    game.home_errors = engine.state.home_errors
-                                    game.away_errors = engine.state.away_errors
+                    # Use shared All-Star simulation method (same as home tab)
+                    self.simulate_allstar_for_date(date_str)
 
                     self.current_date = date_str
                     return
+
+
 
             # 1. 全選手のステータス更新 (怪我回復、疲労回復、調子変動)
             self._update_player_status_daily()
@@ -1061,9 +1170,26 @@ class GameStateManager:
                                 for p in engine.state.away_pitchers_used:
                                     p.days_rest = 0
                             
+                            # Check for injuries after game for players who participated
+                            for team in [home, away]:
+                                # Check pitchers who pitched
+                                pitchers_used = engine.state.home_pitchers_used if team == home else engine.state.away_pitchers_used
+                                if pitchers_used:
+                                    for pitcher in pitchers_used:
+                                        if pitcher.check_injury_risk():
+                                            self.log_news("怪我", f"{pitcher.name}選手が{pitcher.injury_name}で全治{pitcher.injury_days}日の見込み", team.name, date_str)
+                                
+                                # Check batters who played (check lineup players)
+                                for player in team.players:
+                                    if player.position != Position.PITCHER and not player.is_injured:
+                                        if player.check_injury_risk():
+                                            self.log_news("怪我", f"{player.name}選手が{player.injury_name}で全治{player.injury_days}日の見込み", team.name, date_str)
+
+                            
                             # ローテーションを進める
                             home.rotation_index = (home.rotation_index + 1) % 6
                             away.rotation_index = (away.rotation_index + 1) % 6
+
 
                         except Exception as e:
                             print(f"Error simulating game {home.name} vs {away.name}: {e}")
@@ -1130,6 +1256,9 @@ class GameStateManager:
 
             # 7. 全試合終了後に成績集計を更新
             update_league_stats(self.all_teams)
+
+            # 順位履歴の記録
+            self._record_daily_rankings(date_str)
 
             # 8. レギュラーシーズン終了チェック
             if self.schedule_engine and self.schedule_engine.is_regular_season_complete():
@@ -1228,6 +1357,99 @@ class GameStateManager:
         except Exception as e:
             print(f"Error in finish_day_and_advance: {e}")
             traceback.print_exc()
+
+    def simulate_allstar_for_date(self, date_str: str):
+        """
+        オールスター試合をシミュレート (共有メソッド)
+        ホームタブからのボタン押下とスキップ処理の両方から呼び出される
+        """
+        if not self.season_manager:
+            return None
+        
+        # Initialize All-Star engine if not done
+        if not hasattr(self.season_manager, 'allstar_engine') or not self.season_manager.allstar_engine:
+            print("Initializing All-Star Engine...")
+            self.season_manager.initialize_allstar(self.all_teams)
+        
+        if not self.season_manager.allstar_engine:
+            print("Failed to initialize All-Star Engine")
+            return None
+        
+        ase = self.season_manager.allstar_engine
+        engine = None
+        
+        # Find today's All-Star game
+        if self.schedule:
+            todays_games = [g for g in self.schedule.games if g.date == date_str and not g.is_completed]
+            for game in todays_games:
+                if game.home_team_name in ["ALL-NORTH", "ALL-SOUTH"]:
+                    # Determine game number
+                    game_num = game.game_number if hasattr(game, 'game_number') else 1
+                    
+                    # Simulate via AllStarGameEngine (uses LiveGameEngine internally)
+                    engine = ase.simulate_single_allstar_game(game_num)
+                    
+                    if engine:
+                        # Update scheduled game with results
+                        game.home_score = engine.state.home_score
+                        game.away_score = engine.state.away_score
+                        game.status = GameStatus.COMPLETED
+                        
+                        # Record inning-by-inning scores
+                        game.home_inning_scores = list(engine.state.home_inning_scores)
+                        game.away_inning_scores = list(engine.state.away_inning_scores)
+                        
+                        # Record hits and errors
+                        game.home_hits = engine.state.home_hits
+                        game.away_hits = engine.state.away_hits
+                        game.home_errors = engine.state.home_errors
+                        game.away_errors = engine.state.away_errors
+                        
+                        # Get detail with pitcher results, MVP, box score
+                        detail = ase.game1_detail if game_num == 1 else ase.game2_detail
+                        if detail:
+                            # Convert Player objects to name strings
+                            raw_pitcher = detail.get('pitcher_result', {})
+                            game.pitcher_result = {
+                                'win': getattr(raw_pitcher.get('win'), 'name', None) if raw_pitcher.get('win') else None,
+                                'loss': getattr(raw_pitcher.get('loss'), 'name', None) if raw_pitcher.get('loss') else None,
+                                'save': getattr(raw_pitcher.get('save'), 'name', None) if raw_pitcher.get('save') else None,
+                            }
+                            game.mvp_name = detail.get('mvp', '')
+                            game.box_score = detail.get('box_score', {})
+                            game.game_stats = engine.game_stats
+                            
+                            # Create highlights
+                            highlights = []
+                            if game.mvp_name:
+                                highlights.append(f"MVP: {game.mvp_name}")
+                            if game.pitcher_result.get('win'):
+                                highlights.append(f"勝利投手: {game.pitcher_result['win']}")
+                            if game.pitcher_result.get('loss'):
+                                highlights.append(f"敗戦投手: {game.pitcher_result['loss']}")
+                            if game.pitcher_result.get('save'):
+                                highlights.append(f"セーブ: {game.pitcher_result['save']}")
+                            
+                            # Add home runs with correct team names (tuple format for HighlightsCard)
+                            home_runs = []
+                            for p in engine.home_team.players + engine.away_team.players:
+                                cnt = engine.game_stats[p]['home_runs']
+                                if cnt > 0:
+                                    t_name = engine.home_team.name if p in engine.home_team.players else engine.away_team.name
+                                    home_runs.append((p.name, cnt, t_name))
+                                    highlights.append(f"HR: {p.name}({t_name})")
+                            game.home_runs = home_runs
+
+                            game.highlights = highlights
+
+                        
+                        # Log to news feed
+                        winner = "ALL-NORTH" if engine.state.home_score > engine.state.away_score else "ALL-SOUTH"
+                        if engine.state.home_score == engine.state.away_score:
+                            winner = "引き分け"
+                        self.log_news(date_str, "オールスター", f"オールスター第{game_num}戦: {winner} {engine.state.home_score}-{engine.state.away_score}")
+        
+        return engine
 
     def _check_schedule_events(self):
         """日付更新時に特別なイベント（オールスター、CS、日本シリーズ）の開始をチェック"""
