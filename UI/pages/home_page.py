@@ -848,6 +848,26 @@ class HomePage(ContentPanel):
         """)
         self.play_btn.clicked.connect(lambda: self.game_requested.emit())
         btn_layout.addWidget(self.play_btn)
+        
+        # Debug: Skip to Offseason button
+        self.debug_skip_btn = QPushButton("⚡ SKIP TO OFFSEASON")
+        self.debug_skip_btn.setCursor(Qt.PointingHandCursor)
+        self.debug_skip_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.accent_orange};
+                color: white;
+                border: none;
+                border-radius: 0px;
+                padding: 14px 20px;
+                font-size: 11px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                background: {self.theme.accent_orange_hover};
+            }}
+        """)
+        self.debug_skip_btn.clicked.connect(self._on_debug_skip_to_offseason)
+        btn_layout.addWidget(self.debug_skip_btn)
 
         layout.addLayout(btn_layout)
 
@@ -999,6 +1019,28 @@ class HomePage(ContentPanel):
         # News
         self.news_card = NewsCard()
         grid.addWidget(self.news_card, row, 2, 1, 2)
+    
+    def _on_debug_skip_to_offseason(self):
+        """デバッグ用: オフシーズンまでスキップ"""
+        if not self.game_state:
+            return
+        
+        from PySide6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self, "デバッグ: オフシーズンスキップ",
+            "レギュラーシーズンとポストシーズンをスキップして\nオフシーズンを開始しますか？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 強制的にオフシーズンを開始
+            self.game_state.start_offseason()
+            
+            # UIを更新
+            self.set_game_state(self.game_state)
+            
+            QMessageBox.information(self, "オフシーズン開始", "オフシーズンを開始しました。\n「NEXT: 契約更改」ボタンを押してください。")
 
     def set_game_state(self, game_state):
         """Update page with game state"""
@@ -1008,6 +1050,14 @@ class HomePage(ContentPanel):
 
         team = game_state.player_team
         if not team:
+            return
+
+        # オフシーズンモード検出
+        is_offseason = getattr(game_state, 'is_offseason', False)
+        
+        # オフシーズン時のUI変更
+        if is_offseason:
+            self._setup_offseason_mode(game_state, team)
             return
 
         # Header
@@ -1066,6 +1116,14 @@ class HomePage(ContentPanel):
         progress = (games_played / 143) * 100
         self.games_card.set_value(f"{games_played}/143")
         self.games_card.set_sub(f"Progress: {progress:.0f}%")
+
+        # Show game-related cards
+        self.matchup_card.show()
+        self.results_card.show()
+        self.record_card.show()
+        self.rank_card.show()
+        self.games_card.show()
+        self.streak_card.show()
 
         # Next game from schedule & Button Text Update
         game_status = self._update_next_game(game_state, team)
@@ -1133,6 +1191,46 @@ class HomePage(ContentPanel):
         self._update_injuries(team)
 
         # News
+        self._update_news(game_state)
+    
+    def _setup_offseason_mode(self, game_state, team):
+        """オフシーズンモードのUI設定"""
+        # Header更新
+        self.team_name_label.setText(team.name.upper())
+        phase_name = game_state.get_current_offseason_phase() if hasattr(game_state, 'get_current_offseason_phase') else "オフシーズン"
+        date_str = getattr(game_state, 'current_date', '')
+        self.season_label.setText(f"{game_state.current_year} OFFSEASON  |  {phase_name}  |  {date_str}")
+        
+        # Color Bar更新
+        while self.color_bar_layout.count():
+            item = self.color_bar_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        color_bar = TeamColorBar(team, height=50, width=6)
+        self.color_bar_layout.addWidget(color_bar)
+        
+        # 試合関連カードを非表示
+        self.matchup_card.hide()
+        self.results_card.hide()
+        
+        # ボタンをオフシーズン用に変更
+        self.play_btn.setText(f"NEXT: {phase_name}")
+        self.play_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.accent_blue};
+                color: white;
+                border: none;
+                border-radius: 0px;
+                padding: 14px 28px;
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                background: #5c9ce6;
+            }}
+        """)
+        
+        # ニュースを更新
         self._update_news(game_state)
 
     def _update_next_game(self, game_state, team):

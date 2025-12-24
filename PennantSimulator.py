@@ -252,6 +252,11 @@ class GameController(QMainWindow):
         self.game_state.initialize_schedule()
         if self.game_state.schedule:
             print(f"  Schedule: {len(self.game_state.schedule.games)} games generated")
+        
+        # Initialize staff data from files
+        print("  Loading staff data...")
+        from UI.pages.staff_page import initialize_staff_from_files
+        initialize_staff_from_files(self.game_state)
 
     def _on_loading_complete(self):
         """Handle loading completion"""

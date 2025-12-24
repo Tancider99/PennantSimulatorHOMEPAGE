@@ -61,6 +61,11 @@ class SimulationWorker(QThread):
                 # GameStateに処理を委譲（エラーハンドリング済み）
                 self.game_state.process_date(date_str)
                 
+                # オフシーズン突入チェック - ポストシーズン終了でシミュレーション停止
+                if getattr(self.game_state, 'is_offseason', False):
+                    self.is_cancelled = True
+                    break
+                
                 # データ収集 - BEFORE stop condition check so data is available when stopping
                 sim_data = {}
                 
@@ -201,7 +206,7 @@ class GameCalendarWidget(QCalendarWidget):
         self.setNavigationBarVisible(True)
         
         self.setMinimumDate(QDate(2027, 3, 1))
-        self.setMaximumDate(QDate(2027, 10, 31))
+        self.setMaximumDate(QDate(2027, 11, 30))
         
         self.setStyleSheet(f"""
             QCalendarWidget {{ background-color: {self.theme.bg_card}; border: none; }}
@@ -221,7 +226,7 @@ class GameCalendarWidget(QCalendarWidget):
         self.player_league = player_league
         
         min_date = QDate(2027, 3, 1)
-        max_date = QDate(2027, 10, 31)
+        max_date = QDate(2027, 11, 30)
         
         for game in games:
             try:
@@ -234,7 +239,7 @@ class GameCalendarWidget(QCalendarWidget):
             except: pass
             
         self.setMinimumDate(QDate(min_date.year(), 3, 1))
-        self.setMaximumDate(QDate(max_date.year(), 10, 31))
+        self.setMaximumDate(QDate(max_date.year(), 11, 30))
         
         self.updateCells()
 
@@ -909,15 +914,157 @@ class SchedulePage(QWidget):
         layout.addWidget(splitter)
 
     def _create_calendar_panel(self) -> QWidget:
+        from PySide6.QtWidgets import QComboBox
+        
         panel = QWidget(); panel.setStyleSheet(f"background-color: {self.theme.bg_dark};")
         layout = QVBoxLayout(panel); layout.setContentsMargins(20, 20, 10, 20)
         lbl = QLabel("SEASON SCHEDULE"); lbl.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {self.theme.text_primary}; letter-spacing: 2px;")
         layout.addWidget(lbl)
+        
+        # カスタムナビゲーション（年・月選択）
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(10)
+        
+        # 年ドロップダウン（2027〜現在のゲーム年）
+        self.year_combo = QComboBox()
+        self.year_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_primary};
+                border: 1px solid {self.theme.border};
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-weight: bold;
+                min-width: 100px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {self.theme.bg_card};
+                color: {self.theme.text_primary};
+                selection-background-color: {self.theme.primary};
+            }}
+        """)
+        # 初期値（後でset_game_stateで更新）
+        self.year_combo.addItem("2027", 2027)
+        self.year_combo.currentIndexChanged.connect(self._on_year_month_changed)
+        nav_layout.addWidget(self.year_combo)
+        
+        # 月ドロップダウン（3月〜11月のみ）
+        self.month_combo = QComboBox()
+        self.month_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {self.theme.bg_input};
+                color: {self.theme.text_primary};
+                border: 1px solid {self.theme.border};
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-weight: bold;
+                min-width: 80px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {self.theme.bg_card};
+                color: {self.theme.text_primary};
+                selection-background-color: {self.theme.primary};
+            }}
+        """)
+        # 3月〜11月のみ追加
+        month_names = ["", "", "", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月"]
+        for m in range(3, 12):  # 3〜11月
+            self.month_combo.addItem(month_names[m], m)
+        self.month_combo.currentIndexChanged.connect(self._on_year_month_changed)
+        nav_layout.addWidget(self.month_combo)
+        
+        nav_layout.addStretch()
+        layout.addLayout(nav_layout)
+        
+        # 現在表示中の年月ラベル
+        self.current_ym_label = QLabel("2027年 3月")
+        self.current_ym_label.setStyleSheet(f"""
+            font-size: 28px;
+            font-weight: bold;
+            color: {self.theme.text_primary};
+            padding: 10px 0;
+        """)
+        self.current_ym_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.current_ym_label)
+        
+        # カレンダーウィジェット
         self.calendar = GameCalendarWidget()
+        self.calendar.setNavigationBarVisible(False)  # デフォルトナビゲーションを非表示
+        
+        # カレンダーを3月〜11月のみに制限
+        current_year = 2027  # デフォルト（後でゲーム年で更新）
+        self.calendar.setMinimumDate(QDate(current_year, 3, 1))  # 3月1日
+        self.calendar.setMaximumDate(QDate(current_year, 11, 30))  # 11月30日
+        
         self.calendar.clicked.connect(self._on_date_selected)
+        self.calendar.clicked.connect(self._on_calendar_page_changed)  # クリック時にラベル更新
+        self.calendar.currentPageChanged.connect(self._on_calendar_page_changed)  # ページ変更時にラベル更新
         self.calendar.activated.connect(self._on_date_double_clicked)  # Double-click
         layout.addWidget(self.calendar)
         return panel
+    
+    def _on_calendar_page_changed(self, arg1=None, arg2=None):
+        """カレンダーのページ変更時（スクロール、クリック等）にラベルを更新
+        
+        currentPageChanged: (int year, int month)
+        clicked: (QDate date)
+        """
+        # 引数の型を判定
+        if isinstance(arg1, QDate):
+            # clicked シグナルから呼ばれた場合
+            year = arg1.year()
+            month = arg1.month()
+        elif arg1 is not None and arg2 is not None:
+            # currentPageChanged シグナルから呼ばれた場合
+            year = arg1
+            month = arg2
+        else:
+            # 引数なしの場合はカレンダーから取得
+            current_date = self.calendar.selectedDate()
+            year = current_date.year()
+            month = current_date.month()
+        
+        # ラベルを更新
+        self.current_ym_label.setText(f"{year}年 {month}月")
+        
+        # ドロップダウンも同期（シグナルをブロックして無限ループ防止）
+        self.year_combo.blockSignals(True)
+        self.month_combo.blockSignals(True)
+        
+        year_index = self.year_combo.findData(year)
+        if year_index >= 0:
+            self.year_combo.setCurrentIndex(year_index)
+        
+        month_index = self.month_combo.findData(month)
+        if month_index >= 0:
+            self.month_combo.setCurrentIndex(month_index)
+        
+        self.year_combo.blockSignals(False)
+        self.month_combo.blockSignals(False)
+    
+    def _on_year_month_changed(self):
+        """年・月ドロップダウン変更時の処理"""
+        year = self.year_combo.currentData()
+        month = self.month_combo.currentData()
+        if year and month:
+            # 年月ラベルを更新
+            self.current_ym_label.setText(f"{year}年 {month}月")
+            
+            # カレンダーの日付範囲を選択した年に更新
+            self.calendar.setMinimumDate(QDate(year, 3, 1))  # 3月1日
+            self.calendar.setMaximumDate(QDate(year, 11, 30))  # 11月30日
+            
+            # カレンダーを選択した年月に移動
+            self.calendar.setSelectedDate(QDate(year, month, 1))
+            self.calendar.setCurrentPage(year, month)
 
     def _create_info_panel(self) -> QWidget:
         panel = QWidget(); panel.setStyleSheet(f"background-color: {self.theme.bg_card}; border-left: 1px solid {self.theme.border};")
@@ -959,12 +1106,225 @@ class SchedulePage(QWidget):
     def set_game_state(self, game_state):
         self.game_state = game_state
         if not game_state: return
+        
+        # オフシーズンモード検出
+        is_offseason = getattr(game_state, 'is_offseason', False)
+        
+        if is_offseason:
+            self._setup_offseason_schedule(game_state)
+            return
+        
+        # 通常シーズンモード：カレンダーを復元
+        self._restore_regular_season_view()
+        
         if hasattr(game_state, 'current_date'):
             try:
                 y, m, d = map(int, game_state.current_date.split('-'))
+                
+                # 年ドロップダウンを更新（2027〜現在のゲーム年）
+                self.year_combo.blockSignals(True)
+                self.year_combo.clear()
+                for year in range(2027, y + 1):
+                    self.year_combo.addItem(str(year), year)
+                # 現在の年を選択
+                year_index = self.year_combo.findData(y)
+                if year_index >= 0:
+                    self.year_combo.setCurrentIndex(year_index)
+                self.year_combo.blockSignals(False)
+                
+                # 月ドロップダウンで現在の月を選択（3〜11月のみ有効）
+                self.month_combo.blockSignals(True)
+                month_index = self.month_combo.findData(m)
+                if month_index >= 0:
+                    self.month_combo.setCurrentIndex(month_index)
+                else:
+                    # 範囲外の月の場合は3月を選択
+                    self.month_combo.setCurrentIndex(0)
+                self.month_combo.blockSignals(False)
+                
+                # 年月ラベルを更新
+                display_month = m if m >= 3 and m <= 11 else 3
+                self.current_ym_label.setText(f"{y}年 {display_month}月")
+                
+                # カレンダーの日付範囲をゲーム年の3月〜11月に設定
+                self.calendar.setMinimumDate(QDate(y, 3, 1))  # 3月1日
+                self.calendar.setMaximumDate(QDate(y, 11, 30))  # 11月30日
                 self.calendar.setSelectedDate(QDate(y, m, d)); self.selected_date = QDate(y, m, d)
             except: pass
         self._refresh_calendar_data(); self._refresh_info_panel()
+    
+    def _restore_regular_season_view(self):
+        """通常シーズン表示に戻す（オフシーズンから復帰時）"""
+        # カレンダーを表示
+        self.calendar.show()
+        
+        # 年月ドロップダウンを表示
+        if hasattr(self, 'year_combo'):
+            self.year_combo.show()
+        if hasattr(self, 'month_combo'):
+            self.month_combo.show()
+        
+        # オフシーズン予定表を非表示
+        if hasattr(self, 'offseason_schedule_widget'):
+            self.offseason_schedule_widget.hide()
+    
+    def _setup_offseason_schedule(self, game_state):
+        """オフシーズンスケジュールの表示設定"""
+        # ヘッダーを更新
+        self.current_ym_label.setText("🏆 OFFSEASON SCHEDULE")
+        
+        # カレンダーを非表示
+        self.calendar.hide()
+        
+        # 年月ドロップダウンを非表示
+        if hasattr(self, 'year_combo'):
+            self.year_combo.hide()
+        if hasattr(self, 'month_combo'):
+            self.month_combo.hide()
+        
+        # オフシーズン予定表ウィジェットを作成（なければ）
+        if not hasattr(self, 'offseason_schedule_widget'):
+            self._create_offseason_schedule_widget()
+        
+        # オフシーズン予定表を表示
+        self.offseason_schedule_widget.show()
+        
+        # オフシーズンスケジュールを取得して更新
+        self._update_offseason_schedule_display(game_state)
+        
+        # Info panel にオフシーズン情報を表示
+        current_phase = ""
+        if hasattr(game_state, 'get_current_offseason_phase'):
+            current_phase = game_state.get_current_offseason_phase()
+        
+        self.matchup_label.setText("🌟 オフシーズン")
+        self.score_label.setText(f"{current_phase}" if current_phase else "---")
+        self.status_label.setText("ホームタブから次のイベントへ進めます")
+    
+    def _create_offseason_schedule_widget(self):
+        """オフシーズン予定表ウィジェットを作成"""
+        from PySide6.QtWidgets import QScrollArea
+        
+        # スクロールエリア
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: none;
+                background: {self.theme.bg_card};
+                border-radius: 12px;
+            }}
+        """)
+        
+        # コンテナ
+        container = QWidget()
+        container.setStyleSheet(f"background: {self.theme.bg_card};")
+        self.offseason_events_layout = QVBoxLayout(container)
+        self.offseason_events_layout.setContentsMargins(20, 20, 20, 20)
+        self.offseason_events_layout.setSpacing(10)
+        
+        scroll.setWidget(container)
+        
+        # カレンダーの親レイアウトに追加
+        if self.calendar.parent():
+            parent_layout = self.calendar.parent().layout()
+            if parent_layout:
+                parent_layout.addWidget(scroll)
+        
+        self.offseason_schedule_widget = scroll
+        self.offseason_schedule_widget.hide()
+    
+    def _update_offseason_schedule_display(self, game_state):
+        """オフシーズン予定表の内容を更新"""
+        if not hasattr(self, 'offseason_events_layout'):
+            return
+        
+        # 既存の項目をクリア
+        while self.offseason_events_layout.count():
+            item = self.offseason_events_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # ヘッダー
+        header = QLabel("📅 オフシーズンイベント一覧")
+        header.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: bold;
+            color: {self.theme.text_primary};
+            padding: 10px 0;
+            background: transparent;
+        """)
+        self.offseason_events_layout.addWidget(header)
+        
+        # イベントリスト取得
+        offseason_events = []
+        if hasattr(game_state, 'get_offseason_schedule'):
+            offseason_events = game_state.get_offseason_schedule()
+        
+        current_phase = None
+        if hasattr(game_state, 'offseason_phase'):
+            current_phase = game_state.offseason_phase
+        
+        # 各イベントを表示
+        for event_date, phase in offseason_events:
+            row = QFrame()
+            row.setStyleSheet(f"""
+                QFrame {{
+                    background: {self.theme.bg_card_elevated if current_phase == phase else 'transparent'};
+                    border-radius: 8px;
+                    padding: 5px;
+                }}
+            """)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(15, 12, 15, 12)
+            
+            # 日付
+            date_str = event_date.strftime("%m月%d日") if hasattr(event_date, 'strftime') else str(event_date)
+            date_label = QLabel(date_str)
+            date_label.setStyleSheet(f"""
+                font-size: 14px;
+                color: {self.theme.text_secondary};
+                background: transparent;
+                min-width: 80px;
+            """)
+            row_layout.addWidget(date_label)
+            
+            # フェーズ名
+            phase_name = phase.value if hasattr(phase, 'value') else str(phase)
+            is_current = current_phase and phase == current_phase
+            
+            phase_label = QLabel(phase_name)
+            if is_current:
+                phase_label.setStyleSheet(f"""
+                    font-size: 16px;
+                    font-weight: bold;
+                    color: {self.theme.accent_blue};
+                    background: transparent;
+                """)
+            else:
+                phase_label.setStyleSheet(f"""
+                    font-size: 14px;
+                    color: {self.theme.text_primary};
+                    background: transparent;
+                """)
+            row_layout.addWidget(phase_label, 1)
+            
+            # ステータスアイコン
+            if is_current:
+                status_label = QLabel("🔵 現在")
+                status_label.setStyleSheet(f"""
+                    font-size: 12px;
+                    color: {self.theme.accent_blue};
+                    background: transparent;
+                """)
+            else:
+                status_label = QLabel("⚪")
+                status_label.setStyleSheet("background: transparent;")
+            row_layout.addWidget(status_label)
+            
+            self.offseason_events_layout.addWidget(row)
+        
+        self.offseason_events_layout.addStretch()
 
     def _refresh_calendar_data(self):
         if not self.game_state or not self.game_state.schedule: return

@@ -32,10 +32,10 @@ class PlayerDataManager:
             print(f"データディレクトリを作成しました: {self.DATA_DIR}")
     
     def _get_team_filepath(self, team_name: str) -> str:
-        """チームごとのファイルパスを取得"""
+        """チームごとの選手データファイルパスを取得"""
         # ファイル名に使えない文字を置換
         safe_name = team_name.replace(" ", "_").replace("/", "_")
-        return os.path.join(self.DATA_DIR, f"{safe_name}.json")
+        return os.path.join(self.DATA_DIR, f"{safe_name}_player.json")
     
     def player_to_dict(self, player: Player) -> Dict[str, Any]:
         """PlayerオブジェクトをDict形式に変換（編集しやすい形式・投手/野手別）"""
@@ -303,16 +303,30 @@ class PlayerDataManager:
         return player
     
     def team_to_dict(self, team: Team) -> Dict[str, Any]:
-        """TeamオブジェクトをDict形式に変換（球団別ファイル用）"""
+        """チームの選手一覧をDict形式に変換（選手情報のみ、チーム情報は team_data_manager で管理）"""
         return {
-            "球団名": team.name,
-            "リーグ": team.league.value,
-            "予算": team.budget,
             "選手一覧": [self.player_to_dict(p) for p in team.players]
         }
     
+    def load_players_to_team(self, team: Team, data: Dict[str, Any]) -> bool:
+        """Dict形式から選手データを既存チームに読み込み（チーム情報は別途読み込み済み想定）"""
+        players_data = data.get("選手一覧") or data.get("players", [])
+        
+        # 選手リストをクリア
+        team.players = []
+        
+        # 選手を復元
+        for player_data in players_data:
+            player = self.dict_to_player(player_data)
+            team.players.append(player)
+        
+        # ★ロースターリストを選手のteam_levelに基づいて構築
+        self._rebuild_roster_lists(team)
+        
+        return True
+    
     def dict_to_team(self, data: Dict[str, Any]) -> Team:
-        """Dict形式からTeamオブジェクトを復元（日本語キー対応）"""
+        """Dict形式からTeamオブジェクトを復元（レガシー互換用）"""
         name = data.get("球団名") or data.get("name", "チーム")
         league_value = data.get("リーグ") or data.get("league", "North League")
         budget = data.get("予算") or data.get("budget", 5000000000)
@@ -419,20 +433,20 @@ class PlayerDataManager:
             filepath = self._get_team_filepath(team.name)
             
             data = {
-                "説明": "このファイルを編集して選手の能力値・名前・背番号などを変更できます",
-                "能力値の範囲": "1～99（50が平均）", # メッセージ修正
-                "バージョン": "2.4",
+                "説明": "選手データファイル（チーム情報は team_data フォルダに分離）",
+                "能力値の範囲": "1～99（50が平均）",
+                "バージョン": "3.0",
                 **self.team_to_dict(team)
             }
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             
-            print(f"球団データを保存しました: {filepath}")
+            print(f"選手データを保存しました: {filepath}")
             return True
         
         except Exception as e:
-            print(f"球団データ保存エラー: {e}")
+            print(f"選手データ保存エラー: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -450,24 +464,24 @@ class PlayerDataManager:
             filepath = self._get_team_filepath(team_name)
             
             if not os.path.exists(filepath):
-                print(f"球団データファイルが見つかりません: {filepath}")
+                print(f"選手データファイルが見つかりません: {filepath}")
                 return None
             
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # Check Version
+            # Check Version (2.4以降は互換)
             version = data.get("バージョン", "1.0")
-            if version != "2.4":
+            if version not in ["2.4", "3.0"]:
                 print(f"古いデータバージョン({version})を検出しました: {team_name} -> 再生成します")
                 return None
             
             team = self.dict_to_team(data)
-            print(f"球団データを読み込みました: {filepath}")
+            print(f"選手データを読み込みました: {filepath}")
             return team
         
         except Exception as e:
-            print(f"球団データ読み込みエラー: {e}")
+            print(f"選手データ読み込みエラー: {e}")
             return None
     
     def save_all_teams(self, teams: List[Team]) -> bool:

@@ -1254,25 +1254,27 @@ class AllStarGameEngine:
 # ========================================
 
 class PostseasonStage(Enum):
-    CS_FIRST = "CSファーストステージ"
-    CS_FINAL = "CSファイナルステージ"
-    JAPAN_SERIES = "日本シリーズ"
+    CS_FIRST = "チャレンジャーシリーズ"  # Challenger Series
+    CS_FINAL = "リーグファイナル"  # League Final
+    JAPAN_SERIES = "グランドチャンピオンシップ"  # Grand Championship
 
 
 @dataclass
 class PostseasonSeries:
     """ポストシーズンシリーズ"""
     stage: PostseasonStage
-    league: str  # "north", "south", or "japan_series"
+    league: str  # "north", "south", or "championship"
     team1: str  # 上位チーム（ホームアドバンテージ）
     team2: str
     team1_wins: int = 0
     team2_wins: int = 0
     games_played: int = 0
-    max_games: int = 3  # CSファースト=3, CSファイナル=6, 日本S=7
-    team1_advantage: int = 0  # CSファイナルで1位チームに1勝アドバンテージ
+    max_games: int = 3  # チャレンジャー=3, リーグファイナル=6, グランドチャンピオンシップ=7
+    initial_games: int = 2  # 最初に生成する試合数 (動的生成用)
+    team1_advantage: int = 0  # リーグファイナルで1位チームに1勝アドバンテージ
     winner: Optional[str] = None
     schedule: List[ScheduledGame] = field(default_factory=list)
+    games_generated: int = 0  # 生成済み試合数
 
 
 class PostseasonEngine:
@@ -1289,19 +1291,27 @@ class PostseasonEngine:
         self.current_stage: Optional[PostseasonStage] = None
 
     def initialize_climax_series(self, north_standings: List[Tuple[str, int]],
-                                   south_standings: List[Tuple[str, int]]):
-        """クライマックスシリーズを初期化"""
+                                   south_standings: List[Tuple[str, int]],
+                                   start_date: datetime.date = None):
+        """ポストシーズンを初期化
+        
+        start_date: 開始日 (Noneの場合はcalendar.cs_first_start)
+        """
+        if start_date is None:
+            start_date = self.calendar.cs_first_start
 
-        # CSファーストステージ（2位 vs 3位、2勝先勝、2位ホーム）
+        # チャレンジャーシリーズ（2位 vs 3位、2勝先勝、2位ホーム）
+        # 最初は2試合のみ生成、1-1なら3戦目を追加
         if len(north_standings) >= 3:
             self.cs_north_first = PostseasonSeries(
                 stage=PostseasonStage.CS_FIRST,
                 league="north",
                 team1=north_standings[1][0],  # 2位
                 team2=north_standings[2][0],  # 3位
-                max_games=3
+                max_games=3,
+                initial_games=2  # 最初は2試合のみ
             )
-            self._generate_series_schedule(self.cs_north_first, self.calendar.cs_first_start)
+            self._generate_series_schedule(self.cs_north_first, start_date)
 
         if len(south_standings) >= 3:
             self.cs_south_first = PostseasonSeries(
@@ -1309,18 +1319,23 @@ class PostseasonEngine:
                 league="south",
                 team1=south_standings[1][0],
                 team2=south_standings[2][0],
-                max_games=3
+                max_games=3,
+                initial_games=2
             )
-            self._generate_series_schedule(self.cs_south_first, self.calendar.cs_first_start)
+            self._generate_series_schedule(self.cs_south_first, start_date)
 
-        # CSファイナルステージ（1位 vs ファースト勝者、4勝先勝、1位に1勝アドバンテージ）
+        # リーグファイナル（1位 vs チャレンジャー勝者、4勝先勝、1位に1勝アドバンテージ）
+        # チャレンジャー予定日から中1日で開始、最初は3試合のみ生成
+        final_start = start_date + datetime.timedelta(days=4)  # 3日+中1日
+        
         if len(north_standings) >= 1:
             self.cs_north_final = PostseasonSeries(
                 stage=PostseasonStage.CS_FINAL,
                 league="north",
                 team1=north_standings[0][0],  # 1位
-                team2="ファースト勝者",  # プレースホルダー
+                team2="チャレンジャー勝者",  # プレースホルダー
                 max_games=6,
+                initial_games=3,  # 最初は3試合のみ
                 team1_advantage=1  # 1勝アドバンテージ
             )
 
@@ -1329,19 +1344,26 @@ class PostseasonEngine:
                 stage=PostseasonStage.CS_FINAL,
                 league="south",
                 team1=south_standings[0][0],
-                team2="ファースト勝者",
+                team2="チャレンジャー勝者",
                 max_games=6,
+                initial_games=3,
                 team1_advantage=1
             )
 
         self.current_stage = PostseasonStage.CS_FIRST
 
-    def _generate_series_schedule(self, series: PostseasonSeries, start_date: datetime.date):
-        """シリーズの日程を生成"""
+    def _generate_series_schedule(self, series: PostseasonSeries, start_date: datetime.date, num_games: int = None):
+        """シリーズの日程を生成 (動的生成対応)
+        
+        num_games: 生成する試合数 (Noneなら initial_games を使用)
+        """
+        if num_games is None:
+            num_games = series.initial_games
+        
         series.schedule = []
         current_date = start_date
 
-        for i in range(series.max_games):
+        for i in range(num_games):
             date_str = current_date.strftime("%Y-%m-%d")
 
             # ホーム・アウェイの決定
@@ -1354,7 +1376,7 @@ class PostseasonEngine:
                     home = series.team2
                     away = series.team1
             else:
-                # CS: 上位チームが全試合ホーム
+                # チャレンジャー/リーグファイナル: 上位チームが全試合ホーム
                 home = series.team1
                 away = series.team2
 
@@ -1362,12 +1384,57 @@ class PostseasonEngine:
                 game_number=i + 1, date=date_str,
                 home_team_name=home, away_team_name=away
             ))
+            series.games_generated = i + 1
 
             current_date += datetime.timedelta(days=1)
 
-            # 日本シリーズ移動日
+            # グランドチャンピオンシップ移動日
             if series.stage == PostseasonStage.JAPAN_SERIES and (i == 1 or i == 4):
                 current_date += datetime.timedelta(days=1)
+    
+    def add_next_game_if_needed(self, series: PostseasonSeries, start_date: datetime.date) -> Optional[ScheduledGame]:
+        """決着がついていなければ次の試合を追加
+        
+        Returns: 追加された試合 or None (決着済み/最大試合数到達)
+        """
+        if series.winner is not None:
+            return None
+        
+        if series.games_generated >= series.max_games:
+            return None
+        
+        # 次の試合日を計算
+        if series.schedule:
+            last_game_date_str = series.schedule[-1].date
+            last_date = datetime.datetime.strptime(last_game_date_str, "%Y-%m-%d").date()
+            next_date = last_date + datetime.timedelta(days=1)
+        else:
+            next_date = start_date
+        
+        game_index = series.games_generated
+        date_str = next_date.strftime("%Y-%m-%d")
+        
+        # ホーム・アウェイの決定
+        if series.stage == PostseasonStage.JAPAN_SERIES:
+            # 2-3-2方式
+            if game_index < 2 or game_index >= 5:
+                home = series.team1
+                away = series.team2
+            else:
+                home = series.team2
+                away = series.team1
+        else:
+            home = series.team1
+            away = series.team2
+        
+        new_game = ScheduledGame(
+            game_number=game_index + 1, date=date_str,
+            home_team_name=home, away_team_name=away
+        )
+        series.schedule.append(new_game)
+        series.games_generated += 1
+        
+        return new_game
 
     def record_game_result(self, series: PostseasonSeries, team1_score: int, team2_score: int):
         """試合結果を記録"""
@@ -1382,6 +1449,8 @@ class PostseasonEngine:
         wins_needed = (series.max_games // 2) + 1
         if series.stage == PostseasonStage.CS_FINAL:
             wins_needed = 4  # アドバンテージ込みで4勝必要
+        elif series.stage == PostseasonStage.JAPAN_SERIES:
+            wins_needed = 4  # グランドチャンピオンシップも4勝先勝
 
         total_team1_wins = series.team1_wins + series.team1_advantage
 
@@ -1389,21 +1458,102 @@ class PostseasonEngine:
             series.winner = series.team1
         elif series.team2_wins >= wins_needed:
             series.winner = series.team2
+        
+        # 勝者が決まっていなければ次の試合を追加
+        if series.winner is None:
+            # 開始日を取得（最初の試合日）
+            start_date = None
+            if series.schedule:
+                try:
+                    start_date = datetime.datetime.strptime(series.schedule[0].date, "%Y-%m-%d").date()
+                except:
+                    start_date = datetime.date.today()
+            new_game = self.add_next_game_if_needed(series, start_date)
+            if new_game:
+                print(f"追加試合生成: {new_game.date} {new_game.away_team_name} vs {new_game.home_team_name}")
+        
+        # チャレンジャーシリーズ終了チェック → リーグファイナル開始
+        if series.winner and series.stage == PostseasonStage.CS_FIRST:
+            self._check_and_start_cs_final()
+        
+        # リーグファイナル終了チェック → グランドチャンピオンシップ開始
+        if series.winner and series.stage == PostseasonStage.CS_FINAL:
+            self._check_and_start_japan_series()
 
-    def advance_to_cs_final(self):
-        """CSファイナルに進出"""
+    def advance_to_cs_final(self, challenger_end_date: datetime.date = None):
+        """リーグファイナルに進出
+        
+        challenger_end_date: チャレンジャーシリーズ終了日 (中1日で開始)
+        """
+        if challenger_end_date is None:
+            # デフォルト: チャレンジャーシリーズ3戦目予定日 + 中1日
+            challenger_end_date = self.calendar.cs_first_start + datetime.timedelta(days=2)
+        
+        final_start = challenger_end_date + datetime.timedelta(days=2)  # 中1日
+        
         if self.cs_north_first and self.cs_north_first.winner:
             self.cs_north_final.team2 = self.cs_north_first.winner
-            self._generate_series_schedule(self.cs_north_final, self.calendar.cs_final_start)
+            self._generate_series_schedule(self.cs_north_final, final_start)
 
         if self.cs_south_first and self.cs_south_first.winner:
             self.cs_south_final.team2 = self.cs_south_first.winner
-            self._generate_series_schedule(self.cs_south_final, self.calendar.cs_final_start)
+            self._generate_series_schedule(self.cs_south_final, final_start)
 
         self.current_stage = PostseasonStage.CS_FINAL
+    
+    def _check_and_start_cs_final(self):
+        """チャレンジャーシリーズ勝者が決まったらリーグファイナルを開始"""
+        # 各リーグのチャレンジャー勝者をチェックしてファイナルを開始
+        north_challenger_winner = None
+        south_challenger_winner = None
+        last_game_date = None
+        
+        if self.cs_north_first and self.cs_north_first.winner:
+            north_challenger_winner = self.cs_north_first.winner
+            # 最後の試合日を取得
+            if self.cs_north_first.schedule:
+                for game in self.cs_north_first.schedule:
+                    try:
+                        game_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
+                        if last_game_date is None or game_date > last_game_date:
+                            last_game_date = game_date
+                    except:
+                        pass
+        
+        if self.cs_south_first and self.cs_south_first.winner:
+            south_challenger_winner = self.cs_south_first.winner
+            if self.cs_south_first.schedule:
+                for game in self.cs_south_first.schedule:
+                    try:
+                        game_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
+                        if last_game_date is None or game_date > last_game_date:
+                            last_game_date = game_date
+                    except:
+                        pass
+        
+        # ノースリーグのファイナルを開始（勝者が決まった時点で）
+        if north_challenger_winner and self.cs_north_final and self.cs_north_final.team2 == "チャレンジャー勝者":
+            self.cs_north_final.team2 = north_challenger_winner
+            final_start = last_game_date + datetime.timedelta(days=2) if last_game_date else self.calendar.cs_final_start
+            self._generate_series_schedule(self.cs_north_final, final_start)
+            print(f"=== ノースファイナル開始 ===")
+            print(f"1位 vs {north_challenger_winner}")
+            self.current_stage = PostseasonStage.CS_FINAL
+        
+        # サウスリーグのファイナルを開始
+        if south_challenger_winner and self.cs_south_final and self.cs_south_final.team2 == "チャレンジャー勝者":
+            self.cs_south_final.team2 = south_challenger_winner
+            final_start = last_game_date + datetime.timedelta(days=2) if last_game_date else self.calendar.cs_final_start
+            self._generate_series_schedule(self.cs_south_final, final_start)
+            print(f"=== サウスファイナル開始 ===")
+            print(f"1位 vs {south_challenger_winner}")
+            self.current_stage = PostseasonStage.CS_FINAL
 
-    def initialize_japan_series(self):
-        """日本シリーズを初期化"""
+    def initialize_japan_series(self, final_end_date: datetime.date = None):
+        """グランドチャンピオンシップを初期化
+        
+        final_end_date: リーグファイナル終了日 (中4日で開始)
+        """
         if not self.cs_north_final or not self.cs_south_final:
             return
 
@@ -1413,6 +1563,13 @@ class PostseasonEngine:
         if not north_champion or not south_champion:
             return
 
+        # 開始日計算
+        if final_end_date is None:
+            # デフォルト: リーグファイナル6戦目予定日 + 中4日
+            final_end_date = self.calendar.cs_final_start + datetime.timedelta(days=5)
+        
+        championship_start = final_end_date + datetime.timedelta(days=5)  # 中4日
+        
         # 年によってホームアドバンテージを交互
         if self.year % 2 == 0:
             team1 = south_champion
@@ -1423,13 +1580,50 @@ class PostseasonEngine:
 
         self.japan_series = PostseasonSeries(
             stage=PostseasonStage.JAPAN_SERIES,
-            league="japan_series",
+            league="championship",
             team1=team1,
             team2=team2,
-            max_games=7
+            max_games=7,
+            initial_games=4  # 最初は4試合のみ生成
         )
-        self._generate_series_schedule(self.japan_series, self.calendar.japan_series_start)
+        self._generate_series_schedule(self.japan_series, championship_start)
         self.current_stage = PostseasonStage.JAPAN_SERIES
+    
+    def _check_and_start_japan_series(self):
+        """両リーグのファイナル勝者が揃ったらグランドチャンピオンシップを開始"""
+        # 既に日本シリーズが始まっている場合は何もしない
+        if self.japan_series is not None:
+            return
+        
+        # 両リーグのファイナル勝者をチェック
+        north_champion = None
+        south_champion = None
+        
+        if self.cs_north_final and self.cs_north_final.winner:
+            north_champion = self.cs_north_final.winner
+        if self.cs_south_final and self.cs_south_final.winner:
+            south_champion = self.cs_south_final.winner
+        
+        # 両方の勝者が揃ったらグランドチャンピオンシップを開始
+        if north_champion and south_champion:
+            # 最後のファイナル試合日を取得
+            final_date = None
+            for series in [self.cs_north_final, self.cs_south_final]:
+                if series and series.schedule:
+                    for game in series.schedule:
+                        try:
+                            game_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
+                            if final_date is None or game_date > final_date:
+                                final_date = game_date
+                        except:
+                            pass
+            
+            print(f"=== 両リーグファイナル終了 ===")
+            print(f"ノース王者: {north_champion}")
+            print(f"サウス王者: {south_champion}")
+            print(f"グランドチャンピオンシップを開始します")
+            
+            self.initialize_japan_series(final_date)
 
     def is_postseason_complete(self) -> bool:
         """ポストシーズンが完了したか"""

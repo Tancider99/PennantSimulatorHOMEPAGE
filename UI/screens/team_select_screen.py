@@ -352,20 +352,26 @@ class TeamSelectScreen(QWidget):
         
         self.items = []
         
-        # Headers & Teams
+        # Headers & Teams - Load from team_data_manager TEAM_CONFIGS
+        from team_data_manager import TEAM_CONFIGS
+        
+        # Get teams by league (first 6 are North, last 6 are South based on config order)
+        north_teams = ["Tokyo Bravers", "Osaka Thunders", "Nagoya Sparks",
+                       "Hiroshima Phoenix", "Yokohama Mariners", "Shinjuku Spirits"]
+        south_teams = ["Fukuoka Phoenix", "Saitama Bears", "Sendai Flames",
+                       "Chiba Mariners", "Sapporo Fighters", "Kobe Buffaloes"]
+        
+        # Filter to only show teams that exist in TEAM_CONFIGS
+        north_teams = [t for t in north_teams if t in TEAM_CONFIGS]
+        south_teams = [t for t in south_teams if t in TEAM_CONFIGS]
+        
         teams_layout.addWidget(self._create_header("NORTH ORBIT"))
-        self._add_teams(teams_layout, "north", [
-            "Tokyo Bravers", "Osaka Thunders", "Nagoya Sparks",
-            "Hiroshima Phoenix", "Yokohama Mariners", "Shinjuku Spirits"
-        ])
+        self._add_teams(teams_layout, "north", north_teams)
         
         teams_layout.addSpacing(20)
         
         teams_layout.addWidget(self._create_header("SOUTH ORBIT"))
-        self._add_teams(teams_layout, "south", [
-            "Fukuoka Phoenix", "Saitama Bears", "Sendai Flames",
-            "Chiba Mariners", "Sapporo Fighters", "Kobe Buffaloes"
-        ])
+        self._add_teams(teams_layout, "south", south_teams)
         
         teams_layout.addStretch()
         left_layout.addWidget(teams_container)

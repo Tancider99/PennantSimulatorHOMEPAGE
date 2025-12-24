@@ -308,6 +308,16 @@ class MainWindow(QMainWindow):
             page.settings_changed.connect(self._on_settings_changed)
             self.settings_page = page
 
+        elif section == "staff":
+            from UI.pages.staff_page import StaffPage
+            page = StaffPage(self)
+            self.staff_page = page
+
+        elif section == "finance":
+            from UI.pages.finance_page import FinancePage
+            page = FinancePage(self)
+            self.finance_page = page
+
         # New sidebar items (farm_swap, contract_changes, reinforcement, staff, finance, save_load)
         # are currently unimplemented and return None.
 
@@ -337,6 +347,11 @@ class MainWindow(QMainWindow):
     def _on_game_requested(self):
         """Handle game request from home page"""
         if not self.game_state:
+            return
+
+        # オフシーズンモードチェック
+        if getattr(self.game_state, 'is_offseason', False):
+            self._handle_offseason_advance()
             return
 
         # プレイヤーチーム
@@ -386,7 +401,11 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "エラー", "対戦チームデータが見つかりませんでした。")
         else:
-            # 試合がない場合 -> 二軍戦などを消化して日付を進める
+            # 試合がない場合
+            # ★ ポストシーズン終了チェック → オフシーズン開始
+            if self._check_and_start_offseason():
+                return
+            
             # ★追加: 二軍・三軍試合のシミュレーション
             try:
                 simulate_farm_games_for_day(self.game_state.teams, self.game_state.current_date)
@@ -413,6 +432,146 @@ class MainWindow(QMainWindow):
             self._on_page_changed(0)
             
             QMessageBox.information(self, "日程進行", "本日は試合がありませんでした。次の日へ進みます。")
+    
+    def _handle_offseason_advance(self):
+        """オフシーズンイベントページに移動"""
+        if not self.game_state:
+            return
+        
+        from game_state import OffseasonPhase
+        
+        current_phase = self.game_state.offseason_phase
+        
+        # フェーズに応じたページに移動
+        if current_phase == OffseasonPhase.CONTRACT_RENEWAL:
+            self._show_contract_renewal_page()
+        elif current_phase == OffseasonPhase.DRAFT:
+            self._show_placeholder_event_page("ドラフト会議")
+        elif current_phase == OffseasonPhase.FALL_CAMP:
+            self._show_placeholder_event_page("秋季キャンプ")
+        elif current_phase == OffseasonPhase.FOREIGN_PLAYER:
+            self._show_placeholder_event_page("外国人選手交渉")
+        elif current_phase == OffseasonPhase.FA_NEGOTIATION:
+            self._show_placeholder_event_page("FA交渉")
+        elif current_phase == OffseasonPhase.FA_COMPENSATION:
+            self._show_placeholder_event_page("FA補償")
+        elif current_phase == OffseasonPhase.ACTIVE_DRAFT:
+            self._show_placeholder_event_page("現役ドラフト")
+        elif current_phase == OffseasonPhase.FREE_AGENT_PICKUP:
+            self._show_placeholder_event_page("自由契約選手獲得")
+        else:
+            # デフォルト：オフシーズン完了
+            self._complete_offseason()
+    
+    def _show_contract_renewal_page(self):
+        """契約更改ページを表示"""
+        from UI.pages.contract_renewal_page import ContractRenewalPage
+        
+        if "contract_renewal" not in self.cached_pages:
+            page = ContractRenewalPage(self)
+            page.back_requested.connect(self._on_event_back)
+            page.completed.connect(self._on_contract_renewal_complete)
+            page.show_player_detail_requested.connect(self._show_player_detail)
+            self.pages.add_page("contract_renewal", page)
+            self.cached_pages["contract_renewal"] = page
+        
+        page = self.cached_pages["contract_renewal"]
+        page.set_game_state(self.game_state)
+        
+        self.current_section = "contract_renewal"  # Track for back navigation
+        self.sidebar.hide()
+        self.pages.show_page("contract_renewal")
+    
+    def _show_placeholder_event_page(self, event_name: str):
+        """プレースホルダーイベントページを表示（開発中）"""
+        reply = QMessageBox.question(
+            self, event_name,
+            f"{event_name}イベントを完了しますか？\n（このイベントは開発中です）",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self._advance_to_next_offseason_event()
+    
+    def _on_event_back(self):
+        """イベントページから戻る"""
+        self.sidebar.show()
+        self._navigate_to("home")
+    
+    def _on_contract_renewal_complete(self):
+        """契約更改完了"""
+        QMessageBox.information(self, "契約更改完了", "契約更改が完了しました。")
+        self._advance_to_next_offseason_event()
+    
+    def _advance_to_next_offseason_event(self):
+        """次のオフシーズンイベントに進む"""
+        if not self.game_state:
+            return
+        
+        if self.game_state.advance_offseason():
+            # まだオフシーズン中 - ホームに戻る
+            self.sidebar.show()
+            self._navigate_to("home")
+            
+            # ホーム画面を更新
+            if "home" in self.cached_pages:
+                self.cached_pages["home"].set_game_state(self.game_state)
+        else:
+            # オフシーズン完了
+            self._complete_offseason()
+    
+    def _complete_offseason(self):
+        """オフシーズン完了処理"""
+        QMessageBox.information(
+            self,
+            "新シーズン開幕",
+            f"{self.game_state.current_year}年シーズンが開幕しました！"
+        )
+        self.sidebar.show()
+        self._navigate_to("home")
+        
+        if "home" in self.cached_pages:
+            self.cached_pages["home"].set_game_state(self.game_state)
+        
+        self._on_page_changed(0)
+    
+    def _check_and_start_offseason(self) -> bool:
+        """ポストシーズン終了をチェックしてオフシーズンを開始
+        
+        Returns: True if offseason was started, False otherwise
+        """
+        if not self.game_state:
+            return False
+        
+        # 既にオフシーズン中なら_handle_offseason_advanceを呼ぶ
+        if getattr(self.game_state, 'is_offseason', False):
+            self._handle_offseason_advance()
+            return True
+        
+        # ポストシーズンが完了しているかチェック
+        ps = getattr(self.game_state, 'postseason_schedule', None)
+        if ps and hasattr(ps, 'is_postseason_complete') and ps.is_postseason_complete():
+            # ポストシーズン終了 → オフシーズン開始
+            champion = ps.get_japan_champion() if hasattr(ps, 'get_japan_champion') else "不明"
+            QMessageBox.information(
+                self, 
+                "シーズン終了",
+                f"{champion}が日本一に輝きました！\n\nオフシーズンを開始します。"
+            )
+            self.game_state.mark_postseason_complete()
+            
+            # 画面更新
+            current_page = self.pages.currentWidget()
+            if current_page and hasattr(current_page, 'set_game_state'):
+                current_page.set_game_state(self.game_state)
+            
+            self._on_page_changed(0)
+            return True
+        
+        # 通常シーズン終了チェック（レギュラーシーズン終了後、ポストシーズン未開始の場合）
+        # → この場合も自動でポストシーズン開始するはずなので何もしない
+        
+        return False
 
     def show_pre_game(self, home_team, away_team):
         """Show pre-game confirmation page"""
@@ -1072,7 +1231,13 @@ class MainWindow(QMainWindow):
         """Handle back button from player detail page"""
         # Return to the previous section
         target = self.previous_section if self.previous_section else "home"
-        self._navigate_to(target)
+        
+        # 契約更改画面に戻る場合はサイドバーを非表示のまま
+        if target == "contract_renewal":
+            self.pages.show_page(target)
+            self.sidebar.hide()
+        else:
+            self._navigate_to(target)
 
     def _show_player_stats_detail(self, player):
         """詳細統計画面を表示"""

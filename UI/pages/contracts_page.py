@@ -57,6 +57,7 @@ class Scout:
     specialty: str = "汎用"  # 野手/投手/汎用
     is_available: bool = True
     current_mission_id: Optional[int] = None
+    staff_member_ref: Optional[object] = None  # Reference to original StaffMember
 
     @property
     def daily_progress(self) -> float:
@@ -64,6 +65,49 @@ class Scout:
         # 5%前後になるように調整 (スキル50で5%)
         # スキル範囲1-99 -> 2.0% ~ 8.0% 程度
         return 2.0 + (self.skill * 0.06)
+
+
+def get_scouts_from_team(team, scout_type: str = "all") -> List[Scout]:
+    """
+    チームのスタッフからスカウトを取得してScoutオブジェクトに変換
+    team.staff が存在する場合はそこから取得、なければ空リストを返す
+    
+    Args:
+        team: Team object
+        scout_type: "all", "domestic", or "international"
+    """
+    from models import StaffRole
+    
+    if not team or not hasattr(team, 'staff') or not team.staff:
+        return []
+    
+    scouts = []
+    for staff in team.staff:
+        if staff.is_scout:
+            # Filter by type if specified
+            if scout_type == "domestic" and staff.role != StaffRole.SCOUT_DOMESTIC:
+                continue
+            if scout_type == "international" and staff.role != StaffRole.SCOUT_INTERNATIONAL:
+                continue
+            
+            # Create a Scout wrapper that references the StaffMember
+            scout = Scout(
+                name=staff.name,
+                skill=staff.ability,
+                specialty=staff.specialty or "汎用",
+                is_available=staff.is_available,
+                current_mission_id=staff.current_mission_id,
+                staff_member_ref=staff
+            )
+            scouts.append(scout)
+    return scouts
+
+
+def sync_scout_to_staff(scout: Scout):
+    """Sync Scout state back to its StaffMember reference"""
+    if scout.staff_member_ref:
+        scout.staff_member_ref.is_available = scout.is_available
+        scout.staff_member_ref.current_mission_id = scout.current_mission_id
 
 
 @dataclass
@@ -322,8 +366,13 @@ class ForeignPlayerCandidate:
         return self.salary_demand + self.bonus_demand
     
     def get_total_cost_display(self) -> str:
-        total = self.get_total_cost() // 1000000 # 百万円単位
-        return f"{total}百万"
+        total_yen = self.get_total_cost()
+        man = total_yen // 10000
+        if man >= 10000:
+            oku = man // 10000
+            remainder = man % 10000
+            return f"{oku}億{remainder}万" if remainder > 0 else f"{oku}億"
+        return f"{man}万"
 
     @staticmethod
     def _value_to_rank(value: int) -> str:
@@ -412,10 +461,29 @@ class ForeignNegotiationDialog(QDialog):
         layout.addWidget(demand_lbl)
         
         demand_grid = QGridLayout()
+        # 年俸を億万形式で表示
+        salary_yen = self.candidate.salary_demand
+        sal_man = salary_yen // 10000
+        if sal_man >= 10000:
+            sal_oku = sal_man // 10000
+            sal_rem = sal_man % 10000
+            sal_text = f"{sal_oku}億{sal_rem}万" if sal_rem > 0 else f"{sal_oku}億"
+        else:
+            sal_text = f"{sal_man}万"
+        
+        bonus_yen = self.candidate.bonus_demand
+        bon_man = bonus_yen // 10000
+        if bon_man >= 10000:
+            bon_oku = bon_man // 10000
+            bon_rem = bon_man % 10000
+            bon_text = f"{bon_oku}億{bon_rem}万" if bon_rem > 0 else f"{bon_oku}億"
+        else:
+            bon_text = f"{bon_man}万"
+        
         demand_grid.addWidget(QLabel("希望年俸:"), 0, 0)
-        demand_grid.addWidget(QLabel(f"{self.candidate.salary_demand // 1000000} 百万円"), 0, 1)
+        demand_grid.addWidget(QLabel(sal_text), 0, 1)
         demand_grid.addWidget(QLabel("契約金:"), 1, 0)
-        demand_grid.addWidget(QLabel(f"{self.candidate.bonus_demand // 1000000} 百万円"), 1, 1)
+        demand_grid.addWidget(QLabel(bon_text), 1, 1)
         demand_grid.addWidget(QLabel("希望年数:"), 2, 0)
         demand_grid.addWidget(QLabel(f"{self.candidate.years_demand} 年"), 2, 1)
         layout.addLayout(demand_grid)
@@ -681,6 +749,7 @@ class DraftScoutingPage(QWidget):
         self.prospects: List[DraftProspect] = []
         self.scouts: List[Scout] = []
         self.selected_prospect: Optional[DraftProspect] = None
+        self.game_state = None
 
         self._generate_dummy_data()
         self._setup_ui()
@@ -688,17 +757,30 @@ class DraftScoutingPage(QWidget):
         # Hide initially to prevent appearing at (0,0) before being properly added to layout
         self.hide()
 
+    def set_game_state(self, game_state):
+        """ゲーム状態を設定し、スカウトを同期"""
+        self.game_state = game_state
+        
+        # Sync domestic scouts from team.staff
+        if game_state and game_state.player_team:
+            domestic_scouts = get_scouts_from_team(game_state.player_team, "domestic")
+            if domestic_scouts:
+                self.scouts = domestic_scouts
+                self._update_scout_combo()
+                self._update_scout_status()
+
     def _generate_dummy_data(self):
         """データ生成 (300人)"""
-        # スカウト生成
-        scout_names = ["田中 誠", "山本 健一", "鈴木 太郎", "佐藤 次郎", "高橋 三郎"]
-        specialties = ["野手", "投手", "汎用", "野手", "投手"]
-        for i, (name, spec) in enumerate(zip(scout_names, specialties)):
-            self.scouts.append(Scout(
-                name=name,
-                skill=random.randint(40, 80),
-                specialty=spec
-            ))
+        # スカウト生成 (fallback if no team.staff)
+        if not self.scouts:
+            scout_names = ["田中 誠", "山本 健一", "鈴木 太郎", "佐藤 次郎", "高橋 三郎"]
+            specialties = ["野手", "投手", "汎用", "野手", "投手"]
+            for i, (name, spec) in enumerate(zip(scout_names, specialties)):
+                self.scouts.append(Scout(
+                    name=name,
+                    skill=random.randint(40, 80),
+                    specialty=spec
+                ))
 
         # 学校名・チーム名パーツ
         univ_names = ["明帝", "東都", "六大学", "関西", "北海", "九州", "国際"]
@@ -1130,6 +1212,7 @@ class DraftScoutingPage(QWidget):
 
         scout_data.is_available = False
         scout_data.current_mission_id = self.selected_prospect.id
+        sync_scout_to_staff(scout_data)  # Sync to StaffMember
 
         self.selected_prospect.scouting_status = ScoutingStatus.IN_PROGRESS
         self.selected_prospect.assigned_scout = scout_data
@@ -1149,6 +1232,7 @@ class DraftScoutingPage(QWidget):
         scout = self.selected_prospect.assigned_scout
         scout.is_available = True
         scout.current_mission_id = None
+        sync_scout_to_staff(scout)  # Sync to StaffMember
 
         self.selected_prospect.scouting_status = ScoutingStatus.NOT_STARTED if self.selected_prospect.scout_level < 100 else ScoutingStatus.COMPLETED
         self.selected_prospect.assigned_scout = None
@@ -1172,6 +1256,7 @@ class DraftScoutingPage(QWidget):
                     prospect.scouting_status = ScoutingStatus.COMPLETED
                     prospect.assigned_scout.is_available = True
                     prospect.assigned_scout.current_mission_id = None
+                    sync_scout_to_staff(prospect.assigned_scout)  # Sync to StaffMember
                     prospect.assigned_scout = None
 
                 prospect.recalculate_estimates()
@@ -1206,6 +1291,7 @@ class DraftScoutingPage(QWidget):
             target.scouting_status = ScoutingStatus.IN_PROGRESS
             scout.is_available = False
             scout.current_mission_id = target.name
+            sync_scout_to_staff(scout)  # Sync to StaffMember
 
 
 # ========================================
@@ -1242,18 +1328,29 @@ class ForeignPlayerScoutingPage(QWidget):
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
         self.game_state = game_state
+        
+        # Sync international scouts from team.staff
+        if game_state and game_state.player_team:
+            international_scouts = get_scouts_from_team(game_state.player_team, "international")
+            if international_scouts:
+                self.scouts = international_scouts
+                self._update_scout_combo()
+                self._update_scout_status()
+        
         self._update_detail_panel()
 
     def _generate_dummy_data(self):
         """ダミーデータ生成 (二層システム)"""
-        # 外国人スカウト 4人 (専門分野なし)
-        scout_names = ["John Smith", "Mike Johnson", "Carlos Garcia", "Pedro Martinez"]
-        for name in scout_names:
-            self.scouts.append(Scout(
-                name=name,
-                skill=random.randint(55, 85),
-                specialty="汎用"
-            ))
+        # スカウトはgame_stateから取得するため、ここでは生成しない (fallbackのみ)
+        # game_stateがまだない場合は外国人スカウト 4人 (専門分野なし) を生成
+        if not self.scouts:
+            scout_names = ["John Smith", "Mike Johnson", "Carlos Garcia", "Pedro Martinez"]
+            for name in scout_names:
+                self.scouts.append(Scout(
+                    name=name,
+                    skill=random.randint(55, 85),
+                    specialty="汎用"
+                ))
 
         # reset_candidatesを呼び出して候補を生成
         self.reset_candidates()
@@ -1809,6 +1906,7 @@ class ForeignPlayerScoutingPage(QWidget):
 
         scout_data.is_available = False
         scout_data.current_mission_id = self.selected_candidate.id
+        sync_scout_to_staff(scout_data)  # Sync to StaffMember
 
         self.selected_candidate.scouting_status = ScoutingStatus.IN_PROGRESS
         self.selected_candidate.assigned_scout = scout_data
@@ -1828,6 +1926,7 @@ class ForeignPlayerScoutingPage(QWidget):
         scout = self.selected_candidate.assigned_scout
         scout.is_available = True
         scout.current_mission_id = None
+        sync_scout_to_staff(scout)  # Sync to StaffMember
 
         self.selected_candidate.scouting_status = ScoutingStatus.NOT_STARTED
         self.selected_candidate.assigned_scout = None
@@ -1949,9 +2048,17 @@ class ForeignPlayerScoutingPage(QWidget):
                 self.game_state.player_team.players.append(new_player)
                 
                 contract_type = "育成" if is_developmental_contract else "支配下"
+                # 年俸を億万形式で表示
+                sal_man = offered_salary // 10000
+                if sal_man >= 10000:
+                    sal_oku = sal_man // 10000
+                    sal_rem = sal_man % 10000
+                    sal_text = f"{sal_oku}億{sal_rem}万" if sal_rem > 0 else f"{sal_oku}億"
+                else:
+                    sal_text = f"{sal_man}万"
                 QMessageBox.information(self, "契約成功",
                     f"{c.name}との{contract_type}契約が成立！\n"
-                    f"年俸: {offered_salary // 1000000}百万円 / {offered_years}年契約\n"
+                    f"年俸: {sal_text} / {offered_years}年契約\n"
                     f"選手がチームに加わりました！")
                 
                 # Remove from candidates list
@@ -2120,6 +2227,7 @@ class ForeignPlayerScoutingPage(QWidget):
                     candidate.scouting_status = ScoutingStatus.COMPLETED
                     candidate.assigned_scout.is_available = True
                     candidate.assigned_scout.current_mission_id = None
+                    sync_scout_to_staff(candidate.assigned_scout)  # Sync to StaffMember
                     candidate.assigned_scout = None
                 
                 candidate.recalculate_estimates()
@@ -2173,6 +2281,7 @@ class ForeignPlayerScoutingPage(QWidget):
             candidate.scouting_status = ScoutingStatus.IN_PROGRESS
             scout.is_available = False
             scout.current_mission_id = candidate.name
+            sync_scout_to_staff(scout)  # Sync to StaffMember
 
 
 # ========================================
@@ -2879,10 +2988,17 @@ class TradePage(QWidget):
             ovr_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row, 3, ovr_item)
 
-            # 年俸（百万円、数値ソート用）
-            salary_mil = getattr(player, 'salary', 0) // 1000000
-            salary_item = SortableTableWidgetItem(f"{salary_mil}百万")
-            salary_item.setData(Qt.UserRole, salary_mil)
+            # 年俸（億万表記）
+            salary_yen = getattr(player, 'salary', 0)
+            sal_man = salary_yen // 10000
+            if sal_man >= 10000:
+                sal_oku = sal_man // 10000
+                sal_rem = sal_man % 10000
+                salary_text = f"{sal_oku}億{sal_rem}万" if sal_rem > 0 else f"{sal_oku}億"
+            else:
+                salary_text = f"{sal_man}万"
+            salary_item = SortableTableWidgetItem(salary_text)
+            salary_item.setData(Qt.UserRole, salary_yen)
             salary_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             table.setItem(row, 4, salary_item)
 
@@ -3303,6 +3419,7 @@ class ContractsPage(QWidget):
     def set_game_state(self, game_state):
         """ゲーム状態を設定"""
         self.game_state = game_state
+        self.draft_page.set_game_state(game_state)
         self.trade_page.set_game_state(game_state)
         self.foreign_page.set_game_state(game_state)
         self._update_tab_availability()

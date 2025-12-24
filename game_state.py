@@ -85,6 +85,20 @@ class DifficultyLevel(Enum):
     VERY_HARD = "ベリーハード"
 
 
+class OffseasonPhase(Enum):
+    """オフシーズンイベントフェーズ"""
+    NONE = "シーズン中"
+    CONTRACT_RENEWAL = "契約更改"
+    DRAFT = "ドラフト会議"
+    FALL_CAMP = "秋季キャンプ"
+    FOREIGN_PLAYER_NEGOTIATION = "帰国選手交渉"
+    FA_NEGOTIATION = "FA交渉"
+    FA_COMPENSATION = "FA補償"
+    ACTIVE_PLAYER_DRAFT = "現役ドラフト"
+    FREE_AGENT_PICKUP = "自由契約選手獲得"
+    COMPLETED = "オフシーズン完了"
+
+
 class GameStateManager:
     """ゲーム状態を管理するクラス"""
 
@@ -128,11 +142,19 @@ class GameStateManager:
         # 自動オーダー設定: "ability" (能力優先) or "condition" (調子優先)
         self.auto_order_priority = "ability"
         
-        # 自由契約選手リスト (Acquisitions用)
         self.free_agents: List[Player] = []
         self.news_feed = [] # ニュースフィード
         self.pending_trades: List[PendingTrade] = [] # トレード提案中リスト
         self.daily_rankings: Dict[str, Dict[str, int]] = {} # 日別順位履歴 {date: {team_name: rank}}
+        
+        # Staff candidate pool (global across all teams)
+        self.staff_candidate_pool: List[dict] = []
+        
+        # オフシーズン管理
+        self.offseason_phase = OffseasonPhase.NONE
+        self.is_offseason = False
+        self.offseason_events_schedule = []  # オフシーズンイベント日程 [(date, phase), ...]
+        
         self._generate_dummy_free_agents()
 
     def _generate_dummy_free_agents(self):
@@ -1229,6 +1251,8 @@ class GameStateManager:
                             
                             if is_ps:
                                 ps_engine.record_game_result(ps_series, engine.state.home_score, engine.state.away_score)
+                                # 追加試合があればスケジュールに反映
+                                self._add_postseason_games_to_schedule()
                             else:
                                 self.record_game_result(home, away, engine.state.home_score, engine.state.away_score)
 
@@ -1366,6 +1390,16 @@ class GameStateManager:
             # 8. レギュラーシーズン終了チェック
             if self.schedule_engine and self.schedule_engine.is_regular_season_complete():
                 self._on_regular_season_complete()
+            
+            # 9. ポストシーズン終了チェック → オフシーズン開始
+            if (self.postseason_schedule and 
+                hasattr(self.postseason_schedule, 'is_postseason_complete') and
+                self.postseason_schedule.is_postseason_complete() and
+                not self.is_offseason):
+                champion = self.postseason_schedule.get_japan_champion()
+                self.log_news("優勝", f"{champion}が日本一に輝きました！", champion)
+                print(f"=== {champion} 日本一！ ===")
+                self.mark_postseason_complete()
 
             # 日付更新
             self.current_date = date_str
@@ -1375,11 +1409,16 @@ class GameStateManager:
             traceback.print_exc()
 
     def _on_regular_season_complete(self):
-        """レギュラーシーズン終了時の処理"""
+        """レギュラーシーズン終了時の処理 - ポストシーズン日程を即座に生成"""
         if self.season_manager and not hasattr(self, '_regular_season_ended'):
             self._regular_season_ended = True
-            print("レギュラーシーズン終了！ポストシーズンに突入します。")
-            # ポストシーズン日程の生成はUI側で行う
+            print("レギュラーシーズン終了！ポストシーズンを生成中...")
+            
+            # ポストシーズン日程を即座に生成
+            if self.start_postseason():
+                print("ポストシーズン日程がカレンダーに追加されました。")
+            else:
+                print("ポストシーズン日程生成に失敗しました。")
 
     def get_current_season_phase(self) -> str:
         """現在のシーズンフェーズを取得"""
@@ -1396,8 +1435,12 @@ class GameStateManager:
         return False
 
     def start_postseason(self) -> bool:
-        """ポストシーズンを開始"""
-        from league_schedule_engine import PostseasonScheduleEngine
+        """ポストシーズンを開始（レギュラーシーズン終了時に呼び出し）
+        
+        - チャレンジャーシリーズ、リーグファイナル、グランドチャンピオンシップの日程を生成
+        - 試合をカレンダーに追加
+        """
+        from league_schedule_engine import PostseasonEngine, SeasonCalendar
         from models import League
 
         if not self.is_regular_season_complete():
@@ -1407,14 +1450,48 @@ class GameStateManager:
         north_standings = self._get_league_standings(League.NORTH)
         south_standings = self._get_league_standings(League.SOUTH)
 
-        # ポストシーズン日程生成
+        # ポストシーズン開始日 = 最終戦の1週間後
         start_date = self.schedule_engine.get_postseason_start_date()
-        ps_engine = PostseasonScheduleEngine(self.current_year, start_date)
-        self.postseason_schedule = ps_engine.generate_climax_series_schedule(
-            north_standings, south_standings
-        )
-
+        
+        # ポストシーズンエンジン初期化
+        calendar = SeasonCalendar.create(self.current_year)
+        ps_engine = PostseasonEngine(self.current_year, calendar)
+        ps_engine.initialize_climax_series(north_standings, south_standings, start_date)
+        
+        # season_managerに保存
+        if self.season_manager:
+            self.season_manager.postseason_engine = ps_engine
+        
+        self.postseason_schedule = ps_engine
+        
+        # 全シリーズの試合をメインスケジュールに追加（カレンダー表示用）
+        self._add_postseason_games_to_schedule()
+        
+        print(f"ポストシーズン日程を生成しました（開始: {start_date}）")
         return True
+    
+    def _add_postseason_games_to_schedule(self):
+        """ポストシーズンの試合をメインスケジュールに追加（カレンダー表示用）"""
+        if not self.postseason_schedule:
+            return
+        
+        ps = self.postseason_schedule
+        
+        # 全シリーズの試合を追加（チャレンジャー、ファイナル、グランドチャンピオンシップ）
+        all_series = [
+            ps.cs_north_first, ps.cs_south_first,
+            ps.cs_north_final, ps.cs_south_final,
+            ps.japan_series
+        ]
+        
+        for series in all_series:
+            if series and series.schedule:
+                for g in series.schedule:
+                    if g not in self.schedule.games:
+                        self.schedule.games.append(g)
+        
+        # スケジュールを日付順にソート
+        self.schedule.games.sort(key=lambda x: x.date)
 
     def _get_league_standings(self, league) -> List[Tuple[str, int]]:
         """リーグの順位を取得"""
@@ -1427,12 +1504,123 @@ class GameStateManager:
         if self.season_manager:
             self.season_manager.mark_postseason_complete()
             print("全日程終了！オフシーズンに突入します。")
+            self.start_offseason()
+
+    def start_offseason(self):
+        """オフシーズンを開始し、イベント日程を生成"""
+        self.is_offseason = True
+        self.offseason_phase = OffseasonPhase.CONTRACT_RENEWAL
+        
+        # オフシーズンイベント日程を生成（各イベント間隔は2-3日）
+        import datetime
+        try:
+            base_date = datetime.datetime.strptime(self.current_date, "%Y-%m-%d").date()
+        except:
+            base_date = datetime.date(self.current_year, 11, 15)
+        
+        # イベント日程を設定
+        events = [
+            (base_date + datetime.timedelta(days=3), OffseasonPhase.CONTRACT_RENEWAL),
+            (base_date + datetime.timedelta(days=6), OffseasonPhase.DRAFT),
+            (base_date + datetime.timedelta(days=9), OffseasonPhase.FALL_CAMP),
+            (base_date + datetime.timedelta(days=12), OffseasonPhase.FOREIGN_PLAYER_NEGOTIATION),
+            (base_date + datetime.timedelta(days=15), OffseasonPhase.FA_NEGOTIATION),
+            (base_date + datetime.timedelta(days=18), OffseasonPhase.FA_COMPENSATION),
+            (base_date + datetime.timedelta(days=21), OffseasonPhase.ACTIVE_PLAYER_DRAFT),
+            (base_date + datetime.timedelta(days=24), OffseasonPhase.FREE_AGENT_PICKUP),
+        ]
+        self.offseason_events_schedule = events
+        
+        # 最初のイベント日付に移動
+        self.current_date = events[0][0].strftime("%Y-%m-%d")
+        
+        # ニュースに追加
+        self.log_news("オフシーズン", "シーズン終了。オフシーズンイベントが始まります。", None)
+        
+        print(f"オフシーズン開始: {self.offseason_phase.value}")
+
+    def advance_offseason(self) -> bool:
+        """オフシーズンを次のフェーズに進める
+        
+        Returns: True if advanced, False if offseason complete
+        """
+        if not self.is_offseason:
+            return False
+        
+        # 現在のフェーズのインデックスを取得
+        phase_order = [
+            OffseasonPhase.CONTRACT_RENEWAL,
+            OffseasonPhase.DRAFT,
+            OffseasonPhase.FALL_CAMP,
+            OffseasonPhase.FOREIGN_PLAYER_NEGOTIATION,
+            OffseasonPhase.FA_NEGOTIATION,
+            OffseasonPhase.FA_COMPENSATION,
+            OffseasonPhase.ACTIVE_PLAYER_DRAFT,
+            OffseasonPhase.FREE_AGENT_PICKUP,
+            OffseasonPhase.COMPLETED,
+        ]
+        
+        try:
+            current_index = phase_order.index(self.offseason_phase)
+        except ValueError:
+            current_index = 0
+        
+        # 次のフェーズに進む
+        next_index = current_index + 1
+        if next_index >= len(phase_order):
+            # オフシーズン完了 → 次年度へ
+            self._advance_to_next_year()
+            return False
+        
+        self.offseason_phase = phase_order[next_index]
+        
+        # 日付を更新
+        if next_index < len(self.offseason_events_schedule):
+            event_date, _ = self.offseason_events_schedule[next_index]
+            self.current_date = event_date.strftime("%Y-%m-%d")
+        
+        # 完了チェック
+        if self.offseason_phase == OffseasonPhase.COMPLETED:
+            self._advance_to_next_year()
+            return False
+        
+        # ニュースに追加
+        self.log_news("オフシーズン", f"{self.offseason_phase.value}が始まりました。", None)
+        print(f"オフシーズン進行: {self.offseason_phase.value}")
+        
+        return True
+
+    def _advance_to_next_year(self):
+        """次年度に進む"""
+        self.current_year += 1
+        self.is_offseason = False
+        self.offseason_phase = OffseasonPhase.NONE
+        self.offseason_events_schedule = []
+        
+        # シーズン開幕日に設定
+        self.current_date = f"{self.current_year}-03-29"
+        
+        # 各種リセット
+        self._regular_season_ended = False if hasattr(self, '_regular_season_ended') else None
+        self.postseason_schedule = None
+        
+        # 新シーズンの日程を生成
+        self.initialize_schedule()
+        
+        self.add_news("新シーズン", f"{self.current_year}年シーズンが開幕します！", None)
+        print(f"=== {self.current_year}年シーズン開幕 ===")
+
+    def get_current_offseason_phase(self) -> str:
+        """現在のオフシーズンフェーズ名を取得"""
+        return self.offseason_phase.value if self.is_offseason else "シーズン中"
+
+    def get_offseason_schedule(self) -> list:
+        """オフシーズンイベント日程を取得"""
+        return [(d.strftime("%Y-%m-%d"), p.value) for d, p in self.offseason_events_schedule]
 
     def is_off_season(self) -> bool:
         """オフシーズンかどうか"""
-        if self.season_manager:
-            return self.season_manager.is_off_season(self.current_date)
-        return False
+        return self.is_offseason
 
     def get_today_weather(self) -> str:
         """今日の天候を取得"""

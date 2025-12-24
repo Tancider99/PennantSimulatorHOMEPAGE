@@ -118,6 +118,67 @@ class TrainingMenu(Enum):
     REST = "休養"  # スタミナ回復優先
 
 
+class StaffRole(Enum):
+    """スタッフ役職"""
+    MANAGER_FIRST = "一軍監督"
+    MANAGER_SECOND = "二軍監督"
+    MANAGER_THIRD = "三軍監督"
+    PITCHING_COACH = "投手コーチ"
+    BATTING_COACH = "打撃コーチ"
+    INFIELD_COACH = "内野守備走塁コーチ"
+    OUTFIELD_COACH = "外野守備走塁コーチ"
+    BATTERY_COACH = "バッテリーコーチ"
+    BULLPEN_COACH = "ブルペンコーチ"
+    SCOUT_DOMESTIC = "国内スカウト"
+    SCOUT_INTERNATIONAL = "海外スカウト"
+
+
+@dataclass
+class StaffMember:
+    """チームスタッフ (監督・コーチ・スカウト)"""
+    name: str
+    role: StaffRole
+    age: int = 45
+    salary: int = 10000000  # 年俸
+    ability: int = 50  # 総合能力 (1-99)
+    specialty: str = ""  # 専門分野 (e.g., "パワー強化", "変化球指導")
+    years_in_role: int = 0
+    team_level: 'TeamLevel' = None  # 所属軍 (1軍/2軍/3軍), None for scouts
+    
+    # Scout-specific fields
+    is_available: bool = True  # スカウト用: 派遣可能か
+    current_mission_id: Optional[str] = None  # スカウト用: 調査対象ID
+    
+    # Candidate tracking
+    source: str = "generated"  # "generated" or "retired_player"
+    original_player_name: str = ""  # 元選手名 (引退選手の場合)
+    
+    def __post_init__(self):
+        if self.team_level is None and not self.is_scout:
+            self.team_level = TeamLevel.FIRST
+    
+    @property
+    def is_coach(self) -> bool:
+        return self.role in [StaffRole.PITCHING_COACH,
+                            StaffRole.BATTING_COACH, StaffRole.INFIELD_COACH,
+                            StaffRole.OUTFIELD_COACH, StaffRole.BATTERY_COACH,
+                            StaffRole.BULLPEN_COACH]
+    
+    @property
+    def is_scout(self) -> bool:
+        return self.role in [StaffRole.SCOUT_DOMESTIC, StaffRole.SCOUT_INTERNATIONAL]
+    
+    @property
+    def is_manager(self) -> bool:
+        return self.role in [StaffRole.MANAGER_FIRST, StaffRole.MANAGER_SECOND, StaffRole.MANAGER_THIRD]
+    
+    @property
+    def daily_progress(self) -> float:
+        """1日あたりの調査進捗率 (%) - for scouts"""
+        # 5%前後になるように調整 (ability 50で5%)
+        return 2.0 + (self.ability * 0.06)
+
+
 # 選手タイプ別の成長倍率定義
 PLAYER_TYPE_GROWTH_MODIFIERS = {
     PlayerType.POWER: {
@@ -1480,6 +1541,11 @@ class Team:
     
     # オーダーが初期化されているかどうか (False の場合、ユーザーが最初に保存するまで空のまま)
     order_initialized: bool = False
+    
+    # スタッフ (監督・コーチ・スカウト) - active staff list for training bonus
+    staff: List['StaffMember'] = field(default_factory=list)
+    # Staff slots (all role slots including empty ones)
+    staff_slots: List[Optional['StaffMember']] = field(default_factory=list)
 
     ACTIVE_ROSTER_LIMIT = 31
     FARM_ROSTER_LIMIT = 40

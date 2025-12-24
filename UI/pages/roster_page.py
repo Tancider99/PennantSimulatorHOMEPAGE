@@ -447,7 +447,17 @@ class RosterPage(QWidget):
                         sub_item.widget().deleteLater()
 
         self.info_panel.add_row("年齢", f"{player.age}歳")
-        self.info_panel.add_row("年俸", f"{player.salary // 10000}万円")
+        
+        # 年俸を億万形式で表示 (salaryは円単位)
+        salary_yen = player.salary
+        man = salary_yen // 10000
+        if man >= 10000:
+            oku = man // 10000
+            remainder = man % 10000
+            salary_text = f"{oku}億{remainder}万" if remainder > 0 else f"{oku}億"
+        else:
+            salary_text = f"{man}万"
+        self.info_panel.add_row("年俸", salary_text)
         self.info_panel.add_row("プロ年数", f"{player.years_pro}年目")
 
         status = "育成" if player.is_developmental else "支配下"

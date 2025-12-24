@@ -26,6 +26,9 @@ class AcquisitionsTable(PlayerTable):
         self.btn_color = btn_color
         super().__init__(parent)
         
+        # Increase row height to prevent button cutoff
+        self.table.verticalHeader().setDefaultSectionSize(40)
+        
         # Override the inner table style to remove hover effect strictly
         self.table.setStyleSheet(self.table.styleSheet() + """
             QTableWidget::item:hover {
@@ -125,9 +128,15 @@ class AcquisitionsTable(PlayerTable):
         stats = player.stats
         record = player.record
         
-        # Salary (百万円単位で表示)
-        salary_mil = player.salary // 1000000
-        salary_text = f"{salary_mil}百万"
+        # Salary (億万形式で表示)
+        salary_yen = player.salary
+        man = salary_yen // 10000
+        if man >= 10000:
+            oku = man // 10000
+            remainder = man % 10000
+            salary_text = f"{oku}億{remainder}万" if remainder > 0 else f"{oku}億"
+        else:
+            salary_text = f"{man}万"
         salary_val = player.salary
         
         # Determine Role
@@ -218,7 +227,7 @@ class AcquisitionsTable(PlayerTable):
                 item.setText(str(value))
                 if "km" in str(value): # Vel
                      item.setData(Qt.UserRole, vel_val)
-                elif "百万" in str(value): # Salary
+                elif "万" in str(value): # Salary (億万 format)
                      item.setData(Qt.UserRole, salary_val)
                 elif "★" in str(value): # Total Stars
                      # Order Style: Gold Text

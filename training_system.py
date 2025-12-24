@@ -172,12 +172,78 @@ def get_growth_modifier(player: Player, stat_name: str) -> float:
     return 1.0
 
 
-def apply_training(player: Player, days: int = 1) -> Dict[str, Any]:
+def get_coach_bonus(player: Player, stat_name: str, team=None) -> float:
+    """
+    コーチ能力に基づく練習効率ボーナスを計算
+    
+    Args:
+        player: 対象選手
+        stat_name: 練習対象の能力名
+        team: チームオブジェクト (None の場合はボーナスなし)
+    
+    Returns:
+        1.0 + bonus (例: 1.15 = +15%)
+    """
+    if not team or not hasattr(team, 'staff') or not team.staff:
+        return 1.0
+    
+    from models import StaffRole, TeamLevel
+    
+    player_level = getattr(player, 'team_level', TeamLevel.FIRST)
+    if player_level is None:
+        player_level = TeamLevel.FIRST
+    
+    # コーチの種類と担当能力のマッピング
+    COACH_STAT_MAP = {
+        StaffRole.BATTING_COACH: [
+            "contact", "gap", "power", "eye", "avoid_k", "chance", 
+            "vs_left_batter", "vs_left_pitcher", "bunt_sac", "trajectory"
+        ],
+        StaffRole.PITCHING_COACH: [
+            "velocity", "control", "stuff", "movement", "stamina", 
+            "vs_pinch", "stability", "hold_runners"
+        ],
+        StaffRole.INFIELD_COACH: [
+            "fielding", "error", "arm", "turn_dp", "baserunning", "speed"
+        ],
+        StaffRole.OUTFIELD_COACH: [
+            "fielding", "error", "arm", "baserunning", "speed"
+        ],
+        StaffRole.BATTERY_COACH: [
+            "catcher_lead", "arm", "blocking"
+        ],
+        StaffRole.BULLPEN_COACH: [
+            "stamina", "vs_pinch", "mental", "recovery"
+        ]
+    }
+    
+    # 適切なコーチを探す
+    best_coach_ability = 50  # デフォルト
+    
+    for staff in team.staff:
+        if not staff.is_coach:
+            continue
+        if staff.team_level != player_level:
+            continue
+        
+        # このコーチが担当する能力か確認
+        coach_stats = COACH_STAT_MAP.get(staff.role, [])
+        if stat_name in coach_stats:
+            if staff.ability > best_coach_ability:
+                best_coach_ability = staff.ability
+    
+    # ボーナス計算: ability 50 = 1.0, ability 80 = 1.15, ability 99 = 1.245
+    bonus = 1.0 + (best_coach_ability - 50) * 0.005
+    return bonus
+
+
+def apply_training(player: Player, days: int = 1, team=None) -> Dict[str, Any]:
     """選手に練習を適用して能力を成長させる
     
     Args:
         player: 対象の選手
         days: 練習日数（デフォルト1日）
+        team: チームオブジェクト（コーチボーナス計算用）
     
     Returns:
         成長結果の辞書 {stat_name: (old_value, new_value, change)}
@@ -278,8 +344,11 @@ def apply_training(player: Player, days: int = 1) -> Dict[str, Any]:
     if stat_name == "trajectory":
         stat_difficulty_mult *= 10.0
     
+    # コーチボーナス
+    coach_bonus = get_coach_bonus(player, stat_name, team)
+    
     # Final XP gain
-    xp_gain = base_xp_gain * work_ethic_mult * age_mult * type_mult * potential_mult / stat_difficulty_mult
+    xp_gain = base_xp_gain * work_ethic_mult * age_mult * type_mult * potential_mult * coach_bonus / stat_difficulty_mult
     
     # Initialize training_xp dict if needed
     if not hasattr(player, 'training_xp') or player.training_xp is None:
@@ -332,12 +401,13 @@ def apply_training(player: Player, days: int = 1) -> Dict[str, Any]:
     return result
 
 
-def apply_team_training(players: list, days: int = 1) -> list:
+def apply_team_training(players: list, days: int = 1, team=None) -> list:
     """チーム全体に練習を適用
     
     Args:
         players: 選手リスト
         days: 練習日数
+        team: チームオブジェクト（コーチボーナス計算用）
     
     Returns:
         各選手の成長結果リスト
@@ -345,7 +415,7 @@ def apply_team_training(players: list, days: int = 1) -> list:
     results = []
     for player in players:
         # Apply training to all players - apply_training handles auto mode (None)
-        result = apply_training(player, days)
+        result = apply_training(player, days, team)
         results.append(result)
     return results
 

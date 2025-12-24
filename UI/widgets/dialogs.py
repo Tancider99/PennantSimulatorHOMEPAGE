@@ -365,7 +365,16 @@ class PlayerDetailDialog(BaseDialog):
         
         # Info Row
         type_str = player.player_type.value if player.player_type else "タイプ未定"
-        info_text = f"{player.position.value} ({type_str}) | {player.age}歳 | プロ{player.years_pro}年目 | {player.salary//10000}万円"
+        # 年俸を億万形式で表示 (salaryは円単位)
+        salary_yen = player.salary
+        man = salary_yen // 10000
+        if man >= 10000:
+            oku = man // 10000
+            remainder = man % 10000
+            salary_text = f"{oku}億{remainder}万" if remainder > 0 else f"{oku}億"
+        else:
+            salary_text = f"{man}万"
+        info_text = f"{player.position.value} ({type_str}) | {player.age}歳 | プロ{player.years_pro}年目 | {salary_text}"
         info_lbl = QLabel(info_text)
         info_lbl.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 13px;")
         layout.addWidget(info_lbl)

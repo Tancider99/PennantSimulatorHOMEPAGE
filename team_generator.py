@@ -9,8 +9,36 @@ import random
 
 
 def create_team(team_name: str, league: League) -> Team:
-    """チームを生成（支配下67〜70人＋育成30〜35人）"""
-    team = Team(name=team_name, league=league)
+    """チームを生成（支配下67〜70人＋育成30〜35人）- NPB風設定を適用"""
+    from team_data_manager import get_team_config
+    from models import Stadium
+    
+    # NPB風設定を取得
+    config = get_team_config(team_name)
+    
+    # 球場を作成
+    stadium_cfg = config.get("stadium", {})
+    stadium = Stadium(
+        name=stadium_cfg.get("name", f"{team_name}スタジアム"),
+        capacity=stadium_cfg.get("capacity", 35000),
+        pf_hr=stadium_cfg.get("pf_hr", 1.0),
+        pf_runs=stadium_cfg.get("pf_runs", 1.0),
+        pf_1b=stadium_cfg.get("pf_1b", 1.0),
+        pf_2b=stadium_cfg.get("pf_2b", 1.0),
+        pf_3b=stadium_cfg.get("pf_3b", 1.0),
+        pf_so=stadium_cfg.get("pf_so", 1.0),
+        pf_bb=stadium_cfg.get("pf_bb", 1.0)
+    )
+    
+    # チームを作成（NPB風設定を適用）
+    team = Team(
+        name=team_name,
+        league=league,
+        stadium=stadium,
+        color=config.get("color"),
+        abbr=config.get("abbr")
+    )
+    
     number = 1
     player_count = 0  # 支配下選手のカウント
     first_team_limit = 31  # 一軍上限
@@ -313,10 +341,60 @@ def _adjust_developmental_stats(player):
 
 
 def load_or_create_teams(north_team_names: list, south_team_names: list) -> tuple:
+    """
+    チームデータを読み込みまたは新規生成
+    
+    NOTE: team_data ファイルはゲーム開始時のみ読み込み、ゲーム中の変更はメモリ内のみ。
+    player_data ファイルも同様にゲーム開始時に読み込み、ゲーム中の変更はゲームセーブで保存。
+    """
     from player_data_manager import player_data_manager
+    from team_data_manager import team_data_manager
+    
     all_team_names = north_team_names + south_team_names
     
-    if player_data_manager.has_all_team_data(all_team_names):
+    # 新形式: team_data と player_data が両方あるかチェック
+    has_new_format = (player_data_manager.has_all_team_data(all_team_names) and 
+                      team_data_manager.has_all_team_data(all_team_names))
+    
+    # 旧形式: player_data のみ (チーム情報も含む)
+    has_old_format = player_data_manager.has_all_team_data(all_team_names) and not has_new_format
+    
+    if has_new_format:
+        # 新形式: team_data からチーム情報を読み込み、player_data から選手を読み込み
+        # NOTE: ファイルから読み込むのみ、ゲーム中の変更はメモリに保持
+        north_teams = []
+        south_teams = []
+        
+        for team_name in north_team_names:
+            team = team_data_manager.load_team(team_name)
+            if team:
+                # 選手データを読み込み
+                player_data_manager._ensure_data_directory()
+                filepath = player_data_manager._get_team_filepath(team_name)
+                import os, json
+                if os.path.exists(filepath):
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    player_data_manager.load_players_to_team(team, data)
+                north_teams.append(team)
+        
+        for team_name in south_team_names:
+            team = team_data_manager.load_team(team_name)
+            if team:
+                filepath = player_data_manager._get_team_filepath(team_name)
+                import os, json
+                if os.path.exists(filepath):
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    player_data_manager.load_players_to_team(team, data)
+                south_teams.append(team)
+        
+        if len(north_teams) == len(north_team_names) and len(south_teams) == len(south_team_names):
+            print("固定選手データを使用します（team_data + player_data 分離形式）")
+            return north_teams, south_teams
+    
+    elif has_old_format:
+        # 旧形式: player_data_manager.load_team() でチーム情報と選手を一緒に読み込む
         north_teams = []
         south_teams = []
         for team_name in north_team_names:
@@ -326,9 +404,15 @@ def load_or_create_teams(north_team_names: list, south_team_names: list) -> tupl
             team = player_data_manager.load_team(team_name)
             if team: south_teams.append(team)
         if len(north_teams) == len(north_team_names) and len(south_teams) == len(south_team_names):
-            print("固定選手データを使用します（球団別ファイル）")
+            print("固定選手データを使用します（旧形式・球団別ファイル）")
+            # 新形式に移行保存 (初回のみ)
+            for team in north_teams + south_teams:
+                team_data_manager.save_team(team)
+                player_data_manager.save_team(team)
+            print("データを新形式に移行しました")
             return north_teams, south_teams
         
+    # 新規生成 - 初回起動時のみ team_data と player_data に保存
     print("新規選手データを生成します")
     north_teams = []
     south_teams = []
@@ -336,11 +420,14 @@ def load_or_create_teams(north_team_names: list, south_team_names: list) -> tupl
     for team_name in north_team_names:
         team = create_team(team_name, League.NORTH)
         north_teams.append(team)
+        # 初期データとして保存 (ゲーム中の変更はメモリ内のみ)
+        team_data_manager.save_team(team)
         player_data_manager.save_team(team)
     
     for team_name in south_team_names:
         team = create_team(team_name, League.SOUTH)
         south_teams.append(team)
+        team_data_manager.save_team(team)
         player_data_manager.save_team(team)
     
     return north_teams, south_teams
