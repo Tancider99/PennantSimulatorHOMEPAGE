@@ -1437,40 +1437,106 @@ class PostseasonEngine:
         return new_game
 
     def record_game_result(self, series: PostseasonSeries, team1_score: int, team2_score: int):
-        """試合結果を記録"""
+        """試合結果を記録 (引き分け考慮、勝率判定、延長戦追加)"""
         series.games_played += 1
 
         if team1_score > team2_score:
             series.team1_wins += 1
-        else:
+        elif team2_score > team1_score:
             series.team2_wins += 1
+        else:
+            pass  # 引き分け: どちらの勝利数も増えない
 
-        # 勝敗判定
-        wins_needed = (series.max_games // 2) + 1
-        if series.stage == PostseasonStage.CS_FINAL:
-            wins_needed = 4  # アドバンテージ込みで4勝必要
-        elif series.stage == PostseasonStage.JAPAN_SERIES:
-            wins_needed = 4  # グランドチャンピオンシップも4勝先勝
-
-        total_team1_wins = series.team1_wins + series.team1_advantage
-
-        if total_team1_wins >= wins_needed:
-            series.winner = series.team1
-        elif series.team2_wins >= wins_needed:
-            series.winner = series.team2
+        # --- 勝敗判定 ---
+        # CSファースト/ファイナル: 上位チーム(team1)のアドバンテージ考慮 + 勝率判定
+        # 日本シリーズ: 4勝先勝。7戦で決まらなければ8戦、9戦と実施
         
+        has_winner = False
+        
+        if series.stage != PostseasonStage.JAPAN_SERIES:
+            # === CSファースト & CSファイナル ===
+            wins_needed = (series.max_games // 2) + 1
+            if series.stage == PostseasonStage.CS_FINAL:
+                wins_needed = 4  # アドバンテージ込みで4勝必要
+            
+            total_team1_wins = series.team1_wins + series.team1_advantage
+            
+            # 勝ち抜け決定条件 (勝利数到達)
+            if total_team1_wins >= wins_needed:
+                series.winner = series.team1
+                has_winner = True
+            elif series.team2_wins >= wins_needed:
+                series.winner = series.team2
+                has_winner = True
+            
+            # 規定試合数終了時の判定 (引き分け等で決着つかない場合)
+            elif series.games_played >= series.max_games:
+                # 勝率判定: アドバンテージを含めた勝利数が多い方が勝者
+                # 同数の場合は上位チーム(team1)が勝者
+                if total_team1_wins >= series.team2_wins:
+                    series.winner = series.team1
+                else:
+                    series.winner = series.team2
+                has_winner = True
+                
+        else:
+            # === 日本シリーズ (グランドチャンピオンシップ) ===
+            wins_needed = 4
+            if series.team1_wins >= wins_needed:
+                series.winner = series.team1
+                has_winner = True
+            elif series.team2_wins >= wins_needed:
+                series.winner = series.team2
+                has_winner = True
+            elif series.games_played >= 7:
+                # 7戦終了時点で勝者が決まっていない場合
+                # 第8戦以降を追加 (引き分けなし、延長無制限は LiveGameEngine 側で制御)
+                # ここでは試合追加のみ行う。勝利数到達で終了。
+                # ただし無限ループ防止のため、一応上限を設ける（例えば第14戦までとか...だが要望は9戦まで?）
+                # 要望: "8戦やって勝者が決まらなかったら9戦を生成"
+                pass 
+
         # 勝者が決まっていなければ次の試合を追加
-        if series.winner is None:
-            # 開始日を取得（最初の試合日）
-            start_date = None
-            if series.schedule:
-                try:
-                    start_date = datetime.datetime.strptime(series.schedule[0].date, "%Y-%m-%d").date()
-                except:
-                    start_date = datetime.date.today()
-            new_game = self.add_next_game_if_needed(series, start_date)
-            if new_game:
-                print(f"追加試合生成: {new_game.date} {new_game.away_team_name} vs {new_game.home_team_name}")
+        if not has_winner:
+            # 試合追加
+            # 日本シリーズかつ7戦終了後は第8戦、8戦終了後は第9戦を追加
+            if series.stage == PostseasonStage.JAPAN_SERIES and series.games_played >= 7:
+                 if series.games_played < 9: # 最大9戦まで延長
+                    # max_gamesを拡張しないとadd_next_game_if_neededで弾かれる
+                    if series.games_generated < series.games_played + 1:
+                        series.max_games = max(series.max_games, series.games_played + 1)
+
+                    start_date = None
+                    if series.schedule:
+                        try:
+                            start_date = datetime.datetime.strptime(series.schedule[0].date, "%Y-%m-%d").date()
+                        except:
+                            start_date = datetime.date.today()
+                    new_game = self.add_next_game_if_needed(series, start_date)
+                    if new_game:
+                        print(f"追加試合生成(延長): {new_game.date} {new_game.away_team_name} vs {new_game.home_team_name}")
+                
+                 elif series.games_played >= 9:
+                    # 9戦やっても決まらない場合...どうする？
+                    # 要望にはないので、一旦引き分けで終了とするか、勝利数多い方にする
+                    # ここでは暫定的に勝利数多い方を勝ちとする（引き分け多数の場合あり得る）
+                    if series.team1_wins >= series.team2_wins:
+                         series.winner = series.team1
+                    else:
+                         series.winner = series.team2
+                    has_winner = True
+            
+            else:
+                # 通常の追加
+                start_date = None
+                if series.schedule:
+                    try:
+                        start_date = datetime.datetime.strptime(series.schedule[0].date, "%Y-%m-%d").date()
+                    except:
+                        start_date = datetime.date.today()
+                new_game = self.add_next_game_if_needed(series, start_date)
+                if new_game:
+                    print(f"追加試合生成: {new_game.date} {new_game.away_team_name} vs {new_game.home_team_name}")
         
         # チャレンジャーシリーズ終了チェック → リーグファイナル開始
         if series.winner and series.stage == PostseasonStage.CS_FIRST:

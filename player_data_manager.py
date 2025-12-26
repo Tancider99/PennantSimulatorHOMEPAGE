@@ -20,6 +20,7 @@ class PlayerDataManager:
     # スクリプトのディレクトリを基準にデータディレクトリを設定
     _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.path.join(_SCRIPT_DIR, "player_data")
+    DEFAULT_DATA_DIR = os.path.join(_SCRIPT_DIR, "player_data_default")
     
     def __init__(self):
         """初期化"""
@@ -30,6 +31,35 @@ class PlayerDataManager:
         if not os.path.exists(self.DATA_DIR):
             os.makedirs(self.DATA_DIR)
             print(f"データディレクトリを作成しました: {self.DATA_DIR}")
+        if not os.path.exists(self.DEFAULT_DATA_DIR):
+            os.makedirs(self.DEFAULT_DATA_DIR)
+    
+    def save_default_data(self):
+        """現在のデータをデフォルトとして保存"""
+        import shutil
+        if os.path.exists(self.DATA_DIR):
+            if os.path.exists(self.DEFAULT_DATA_DIR):
+                shutil.rmtree(self.DEFAULT_DATA_DIR)
+            shutil.copytree(self.DATA_DIR, self.DEFAULT_DATA_DIR)
+            print(f"デフォルト選手データを保存しました: {self.DEFAULT_DATA_DIR}")
+            return True
+        return False
+    
+    def reset_to_default(self):
+        """デフォルトデータに戻す"""
+        import shutil
+        if os.path.exists(self.DEFAULT_DATA_DIR) and os.listdir(self.DEFAULT_DATA_DIR):
+            if os.path.exists(self.DATA_DIR):
+                shutil.rmtree(self.DATA_DIR)
+            shutil.copytree(self.DEFAULT_DATA_DIR, self.DATA_DIR)
+            print(f"選手データをデフォルトに戻しました")
+            return True
+        print(f"デフォルト選手データがありません")
+        return False
+    
+    def has_default_data(self):
+        """デフォルトデータが存在するか確認"""
+        return os.path.exists(self.DEFAULT_DATA_DIR) and len(os.listdir(self.DEFAULT_DATA_DIR)) > 0
     
     def _get_team_filepath(self, team_name: str) -> str:
         """チームごとの選手データファイルパスを取得"""

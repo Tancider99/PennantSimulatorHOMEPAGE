@@ -407,15 +407,23 @@ def apply_team_training(players: list, days: int = 1, team=None) -> list:
     Args:
         players: 選手リスト
         days: 練習日数
-        team: チームオブジェクト（コーチボーナス計算用）
+        team: チームオブジェクト（コーチボーナス計算用、投資設定参照用）
     
     Returns:
         各選手の成長結果リスト
     """
+    # 投資設定から練習効果倍率を取得
+    training_effectiveness = 1.0
+    if team and hasattr(team, 'investment_settings') and team.investment_settings:
+        training_effectiveness = team.investment_settings.get_training_effectiveness()
+    
+    # 練習日数を倍率で調整（効果的な日数として扱う）
+    effective_days = days * training_effectiveness
+    
     results = []
     for player in players:
         # Apply training to all players - apply_training handles auto mode (None)
-        result = apply_training(player, days, team)
+        result = apply_training(player, effective_days, team)
         results.append(result)
     return results
 

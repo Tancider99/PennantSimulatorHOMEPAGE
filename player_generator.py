@@ -267,37 +267,61 @@ def create_random_player(position: Position,
     else:
         total_ability = stats.overall_batting(position)
 
-    # 年俸計算: 指数関数的スケール
-    # 総合力130-300: 5百万～50百万 (線形)
-    # 総合力300以上: 50百万～1000百万 (指数関数的)
+    # 年俸計算: 超大幅格差（チーム年俸50〜120億円目標）
+    # 総合力130-180: 240万～500万 (育成・新人最低レベル)
+    # 総合力180-250: 500万～2000万 (控え・若手)
+    # 総合力250-320: 2000万～1億 (中堅)
+    # 総合力320-400: 1億～5億 (レギュラー級)
+    # 総合力400+: 5億～15億 (スター選手)
     # base_salary は万円単位で計算
     
-    if total_ability >= 300:
-        # 高能力 (300+): 50百万～1000百万 (指数関数的上昇)
-        # 300→50M, 450→200M, 600→500M, 750+→1000M
-        excess = min(total_ability - 300, 450)  # 最大750まで
-        ratio = excess / 450  # 0 to 1
-        # 指数関数: 50M から 1000M への曲線
-        base_salary = 5000 + (ratio ** 1.8) * 95000  # 5000万〜100000万
+    if total_ability >= 400:
+        # エース・主砲クラス (400+): 5億〜15億
+        excess = min(total_ability - 400, 250)
+        ratio = excess / 250
+        base_salary = 50000 + (ratio ** 1.3) * 100000  # 5億〜15億
         randomness = random.uniform(0.9, 1.1)
-    elif total_ability >= 200:
-        # 中堅 (200-299): 15百万～50百万
-        excess = total_ability - 200
-        base_salary = 1500 + excess * 35  # 1500万〜5000万
+    elif total_ability >= 320:
+        # レギュラークラス (320-400): 1億〜5億
+        excess = total_ability - 320
+        ratio = excess / 80
+        base_salary = 10000 + (ratio ** 1.2) * 40000  # 1億〜5億
         randomness = random.uniform(0.85, 1.15)
+    elif total_ability >= 250:
+        # 中堅 (250-320): 2000万～1億
+        excess = total_ability - 250
+        ratio = excess / 70
+        base_salary = 1000 + (ratio ** 1.1) * 9000  # 1000万〜1億
+        randomness = random.uniform(0.85, 1.15)
+    elif total_ability >= 180:
+        # 控え・若手 (180-250): 500万～2000万
+        excess = total_ability - 180
+        ratio = excess / 70
+        base_salary = 500 + ratio * 500  # 500万〜1000万
+        randomness = random.uniform(0.8, 1.2)
     else:
-        # 一般 (1-199): 5百万～15百万
-        base_salary = 500 + total_ability * 5  # 500万〜1500万
+        # 育成・新人 (1-180): 240万～500万
+        ratio = total_ability / 180
+        base_salary = 240 + ratio * 260  # 240万〜500万
         randomness = random.uniform(0.8, 1.2)
     
-    # 年齢係数（高齢ほど高い＝実績ある選手は年俸が高い）
-    if age >= 26:
-        # 26歳=1.0, 30歳=1.28, 35歳=1.63
-        age_factor = 1.0 + (age - 26) * 0.07
+    # 年齢係数（若手は低く、ベテランは高く）
+    if age <= 22:
+        # 新人・若手割引: 18歳=0.4, 22歳=0.7
+        age_factor = 0.4 + (age - 18) * 0.075
+        base_salary = int(base_salary * age_factor)
+    elif age >= 26:
+        # ベテラン割増: 26歳=1.0, 30歳=1.4, 35歳=1.95
+        age_factor = 1.0 + (age - 26) * 0.11
         base_salary = int(base_salary * age_factor)
     
+    # 外国人ボーナス: 2.5〜5.0倍高い
+    if is_foreign:
+        foreign_bonus = random.uniform(2.5, 5.0)
+        base_salary = int(base_salary * foreign_bonus)
+    
     salary = int(base_salary * randomness) * 10000  # 万円を円に変換
-    salary = max(5000000, min(1000000000, salary))  # 5百万～1000百万にクランプ
+    salary = max(2400000, min(1500000000, salary))  # 240万～15億円にクランプ
 
     # Generate potential based on age (younger = higher potential)
     # Base potential decreases with age: ~75 at 18, ~50 at 28, ~30 at 38
@@ -509,21 +533,21 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
     
     # 年齢層と総合力目標を決定 (50% 若手育成候補、50% 即戦力)
     if random.random() < 0.5:
-        # 若手育成候補 (developmental eligible)
-        age = random.randint(18, 25)
-        base_overall = 150 + (age - 18) * 18  # 150 ~ 276
-        target_overall = int(random.gauss(base_overall, 30))
-        target_overall = max(150, min(300, target_overall))  # 下限150, 上限300
+        # 若手育成候補 (developmental eligible) - 総合力200〜320
+        age = random.randint(20, 27)
+        base_overall = 200 + (age - 20) * 15  # 200 ~ 305
+        target_overall = int(random.gauss(base_overall, 25))
+        target_overall = max(200, min(320, target_overall))  # 下限200, 上限320
         is_developmental_candidate = True
     else:
-        # 即戦力 (main roster only) - 高能力層 総合力330〜450
+        # 即戦力 (main roster only) - 高能力層 総合力320〜500
         age = random.randint(26, 35)
         if age <= 30:
-            base_overall = 330 + (age - 26) * 20  # 330 ~ 410
+            base_overall = 340 + (age - 26) * 25  # 340 ~ 440
         else:
-            base_overall = 410 + (age - 30) * 8   # 410 ~ 450
-        target_overall = int(random.gauss(base_overall, 25))
-        target_overall = max(330, min(450, target_overall))  # 下限330, 上限450
+            base_overall = 440 + (age - 30) * 10   # 440 ~ 490
+        target_overall = int(random.gauss(base_overall, 30))
+        target_overall = max(320, min(500, target_overall))  # 下限320, 上限500
         is_developmental_candidate = False
     
     name = generate_foreign_name()
@@ -709,39 +733,46 @@ def create_foreign_free_agent(position: Position, pitch_type: Optional[PitchType
     else:
         total_ability = stats.overall_batting(position)
     
-    # 二層年俸システム（総合力300を境界とする）
-    # 層1: 総合力300以上 → 年俸30百万以上（育成不可）+ 若いほど高い
-    # 層2: 総合力300未満 → 年俸15百万以下（育成可）
+    # 即戦力外国人年俸システム（超格差）
+    # 層1: 総合力400-500 → 年俸5億〜30億（エース・主砲級）
+    # 層2: 総合力320-400 → 年俸1億〜5億（レギュラー級）
+    # 層3: 総合力200-320 → 年俸1000万〜1億（育成可）
     
-    if total_ability >= 300:
-        # 高能力層: 30百万～1000百万（総合力と若さで上昇）
+    if total_ability >= 400:
+        # エリート外国人 (400-500): 5億～30億
         is_developmental_candidate = False
+        excess = min(total_ability - 400, 100)
+        ratio = excess / 100
+        base_salary_man = 50000 + (ratio ** 1.3) * 250000  # 5億〜30億
         
-        # 基本年俸: 総合力300→30M, 400→100M, 450→300M
-        if total_ability >= 400:
-            # エリート (400-450): 100百万～300百万
-            excess = min(total_ability - 400, 50)
-            ratio = excess / 50
-            base_salary_man = 10000 + (ratio ** 1.5) * 90000  # 100M～300M
-        else:
-            # 高能力 (300-399): 30百万～100百万
-            excess = total_ability - 300
-            base_salary_man = 3000 + excess * 70  # 30M～100M
-        
-        # 若さプレミアム: 26歳=1.3, 30歳=1.0, 35歳=0.8
+        # 若さプレミアム
         if age <= 30:
-            youth_factor = 1.0 + (30 - age) * 0.08  # 26歳=1.32, 30歳=1.0
+            youth_factor = 1.0 + (30 - age) * 0.08
         else:
-            youth_factor = max(0.75, 1.0 - (age - 30) * 0.05)  # 35歳=0.75
+            youth_factor = max(0.7, 1.0 - (age - 30) * 0.06)
+        base_salary_man = int(base_salary_man * youth_factor)
+    elif total_ability >= 320:
+        # 高能力外国人 (320-400): 1億～5億
+        is_developmental_candidate = False
+        excess = total_ability - 320
+        ratio = excess / 80
+        base_salary_man = 10000 + (ratio ** 1.2) * 40000  # 1億〜5億
+        
+        # 若さプレミアム
+        if age <= 30:
+            youth_factor = 1.0 + (30 - age) * 0.06
+        else:
+            youth_factor = max(0.75, 1.0 - (age - 30) * 0.05)
         base_salary_man = int(base_salary_man * youth_factor)
     else:
-        # 育成可能層: 3百万～15百万
+        # 育成可能外国人 (200-320): 1000万～1億
         is_developmental_candidate = True
-        base_salary_man = 300 + (total_ability - 130) * 7  # 300万～1490万
-        base_salary_man = max(300, min(1500, base_salary_man))
+        ratio = max(0, (total_ability - 200) / 120)
+        base_salary_man = 1000 + (ratio ** 1.1) * 9000  # 1000万～1億
+        base_salary_man = max(1000, min(10000, base_salary_man))
     
     annual_salary = int(base_salary_man) * 10000
-    annual_salary = max(5000000, min(1000000000, annual_salary))  # 5M～1000Mにクランプ
+    annual_salary = max(10000000, min(3000000000, annual_salary))  # 1000万～30億円にクランプ
     
     # 契約金 (Contract Bonus): 年俸の30%〜60%（若いほど高い）
     bonus_base_ratio = 0.3 + (35 - age) * 0.015  # 35歳=0.3, 26歳=0.435

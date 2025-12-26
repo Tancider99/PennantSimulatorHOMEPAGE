@@ -216,6 +216,211 @@ PLAYER_TYPE_GROWTH_MODIFIERS = {
 }
 
 @dataclass
+class FanBase:
+    """三層ファン構造"""
+    light_fans: int = 300000      # ライト層（増減しやすい、収益低）
+    middle_fans: int = 150000     # ミドル層（中程度）
+    core_fans: int = 50000        # コア層（増減しにくい、収益高）
+    
+    @property
+    def total_fans(self) -> int:
+        return self.light_fans + self.middle_fans + self.core_fans
+    
+    def update_fans(self, settings: 'ManagementSettings', win_rate: float = 0.5):
+        """経営設定と勝率に基づいてファン層を更新"""
+        import random
+        
+        # ライト層: 放映権価格が安いほど増加（変動大）
+        # broadcast_price: 1=最安(大増加), 5=最高(減少)
+        light_mod = (3 - settings.broadcast_price) * 0.0008  # -0.16% ~ +0.16%
+        light_mod += (win_rate - 0.5) * 0.004  # 勝率影響大
+        light_mod += random.uniform(-0.003, 0.003)  # 変動大
+        self.light_fans = max(10000, int(self.light_fans * (1 + light_mod)))
+        
+        # ミドル層: チケット価格が安いほど増加（変動中）
+        middle_mod = (3 - settings.ticket_price) * 0.0005
+        middle_mod += (win_rate - 0.5) * 0.002
+        middle_mod += random.uniform(-0.0015, 0.0015)
+        self.middle_fans = max(5000, int(self.middle_fans * (1 + middle_mod)))
+        
+        # コア層: グッズ価格が安いほど増加（変動小）
+        core_mod = (3 - settings.merchandise_price) * 0.0003
+        core_mod += (win_rate - 0.5) * 0.001
+        core_mod += random.uniform(-0.0005, 0.0005)  # 変動小
+        self.core_fans = max(1000, int(self.core_fans * (1 + core_mod)))
+
+
+@dataclass
+class ManagementSettings:
+    """経営コマンド設定（5段階）"""
+    # 放映権価格：1=最安（ライト層増加）, 5=最高（収益高）
+    broadcast_price: int = 3
+    
+    # チケット価格：1=最安（ミドル層増加）, 5=最高（収益高）
+    ticket_price: int = 3
+    
+    # グッズ価格：1=最安（コア層増加）, 5=最高（収益高）
+    merchandise_price: int = 3
+    
+    def get_level_name(self, level: int) -> str:
+        """レベルを日本語名で返す"""
+        names = {1: "最安", 2: "安い", 3: "標準", 4: "高い", 5: "最高"}
+        return names.get(level, "標準")
+
+
+@dataclass
+class InvestmentSettings:
+    """投資コマンド設定（5段階）"""
+    # 練習設備：1=最低, 5=最高（練習効果に影響）
+    training_facility: int = 3
+    
+    # 医療設備：1=最低, 5=最高（怪我軽減に影響）
+    medical_facility: int = 3
+    
+    def get_training_effectiveness(self) -> float:
+        """練習効果倍率（0.7〜1.5倍）"""
+        return 0.5 + self.training_facility * 0.2
+    
+    def get_injury_reduction(self) -> float:
+        """怪我軽減率（0.15〜0.35）"""
+        return 0.1 + self.medical_facility * 0.05
+    
+    def get_training_cost(self) -> int:
+        """練習設備の年間維持費"""
+        base_costs = {1: 50000000, 2: 100000000, 3: 200000000, 4: 400000000, 5: 800000000}
+        return base_costs.get(self.training_facility, 200000000)
+    
+    def get_medical_cost(self) -> int:
+        """医療設備の年間維持費"""
+        base_costs = {1: 30000000, 2: 60000000, 3: 120000000, 4: 240000000, 5: 480000000}
+        return base_costs.get(self.medical_facility, 120000000)
+
+
+@dataclass
+class TeamFinance:
+    """チームの財務情報"""
+    # ファン層
+    fan_base: FanBase = field(default_factory=FanBase)
+    
+    # 収入項目 (今期累計、円単位)
+    ticket_revenue: int = 0          # チケット収入
+    broadcast_revenue: int = 0       # 放映権収入
+    merchandise_revenue: int = 0     # グッズ収入
+    sponsor_revenue: int = 0         # スポンサー収入
+    other_revenue: int = 0           # その他収入
+    
+    # 支出項目
+    player_salary_expense: int = 0   # 選手年俸
+    staff_salary_expense: int = 0    # スタッフ年俸
+    stadium_maintenance: int = 0     # 球場維持費（累計）
+    facility_expense: int = 0        # 練習・医療設備維持費（累計）
+    other_expense: int = 0           # その他支出（遠征費、雑費等）
+    
+    # 観客数記録
+    season_attendance: int = 0       # 今期累計観客数
+    last_game_attendance: int = 0    # 直近試合の観客数
+    
+    @property
+    def total_income(self) -> int:
+        return self.ticket_revenue + self.broadcast_revenue + self.merchandise_revenue + self.sponsor_revenue + self.other_revenue
+    
+    @property
+    def total_expense(self) -> int:
+        return self.player_salary_expense + self.staff_salary_expense + self.stadium_maintenance + self.facility_expense + self.other_expense
+    
+    @property
+    def total_fans(self) -> int:
+        return self.fan_base.total_fans
+    
+    def calculate_attendance(self, stadium_capacity: int, win_rate: float, opponent_popularity: float = 1.0) -> int:
+        """試合の観客数を計算（最低80%動員率保証）"""
+        import random
+        
+        # 最低動員率: 80%
+        min_attendance = int(stadium_capacity * 0.80)
+        
+        # ファン数に基づく基本動員率: ファン数が多いほど満員に近づく
+        # 100万ファン=85%, 300万ファン=95%, 500万ファン=100%
+        fan_fill_rate = 0.80 + min(self.fan_base.total_fans / 5000000, 1.0) * 0.20
+        base = stadium_capacity * fan_fill_rate
+        
+        # 勝率補正 (0.4で0.95倍、0.5で1.0倍、0.6で1.05倍)
+        base *= (0.9 + win_rate * 0.2)
+        
+        # 対戦相手補正
+        base *= opponent_popularity
+        
+        # ランダム変動 (±10%)
+        base *= random.uniform(0.9, 1.1)
+        
+        # 最低動員率と収容人数の範囲内に収める
+        attendance = max(min_attendance, min(int(base), stadium_capacity))
+        self.last_game_attendance = attendance
+        self.season_attendance += attendance
+        return attendance
+    
+    def calculate_game_revenue(self, attendance: int, settings: 'ManagementSettings'):
+        """試合ごとの収入を計算"""
+        # チケット単価を減少: 1=2300円, 5=3500円
+        ticket_unit_price = 2000 + settings.ticket_price * 300
+        ticket_income = attendance * ticket_unit_price
+        self.ticket_revenue += ticket_income
+        return ticket_income
+    
+    def calculate_daily_revenue(self, settings: 'ManagementSettings'):
+        """日次収入を計算（放映権、グッズ、スポンサー）"""
+        fb = self.fan_base
+        
+        # 放映権収入: ファン数の影響を減らす（平方根で逓減）
+        broadcast_base = 8000000 + settings.broadcast_price * 2000000  # 1000万〜1800万/日
+        broadcast_mult = (fb.total_fans / 500000) ** 0.5  # 平方根で影響を緩やかに
+        self.broadcast_revenue += int(broadcast_base * broadcast_mult)
+        
+        # グッズ収入: 層別に計算
+        # コア層: 高収益、ミドル層: 中収益、ライト層: 低収益
+        price_mult = 0.6 + settings.merchandise_price * 0.15  # 0.75〜1.35
+        core_revenue = fb.core_fans * 3 * price_mult  # 1人3円/日
+        middle_revenue = fb.middle_fans * 1 * price_mult
+        light_revenue = fb.light_fans * 0.3 * price_mult
+        self.merchandise_revenue += int(core_revenue + middle_revenue + light_revenue)
+        
+        # スポンサー収入: ファン数の影響を減らす（平方根で逓減）
+        sponsor_mult = (fb.total_fans / 500000) ** 0.5  # 平方根で影響を緩やかに
+        daily_sponsor = int(15000000 * sponsor_mult)  # 基本1500万円/日
+        self.sponsor_revenue += daily_sponsor
+    
+    def calculate_daily_expense(self, stadium: 'Stadium', inv_settings: 'InvestmentSettings'):
+        """日次支出を計算（球場維持費、設備維持費、その他）"""
+        fb = self.fan_base
+        
+        # 球場維持費（日割）: 年間維持費 / 200
+        if stadium:
+            daily_stadium = stadium.maintenance_cost // 200
+            self.stadium_maintenance += daily_stadium
+        
+        # 設備維持費（日割）
+        if inv_settings:
+            annual_facility = inv_settings.get_training_cost() + inv_settings.get_medical_cost()
+            daily_facility = annual_facility // 200
+            self.facility_expense += daily_facility
+        
+        # その他支出（遠征費、雑費等）: 約100億円/年
+        # 基本2000万円/日 + ファン数に応じて大きく変動（ファン1人あたり10円/日）
+        base_other = 20000000  # 2000万円/日 (年間約40億円の固定費)
+        fan_based_other = int(fb.total_fans * 10)  # ファン1人あたり10円/日
+        daily_other = base_other + fan_based_other
+        self.other_expense += daily_other
+    
+    def host_event(self, event_cost: int):
+        """イベント開催でファン増加"""
+        boost = event_cost / 10000000  # 1000万円で基本ブースト
+        self.fan_base.light_fans += int(self.fan_base.light_fans * boost * 0.05)
+        self.fan_base.middle_fans += int(self.fan_base.middle_fans * boost * 0.02)
+        self.fan_base.core_fans += int(self.fan_base.core_fans * boost * 0.01)
+        self.other_expense += event_cost
+
+
+@dataclass
 class GameResult:
     home_team_name: str
     away_team_name: str
@@ -684,7 +889,9 @@ class PlayerStats:
 @dataclass
 class Stadium:
     name: str
-    capacity: int = 30000
+    capacity: int = 30000           # 観客席数 (10000-100000)
+    field_size: int = 3             # フィールド広さ (1-5: 狭い-広い)
+    is_dome: bool = False           # ドーム球場かどうか
     pf_runs: float = 1.00
     pf_hr: float = 1.00
     pf_1b: float = 1.00
@@ -695,6 +902,19 @@ class Stadium:
 
     def get_factor(self, item: str) -> float:
         return getattr(self, f"pf_{item.lower()}", 1.0)
+    
+    @property
+    def maintenance_cost(self) -> int:
+        """年間維持費: 容量に比例、ドームは2倍"""
+        base = self.capacity * 5000  # 1席あたり5000円/年
+        if self.is_dome:
+            return base * 2
+        return base
+    
+    @property
+    def attendance_bonus(self) -> float:
+        """ドーム球場は観客が来やすい（+20%）"""
+        return 1.2 if self.is_dome else 1.0
 
 
 @dataclass
@@ -1413,8 +1633,11 @@ class Player:
         
         self.fatigue = min(100, self.fatigue)
 
-    def check_injury_risk(self) -> bool:
+    def check_injury_risk(self, injury_reduction: float = 0.0) -> bool:
         """ケガリスクチェック（疲労と耐久力に基づく）
+        
+        Args:
+            injury_reduction: 怪我軽減率 (0.0-0.35、医療設備投資から取得)
         
         Returns: True if player gets injured
         """
@@ -1430,7 +1653,10 @@ class Player:
         durability = getattr(self.stats, 'durability', 50)
         durability_mult = 100 / max(50, durability)
         
-        final_risk = base_risk * fatigue_mult * durability_mult
+        # 医療設備による軽減 (0-35%軽減)
+        medical_mult = 1.0 - injury_reduction
+        
+        final_risk = base_risk * fatigue_mult * durability_mult * medical_mult
         
         if random.random() < final_risk:
             # ケガ発生
@@ -1546,6 +1772,13 @@ class Team:
     staff: List['StaffMember'] = field(default_factory=list)
     # Staff slots (all role slots including empty ones)
     staff_slots: List[Optional['StaffMember']] = field(default_factory=list)
+    
+    # 財務情報
+    finance: 'TeamFinance' = field(default_factory=TeamFinance)
+    # 経営設定
+    management_settings: 'ManagementSettings' = field(default_factory=ManagementSettings)
+    # 投資設定
+    investment_settings: 'InvestmentSettings' = field(default_factory=InvestmentSettings)
 
     ACTIVE_ROSTER_LIMIT = 31
     FARM_ROSTER_LIMIT = 40
@@ -1996,35 +2229,24 @@ class Schedule:
         game.home_score = home_score
         game.away_score = away_score
 
-TEAM_COLORS = {
-    "Tokyo Bravers": "#FF6600",
-    "Osaka Thunders": "#FFD700",
-    "Nagoya Sparks": "#005BAC",
-    "Hiroshima Phoenix": "#C20000",
-    "Yokohama Mariners": "#0055B3",
-    "Shinjuku Spirits": "#009944",
-    "Fukuoka Phoenix": "#FFF200",
-    "Saitama Bears": "#003366",
-    "Sendai Flames": "#800000",
-    "Chiba Mariners": "#222222",
-    "Sapporo Fighters": "#0066B3",
-    "Kobe Buffaloes": "#1B1B1B",
-}
+def _load_team_colors_and_abbrs():
+    """Load team colors and abbreviations from team_data files."""
+    try:
+        from team_data_manager import team_data_manager
+        teams_info = team_data_manager.get_all_teams_from_files()
+        colors = {}
+        abbrs = {}
+        for name, data in teams_info["all_data"].items():
+            if data.get("色"):
+                colors[name] = data["色"]
+            if data.get("略称"):
+                abbrs[name] = data["略称"]
+        return colors, abbrs
+    except:
+        return {}, {}
 
-TEAM_ABBRS = {
-    "Tokyo Bravers": "TB",
-    "Osaka Thunders": "OT",
-    "Nagoya Sparks": "NS",
-    "Hiroshima Phoenix": "HP",
-    "Yokohama Mariners": "YM",
-    "Shinjuku Spirits": "SS",
-    "Fukuoka Phoenix": "FP",
-    "Saitama Bears": "SB",
-    "Sendai Flames": "SF",
-    "Chiba Mariners": "CM",
-    "Sapporo Fighters": "SF",
-    "Kobe Buffaloes": "KB",
-}
+# Load from data files with fallback to empty dicts
+TEAM_COLORS, TEAM_ABBRS = _load_team_colors_and_abbrs()
 
 def generate_best_lineup(team: Team, roster_players: List[Player], ignore_restriction: bool = False, current_date: str = None) -> List[int]:
     def_priority = [

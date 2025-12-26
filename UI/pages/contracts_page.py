@@ -3384,11 +3384,12 @@ class ContractsPage(QWidget):
 
         def on_clicked(checked):
             if checked:
-                # 新外国人調査タブ (index 1) の制限期間チェック
-                if index == 1 and self._is_foreign_tab_closed():
+                # 新外国人調査(1)とトレード(2)の制限期間チェック
+                if index in [1, 2] and self._is_foreign_tab_closed():
+                    label = "新外国人調査" if index == 1 else "トレード"
                     QMessageBox.warning(self, "期間外", 
-                        "新外国人調査は8月～10月の間は行えません。\n"
-                        "外国人選手の調査・獲得は11月から7月までの期間に行ってください。")
+                        f"{label}はシーズン終盤・ポストシーズン期間中は行えません。\n"
+                        "オフシーズン（11月以降の全日程終了後）から再開可能です。")
                     btn.setChecked(False)
                     return
                 
@@ -3407,12 +3408,24 @@ class ContractsPage(QWidget):
                 btn.setChecked(False)
     
     def _is_foreign_tab_closed(self) -> bool:
-        """新外国人調査タブが閉鎖期間かどうかを判定"""
+        """ターゲット期間（トレード・新外国人の制限期間）かどうかを判定"""
         if not hasattr(self, 'game_state') or not self.game_state or not self.game_state.current_date:
             return False
         try:
-            m = int(self.game_state.current_date.split('-')[1])
-            return m in [8, 9, 10]
+            date_str = self.game_state.current_date
+            m = int(date_str.split('-')[1])
+            
+            # 8, 9, 10月はトレード期限後＆シーズン佳境のため閉鎖
+            if m in [8, 9, 10]:
+                return True
+            
+            # 11月以降でも、オフシーズンに入っていなければ閉鎖 (日本シリーズ延長時など)
+            if m in [11, 12]:
+                if hasattr(self.game_state, 'season_manager') and self.game_state.season_manager:
+                    if not self.game_state.season_manager.is_off_season(date_str):
+                        return True
+            
+            return False
         except:
             return False
 
@@ -3447,46 +3460,49 @@ class ContractsPage(QWidget):
         try:
             is_foreign_disabled = self._is_foreign_tab_closed()
             
-            # Button 1 is "新外国人調査" - グレーアウト表示 (ただしクリックは可能)
-            if len(self.nav_buttons) > 1:
-                btn = self.nav_buttons[1]
-                if is_foreign_disabled:
-                    btn.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {self.theme.bg_card_elevated};
-                            color: {self.theme.text_muted};
-                            border: none;
-                            border-bottom: 3px solid transparent;
-                            padding: 12px 20px;
-                            font-weight: 700;
-                            font-size: 13px;
-                        }}
-                    """)
-                else:
-                    btn.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {self.theme.bg_card_elevated};
-                            color: {self.theme.text_secondary};
-                            border: none;
-                            border-bottom: 3px solid transparent;
-                            padding: 12px 20px;
-                            font-weight: 700;
-                            font-size: 13px;
-                        }}
-                        QPushButton:hover {{
-                            background-color: {self.theme.bg_hover};
-                            color: {self.theme.text_primary};
-                        }}
-                        QPushButton:checked {{
-                            background-color: {self.theme.bg_dark};
-                            color: {self.theme.text_primary};
-                            border-bottom: 3px solid {self.theme.accent_blue};
-                        }}
-                    """)
-                
-                # If currently selected and disabled, switch to Draft
-                if is_foreign_disabled and self.stacked_widget.currentIndex() == 1:
-                     self.nav_buttons[0].click()
+            # Button 1 (新外国人) & Button 2 (トレード) - グレーアウト表示
+            for idx in [1, 2]:
+                if len(self.nav_buttons) > idx:
+                    btn = self.nav_buttons[idx]
+                    if is_foreign_disabled:
+                        btn.setStyleSheet(f"""
+                            QPushButton {{
+                                background-color: {self.theme.bg_card_elevated};
+                                color: {self.theme.text_muted};
+                                border: none;
+                                border-bottom: 3px solid transparent;
+                                padding: 12px 20px;
+                                font-weight: 700;
+                                font-size: 13px;
+                            }}
+                        """)
+                    else:
+                         # 通常スタイル (既存のコードの再適用は複雑になるので、共通スタイルメソッドがあれば良いが...)
+                         # ここでは hover/checked スタイルを含むフル定義を設定
+                        btn.setStyleSheet(f"""
+                            QPushButton {{
+                                background-color: {self.theme.bg_card_elevated};
+                                color: {self.theme.text_secondary};
+                                border: none;
+                                border-bottom: 3px solid transparent;
+                                padding: 12px 20px;
+                                font-weight: 700;
+                                font-size: 13px;
+                            }}
+                            QPushButton:hover {{
+                                background-color: {self.theme.bg_hover};
+                                color: {self.theme.text_primary};
+                            }}
+                            QPushButton:checked {{
+                                background-color: {self.theme.bg_dark};
+                                color: {self.theme.text_primary};
+                                border-bottom: 3px solid {self.theme.accent_blue};
+                            }}
+                        """)
+            
+            # If currently selected and disabled, switch to Draft
+            if is_foreign_disabled and self.stacked_widget.currentIndex() in [1, 2]:
+                 self.nav_buttons[0].click()
         except: pass
 
     def load_data(self, data_manager):

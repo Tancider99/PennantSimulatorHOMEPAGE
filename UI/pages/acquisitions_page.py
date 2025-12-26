@@ -16,6 +16,18 @@ from UI.widgets.panels import ToolbarPanel
 from UI.widgets.tables import PlayerTable, SortableTableWidgetItem, RatingDelegate
 from models import Player, Position, TeamLevel
 
+
+def format_salary(salary_yen: int) -> str:
+    """年俸を億万表記にフォーマット"""
+    man = salary_yen // 10000
+    if man >= 10000:
+        oku = man // 10000
+        remainder = man % 10000
+        if remainder > 0:
+            return f"{oku}億{remainder}万"
+        return f"{oku}億"
+    return f"{man}万"
+
 class AcquisitionsTable(PlayerTable):
     """Custom PlayerTable for Acquisitions with Salary and Action columns"""
     
@@ -378,9 +390,12 @@ class AcquisitionsPage(QWidget):
             
         shihaika_count = len([p for p in self.current_team.players if not p.is_developmental])
         limit = self.MAX_SHIHAIKA
-        color = self.theme.success if shihaika_count < limit else self.theme.danger
+        count_color = self.theme.success if shihaika_count < limit else self.theme.danger
         
-        self.team_info_label.setText(f"{self.current_team.name} | 支配下登録: <span style='color:{color}'>{shihaika_count}</span>/{limit}人")
+        self.team_info_label.setText(
+            f"{self.current_team.name} | "
+            f"支配下登録: <span style='color:{count_color}'>{shihaika_count}</span>/{limit}人"
+        )
 
     def _refresh_release_list(self):
         if not self.current_team: return

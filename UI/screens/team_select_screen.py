@@ -317,7 +317,45 @@ class TeamSelectScreen(QWidget):
         super().__init__(parent)
         self.theme = get_theme()
         self._teams_data = {}
+        self.teams_container = None
         self._setup_ui()
+    
+    def showEvent(self, event):
+        """Refresh team list every time screen is shown"""
+        super().showEvent(event)
+        self.refresh_teams()
+    
+    def refresh_teams(self):
+        """Reload team list from files"""
+        if not self.teams_container:
+            return
+        
+        # Clear existing items
+        layout = self.teams_container.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        self.items = []
+        
+        # Load teams dynamically from team_data files
+        from team_data_manager import team_data_manager
+        teams_info = team_data_manager.get_all_teams_from_files()
+        
+        # Extract team names
+        north_teams = [name for name, data in teams_info["north"]]
+        south_teams = [name for name, data in teams_info["south"]]
+        
+        layout.addWidget(self._create_header("NORTH ORBIT"))
+        self._add_teams(layout, "north", north_teams)
+        
+        layout.addSpacing(20)
+        
+        layout.addWidget(self._create_header("SOUTH ORBIT"))
+        self._add_teams(layout, "south", south_teams)
+        
+        layout.addStretch()
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -345,25 +383,20 @@ class TeamSelectScreen(QWidget):
         left_layout.addWidget(title)
         
         # Team Lists (ScrollAreaを廃止し、QVBoxLayoutに直接配置)
-        teams_container = QWidget()
-        teams_layout = QVBoxLayout(teams_container)
+        self.teams_container = QWidget()
+        teams_layout = QVBoxLayout(self.teams_container)
         teams_layout.setContentsMargins(0, 0, 0, 0)
         teams_layout.setSpacing(4)
         
         self.items = []
         
-        # Headers & Teams - Load from team_data_manager TEAM_CONFIGS
-        from team_data_manager import TEAM_CONFIGS
+        # Load teams dynamically from team_data files
+        from team_data_manager import team_data_manager
+        teams_info = team_data_manager.get_all_teams_from_files()
         
-        # Get teams by league (first 6 are North, last 6 are South based on config order)
-        north_teams = ["Tokyo Bravers", "Osaka Thunders", "Nagoya Sparks",
-                       "Hiroshima Phoenix", "Yokohama Mariners", "Shinjuku Spirits"]
-        south_teams = ["Fukuoka Phoenix", "Saitama Bears", "Sendai Flames",
-                       "Chiba Mariners", "Sapporo Fighters", "Kobe Buffaloes"]
-        
-        # Filter to only show teams that exist in TEAM_CONFIGS
-        north_teams = [t for t in north_teams if t in TEAM_CONFIGS]
-        south_teams = [t for t in south_teams if t in TEAM_CONFIGS]
+        # Extract team names
+        north_teams = [name for name, data in teams_info["north"]]
+        south_teams = [name for name, data in teams_info["south"]]
         
         teams_layout.addWidget(self._create_header("NORTH ORBIT"))
         self._add_teams(teams_layout, "north", north_teams)
@@ -374,7 +407,7 @@ class TeamSelectScreen(QWidget):
         self._add_teams(teams_layout, "south", south_teams)
         
         teams_layout.addStretch()
-        left_layout.addWidget(teams_container)
+        left_layout.addWidget(self.teams_container)
         
         layout.addWidget(left)
         

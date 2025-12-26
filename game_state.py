@@ -11,7 +11,7 @@ import random
 import datetime
 from PySide6.QtCore import QDate
 from farm_game_simulator import FarmGameSimulator
-from league_schedule_engine import WeatherSystem
+from league_schedule_engine import WeatherSystem, PostseasonStage
 from training_system import apply_team_training
 
 from dataclasses import dataclass, field
@@ -327,8 +327,8 @@ class GameStateManager:
         from training_system import apply_team_training
         
         for team in self.all_teams:
-            # 練習による成長 (全選手)
-            apply_team_training(team.players, 1)
+            # 練習による成長 (全選手) - チームオブジェクトを渡して投資設定を反映
+            apply_team_training(team.players, 1, team)
             
             for player in team.players:
                 # 明示的な疲労増加防止 (練習も休息も疲労は減る方向のみ)
@@ -349,8 +349,54 @@ class GameStateManager:
                 if new_fatigue > old_fatigue:
                     player.fatigue = old_fatigue
 
+        # ファン数・財務の日次更新
+        self._update_team_finances_daily()
+
         # トレード進行処理
         self._process_pending_trades()
+
+    def _update_team_finances_daily(self):
+        """全チームの財務とファン層を日次更新"""
+        from models import TeamFinance, ManagementSettings, InvestmentSettings, FanBase
+        
+        for team in self.all_teams:
+            # 財務オブジェクトの確認（後方互換性）
+            if not hasattr(team, 'finance') or team.finance is None:
+                team.finance = TeamFinance()
+            
+            if not hasattr(team, 'management_settings') or team.management_settings is None:
+                team.management_settings = ManagementSettings()
+            
+            if not hasattr(team, 'investment_settings') or team.investment_settings is None:
+                team.investment_settings = InvestmentSettings()
+            
+            # fan_baseが存在しない場合は作成
+            if not hasattr(team.finance, 'fan_base') or team.finance.fan_base is None:
+                team.finance.fan_base = FanBase()
+            
+            finance = team.finance
+            settings = team.management_settings
+            inv_settings = team.investment_settings
+            
+            # 勝率を計算
+            total_games = team.wins + team.losses + team.draws
+            win_rate = team.wins / total_games if total_games > 0 else 0.5
+            
+            # ファン層を更新
+            finance.fan_base.update_fans(settings, win_rate)
+            
+            # 日次収入を計算（放映権、グッズ、スポンサー）
+            finance.calculate_daily_revenue(settings)
+            
+            # 日次支出を計算（球場維持費、設備維持費、その他）
+            finance.calculate_daily_expense(team.stadium, inv_settings)
+            
+            # 年俸の設定（一度だけ設定、日次では変更しない）
+            if finance.player_salary_expense == 0:
+                total_player_salary = sum(getattr(p, 'salary', 10000000) for p in team.players)
+                total_staff_salary = sum(getattr(s, 'salary', 5000000) for s in team.staff) if hasattr(team, 'staff') else 0
+                finance.player_salary_expense = total_player_salary
+                finance.staff_salary_expense = total_staff_salary
 
     def _process_pending_trades(self):
         """トレード提案の進行処理"""
@@ -1242,8 +1288,17 @@ class GameStateManager:
                             
                             is_ps = (ps_series is not None)
 
+                            # 延長回数の設定
+                            max_innings = 12
+                            if is_ps and ps_series.stage == PostseasonStage.JAPAN_SERIES:
+                                # 日本シリーズ第8戦以降は延長無制限（引き分けなし）
+                                # games_playedは終了した試合数。7試合終了(=第8戦)以降
+                                if ps_series.games_played >= 7:
+                                    max_innings = None
+                                    print(f"JAPAN SERIES GAME {ps_series.games_played + 1}: Unlimited Innings Mode")
+
                             # 試合実行
-                            engine = LiveGameEngine(home, away, is_postseason=is_ps)
+                            engine = LiveGameEngine(home, away, is_postseason=is_ps, max_innings=max_innings)
                             while not engine.is_game_over():
                                 engine.simulate_pitch()
 
@@ -1299,17 +1354,22 @@ class GameStateManager:
                             
                             # Check for injuries after game for players who participated
                             for team in [home, away]:
+                                # 医療設備投資から怪我軽減率を取得
+                                injury_reduction = 0.0
+                                if hasattr(team, 'investment_settings') and team.investment_settings:
+                                    injury_reduction = team.investment_settings.get_injury_reduction()
+                                
                                 # Check pitchers who pitched
                                 pitchers_used = engine.state.home_pitchers_used if team == home else engine.state.away_pitchers_used
                                 if pitchers_used:
                                     for pitcher in pitchers_used:
-                                        if pitcher.check_injury_risk():
+                                        if pitcher.check_injury_risk(injury_reduction):
                                             self.log_news("怪我", f"{pitcher.name}選手が{pitcher.injury_name}で全治{pitcher.injury_days}日の見込み", team.name, date_str)
                                 
                                 # Check batters who played (check lineup players)
                                 for player in team.players:
                                     if player.position != Position.PITCHER and not player.is_injured:
-                                        if player.check_injury_risk():
+                                        if player.check_injury_risk(injury_reduction):
                                             self.log_news("怪我", f"{player.name}選手が{player.injury_name}で全治{player.injury_days}日の見込み", team.name, date_str)
 
                             

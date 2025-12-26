@@ -86,6 +86,41 @@ def get_shared_pool_path() -> str:
     return os.path.join(save_dir, "shared_candidate_pool.json")
 
 
+# デフォルトデータディレクトリ
+STAFF_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "staff_data")
+STAFF_DEFAULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "staff_data_default")
+
+
+def save_staff_default_data():
+    """現在のスタッフデータをデフォルトとして保存"""
+    import shutil
+    if os.path.exists(STAFF_DATA_DIR):
+        if os.path.exists(STAFF_DEFAULT_DIR):
+            shutil.rmtree(STAFF_DEFAULT_DIR)
+        shutil.copytree(STAFF_DATA_DIR, STAFF_DEFAULT_DIR)
+        print(f"デフォルトスタッフデータを保存しました: {STAFF_DEFAULT_DIR}")
+        return True
+    return False
+
+
+def reset_staff_to_default():
+    """スタッフデータをデフォルトに戻す"""
+    import shutil
+    if os.path.exists(STAFF_DEFAULT_DIR) and os.listdir(STAFF_DEFAULT_DIR):
+        if os.path.exists(STAFF_DATA_DIR):
+            shutil.rmtree(STAFF_DATA_DIR)
+        shutil.copytree(STAFF_DEFAULT_DIR, STAFF_DATA_DIR)
+        print(f"スタッフデータをデフォルトに戻しました")
+        return True
+    print(f"デフォルトスタッフデータがありません")
+    return False
+
+
+def has_staff_default_data():
+    """デフォルトスタッフデータが存在するか確認"""
+    return os.path.exists(STAFF_DEFAULT_DIR) and len(os.listdir(STAFF_DEFAULT_DIR)) > 0
+
+
 def save_shared_pool(candidate_pool: list):
     """Save the shared candidate pool"""
     data = []

@@ -952,7 +952,7 @@ class BattedBallGenerator:
         
         # --- 打球速度を先に計算し、それでHard/Mid/Softを判定 ---
         # ベース速度: パワー・コンタクト依存
-        base_v = 145 + (power - 50) * 0.8 + (con_eff - 50) * 0.1
+        base_v = 140 + (power - 50) * 0.4 + (con_eff - 50) * 0.1
         if strategy == "POWER": base_v += 10
         elif strategy == "MEET": base_v -= 5
         elif strategy == "NAGASHI": 
@@ -1557,7 +1557,7 @@ class AdvancedDefenseEngine:
             return False
 
 class LiveGameEngine:
-    def __init__(self, home: Team, away: Team, team_level: TeamLevel = TeamLevel.FIRST, league_stats: Dict[str, float] = None, is_all_star: bool = False, is_postseason: bool = False, debug_mode: bool = False):
+    def __init__(self, home: Team, away: Team, team_level: TeamLevel = TeamLevel.FIRST, league_stats: Dict[str, float] = None, is_all_star: bool = False, is_postseason: bool = False, debug_mode: bool = False, max_innings: int = 12):
         self.home_team = home; self.away_team = away
         self.team_level = team_level; self.state = GameState()
         self.pitch_gen = PitchGenerator(); self.bat_gen = BattedBallGenerator()
@@ -1574,6 +1574,7 @@ class LiveGameEngine:
         # Check All-Star
         self.is_all_star = is_all_star or (home.name in ["ALL-NORTH", "ALL-SOUTH"] or away.name in ["ALL-NORTH", "ALL-SOUTH"])
         self.is_postseason = is_postseason
+        self.max_innings = max_innings
 
         
         # 新しい投手管理システム
@@ -2657,13 +2658,17 @@ class LiveGameEngine:
             # - 12回以降なら引き分け終了
             # - それ未満なら延長継続（False）
             if home == away:
-                if inning >= 12:
-                    return True  # [規則7] 12回終了で引き分け
+                # 無制限設定（max_innings is None）なら続行
+                if self.max_innings is None:
+                    return False
+                # 上限到達なら引き分け終了
+                elif inning >= self.max_innings:
+                    return True  # [規則7] 規定回終了で引き分け
                 else:
                     return False  # 延長継続
         
-        # ハードリミット（13回以上は強制終了）
-        if inning >= 13:
+        # ハードリミット (max_innings指定時のみ)
+        if self.max_innings is not None and inning > self.max_innings:
             return True
 
         return False

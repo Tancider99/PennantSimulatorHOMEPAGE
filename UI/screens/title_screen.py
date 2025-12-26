@@ -107,6 +107,7 @@ class TitleScreen(QWidget):
     new_game_clicked = Signal()
     continue_clicked = Signal()
     load_game_clicked = Signal()
+    edit_clicked = Signal()
     settings_clicked = Signal()
     exit_clicked = Signal()
 
@@ -196,6 +197,11 @@ class TitleScreen(QWidget):
         self.load_btn = PremiumButton("LOAD GAME", "secondary")
         self.load_btn.clicked.connect(self.load_game_clicked.emit)
         menu_layout.addWidget(self.load_btn, alignment=Qt.AlignCenter)
+
+        # Edit button
+        self.edit_btn = PremiumButton("EDIT", "secondary")
+        self.edit_btn.clicked.connect(self.edit_clicked.emit)
+        menu_layout.addWidget(self.edit_btn, alignment=Qt.AlignCenter)
 
         # Settings button
         self.settings_btn = PremiumButton("SETTINGS", "secondary")

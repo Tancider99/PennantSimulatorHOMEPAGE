@@ -136,11 +136,16 @@ class GameController(QMainWindow):
         self.loading_screen = self.LoadingScreen()
         self.title_screen = self.TitleScreen()
         self.team_select_screen = self.TeamSelectScreen()
+        
+        # Import and create edit screen
+        from UI.screens.edit_screen import EditScreen
+        self.edit_screen = EditScreen()
 
         # Add screens to stack
         self.stack.addWidget(self.loading_screen)      # Index 0
         self.stack.addWidget(self.title_screen)         # Index 1
         self.stack.addWidget(self.team_select_screen)   # Index 2
+        self.stack.addWidget(self.edit_screen)          # Index 3
 
         # Robustly ensure no frame on stack
         from PySide6.QtWidgets import QFrame
@@ -152,10 +157,12 @@ class GameController(QMainWindow):
         self.title_screen.new_game_clicked.connect(self._on_new_game)
         self.title_screen.continue_clicked.connect(self._on_continue)
         self.title_screen.load_game_clicked.connect(self._on_load_game)
+        self.title_screen.edit_clicked.connect(self._on_edit)
         self.title_screen.settings_clicked.connect(self._on_settings)
         self.title_screen.exit_clicked.connect(self._on_exit)
         self.team_select_screen.back_clicked.connect(self._on_team_select_back)
         self.team_select_screen.confirm_clicked.connect(self._on_team_confirmed)
+        self.edit_screen.back_clicked.connect(self._on_edit_back)
 
     def _start_loading(self):
         """Start the loading sequence"""
@@ -204,10 +211,10 @@ class GameController(QMainWindow):
         from team_generator import load_or_create_teams
 
         # Fictional team names for copyright compliance
-        # North League 
+        # North League
         north_team_names = [
             "Tokyo Bravers",
-            "Osaka Thunders",
+            "Kobe Thunders",
             "Nagoya Sparks",
             "Hiroshima Phoenix",
             "Yokohama Mariners",
@@ -220,7 +227,7 @@ class GameController(QMainWindow):
             "Sendai Flames",
             "Chiba Mariners",
             "Sapporo Fighters",
-            "Kobe Buffaloes"
+            "Osaka Buffaloes"
         ]
 
         print("  Loading team data...")
@@ -257,6 +264,10 @@ class GameController(QMainWindow):
         print("  Loading staff data...")
         from UI.pages.staff_page import initialize_staff_from_files
         initialize_staff_from_files(self.game_state)
+        
+        # Set game_state on edit_screen for live reload
+        if hasattr(self, 'edit_screen'):
+            self.edit_screen.set_game_state(self.game_state)
 
     def _on_loading_complete(self):
         """Handle loading completion"""
@@ -294,6 +305,16 @@ class GameController(QMainWindow):
         print("  Opening settings...")
         # Show settings dialog
         # For now, this is a placeholder
+
+    def _on_edit(self):
+        """Handle edit button click"""
+        print("  Opening edit mode...")
+        self.edit_screen.load_data()
+        self.stack.setCurrentWidget(self.edit_screen)
+    
+    def _on_edit_back(self):
+        """Handle back from edit screen"""
+        self.stack.setCurrentIndex(1)  # Return to title screen
 
     def _on_exit(self):
         """Handle exit button click"""

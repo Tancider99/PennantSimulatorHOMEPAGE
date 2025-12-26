@@ -808,21 +808,14 @@ class RankingGraphWidget(QWidget):
         self.rankings_history = {} # {date: {team: rank}}
         self.target_league = None # 表示対象リーグ
         
-        # NPB Team Colors
-        self.team_colors = {
-            "Tokyo Bravers": "#002569", # Chunichi Blue
-            "Nagoya Sparks": "#F97709", # Giants Orange
-            "Chiba Mariners": "#0055A5", # DeNA Blue
-            "Sapporo Fighters": "#F6C900", # Tigers Yellow
-            "Osaka Thunders": "#FF0000", # Carp Red
-            "Hiroshima Phoenix": "#072C58", # Yakult Navy
-            "Fukuoka Phoenix": "#F9C304", # Softbank Yellow
-            "Sendai Flames": "#860010", # Rakuten Crimson
-            "Yokohama Mariners": "#006298", # Nippon-Ham Blue/Gold
-            "Saitama Bears": "#1F366A", # Seibu Blue
-            "Kobe Buffaloes": "#000019", # Orix Navy
-            "Shinjuku Spirits": "#333333", # Lotte Black
-        }
+        # Load team colors from data files
+        from team_data_manager import team_data_manager
+        teams_info = team_data_manager.get_all_teams_from_files()
+        self.team_colors = {}
+        for name, data in teams_info["all_data"].items():
+            color = data.get("色", "#FFFFFF")
+            if color:
+                self.team_colors[name] = color
         
     def set_data(self, history, league=None):
         # 直近10日分のみ保持・描画

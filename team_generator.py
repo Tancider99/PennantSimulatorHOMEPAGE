@@ -11,7 +11,7 @@ import random
 def create_team(team_name: str, league: League) -> Team:
     """チームを生成（支配下67〜70人＋育成30〜35人）- NPB風設定を適用"""
     from team_data_manager import get_team_config
-    from models import Stadium
+    from models import Stadium, TeamFinance, FanBase
     
     # NPB風設定を取得
     config = get_team_config(team_name)
@@ -21,6 +21,7 @@ def create_team(team_name: str, league: League) -> Team:
     stadium = Stadium(
         name=stadium_cfg.get("name", f"{team_name}スタジアム"),
         capacity=stadium_cfg.get("capacity", 35000),
+        is_dome=stadium_cfg.get("is_dome", False),
         pf_hr=stadium_cfg.get("pf_hr", 1.0),
         pf_runs=stadium_cfg.get("pf_runs", 1.0),
         pf_1b=stadium_cfg.get("pf_1b", 1.0),
@@ -28,6 +29,14 @@ def create_team(team_name: str, league: League) -> Team:
         pf_3b=stadium_cfg.get("pf_3b", 1.0),
         pf_so=stadium_cfg.get("pf_so", 1.0),
         pf_bb=stadium_cfg.get("pf_bb", 1.0)
+    )
+    
+    # ファン層データを設定
+    fans_cfg = config.get("fans", {})
+    fan_base = FanBase(
+        light_fans=fans_cfg.get("light", 300000),
+        middle_fans=fans_cfg.get("middle", 150000),
+        core_fans=fans_cfg.get("core", 50000)
     )
     
     # チームを作成（NPB風設定を適用）
@@ -38,6 +47,10 @@ def create_team(team_name: str, league: League) -> Team:
         color=config.get("color"),
         abbr=config.get("abbr")
     )
+    
+    # 財務データを設定（ファン層を含む）
+    team.finance = TeamFinance(fan_base=fan_base)
+
     
     number = 1
     player_count = 0  # 支配下選手のカウント
@@ -244,6 +257,31 @@ def create_team(team_name: str, league: League) -> Team:
         team.players.append(p)
         dev_number += 1
     
+    # ==============================
+    # チームの年俸調整: ファン数に応じた倍率を適用
+    # 477万ファン(阪神級) = 1.3倍 → 約80億円
+    # 350万ファン(巨人級) = 1.15倍 → 約65億円
+    # 200万ファン(中位) = 1.0倍 → 約50億円
+    # 142万ファン(ヤクルト級) = 0.7倍 → 約35億円
+    # ==============================
+    total_fans = fan_base.total_fans
+    if total_fans >= 4000000:
+        salary_mult = 1.3
+    elif total_fans >= 3000000:
+        salary_mult = 1.0 + (total_fans - 3000000) / 3333333  # 3M→1.0, 4M→1.3
+    elif total_fans >= 2000000:
+        salary_mult = 0.85 + (total_fans - 2000000) / 6666667  # 2M→0.85, 3M→1.0
+    elif total_fans >= 1500000:
+        salary_mult = 0.7 + (total_fans - 1500000) / 3333333  # 1.5M→0.7, 2M→0.85
+    else:
+        salary_mult = 0.6 + total_fans / 2500000 * 0.1  # 0→0.6, 1.5M→0.66
+    
+    # 全選手の年俸に倍率を適用
+    for p in team.players:
+        if hasattr(p, 'salary') and p.salary:
+            p.salary = int(p.salary * salary_mult)
+            p.salary = max(2400000, min(1500000000, p.salary))  # 再クランプ
+    
     return team
 
 
@@ -344,90 +382,124 @@ def load_or_create_teams(north_team_names: list, south_team_names: list) -> tupl
     """
     チームデータを読み込みまたは新規生成
     
-    NOTE: team_data ファイルはゲーム開始時のみ読み込み、ゲーム中の変更はメモリ内のみ。
-    player_data ファイルも同様にゲーム開始時に読み込み、ゲーム中の変更はゲームセーブで保存。
+    Priority:
+    1. team_dataディレクトリの既存ファイルからチームを読み込む (編集されたチーム名も対応)
+    2. 不足分のみ新規生成
     """
     from player_data_manager import player_data_manager
     from team_data_manager import team_data_manager
+    import os
+    import json
     
-    all_team_names = north_team_names + south_team_names
-    
-    # 新形式: team_data と player_data が両方あるかチェック
-    has_new_format = (player_data_manager.has_all_team_data(all_team_names) and 
-                      team_data_manager.has_all_team_data(all_team_names))
-    
-    # 旧形式: player_data のみ (チーム情報も含む)
-    has_old_format = player_data_manager.has_all_team_data(all_team_names) and not has_new_format
-    
-    if has_new_format:
-        # 新形式: team_data からチーム情報を読み込み、player_data から選手を読み込み
-        # NOTE: ファイルから読み込むのみ、ゲーム中の変更はメモリに保持
-        north_teams = []
-        south_teams = []
-        
-        for team_name in north_team_names:
-            team = team_data_manager.load_team(team_name)
-            if team:
-                # 選手データを読み込み
-                player_data_manager._ensure_data_directory()
-                filepath = player_data_manager._get_team_filepath(team_name)
-                import os, json
-                if os.path.exists(filepath):
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    player_data_manager.load_players_to_team(team, data)
-                north_teams.append(team)
-        
-        for team_name in south_team_names:
-            team = team_data_manager.load_team(team_name)
-            if team:
-                filepath = player_data_manager._get_team_filepath(team_name)
-                import os, json
-                if os.path.exists(filepath):
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    player_data_manager.load_players_to_team(team, data)
-                south_teams.append(team)
-        
-        if len(north_teams) == len(north_team_names) and len(south_teams) == len(south_team_names):
-            print("固定選手データを使用します（team_data + player_data 分離形式）")
-            return north_teams, south_teams
-    
-    elif has_old_format:
-        # 旧形式: player_data_manager.load_team() でチーム情報と選手を一緒に読み込む
-        north_teams = []
-        south_teams = []
-        for team_name in north_team_names:
-            team = player_data_manager.load_team(team_name)
-            if team: north_teams.append(team)
-        for team_name in south_team_names:
-            team = player_data_manager.load_team(team_name)
-            if team: south_teams.append(team)
-        if len(north_teams) == len(north_team_names) and len(south_teams) == len(south_team_names):
-            print("固定選手データを使用します（旧形式・球団別ファイル）")
-            # 新形式に移行保存 (初回のみ)
-            for team in north_teams + south_teams:
-                team_data_manager.save_team(team)
-                player_data_manager.save_team(team)
-            print("データを新形式に移行しました")
-            return north_teams, south_teams
-        
-    # 新規生成 - 初回起動時のみ team_data と player_data に保存
-    print("新規選手データを生成します")
     north_teams = []
     south_teams = []
     
+    # team_dataディレクトリから既存チームを読み込む
+    team_data_dir = team_data_manager.DATA_DIR
+    existing_teams = {}
+    
+    # Get league info from TEAM_CONFIGS for fallback
+    from team_data_manager import TEAM_CONFIGS
+    south_team_default = set(south_team_names)
+    
+    if os.path.exists(team_data_dir):
+        for filename in os.listdir(team_data_dir):
+            if filename.endswith("_team.json"):
+                team_filepath = os.path.join(team_data_dir, filename)
+                try:
+                    with open(team_filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # ファイル内の球団名を使用（編集後の名前）
+                    team_name = data.get("球団名", filename.replace("_team.json", "").replace("_", " "))
+                    
+                    # リーグを決定: ファイル内 → TEAM_CONFIGS → ファイル名から推測
+                    league = data.get("リーグ")
+                    if not league:
+                        # ファイル名からオリジナル名を取得
+                        file_base_name = filename.replace("_team.json", "").replace("_", " ")
+                        # TEAM_CONFIGSから検索
+                        if file_base_name in south_team_default:
+                            league = "South League"
+                        else:
+                            league = "North League"
+                    
+                    # ファイルから直接チームを作成
+                    team = team_data_manager.dict_to_team(data)
+                    
+                    # 計算したリーグを設定（ファイルにリーグ情報がない場合の対応）
+                    if team:
+                        league_enum = League.SOUTH if "South" in league else League.NORTH
+                        team.league = league_enum
+                        # 選手データを読み込み - ファイル名ベースで探す
+                        # (ファイルはリネームされているので、チーム名からパスを生成)
+                        player_filepath = player_data_manager._get_team_filepath(team_name)
+                        
+                        # ファイル名ベースでも試す
+                        if not os.path.exists(player_filepath):
+                            file_based_name = filename.replace("_team.json", "").replace("_", " ")
+                            player_filepath = player_data_manager._get_team_filepath(file_based_name)
+                        
+                        if os.path.exists(player_filepath):
+                            with open(player_filepath, 'r', encoding='utf-8') as f:
+                                player_data = json.load(f)
+                            player_data_manager.load_players_to_team(team, player_data)
+                            existing_teams[team_name] = (team, league)
+                            print(f"  チームデータを読み込みました: {team_name}")
+                        else:
+                            # 選手データがなければ新規生成
+                            print(f"  選手データがありません、新規生成: {team_name}")
+                            league_enum = League.NORTH if "North" in league else League.SOUTH
+                            team = create_team(team_name, league_enum)
+                            player_data_manager.save_team(team)
+                            existing_teams[team_name] = (team, league)
+                except Exception as e:
+                    print(f"  チームデータ読み込みエラー: {filename} - {e}")
+                    import traceback
+                    traceback.print_exc()
+    
+    # 既存チームをリーグ別に振り分け
+    for team_name, (team, league) in existing_teams.items():
+        if "North" in league:
+            north_teams.append(team)
+        else:
+            south_teams.append(team)
+    
+    # 12チーム揃っていれば完了（チーム名に関係なく）
+    if len(north_teams) >= 6 and len(south_teams) >= 6:
+        print(f"既存のチームデータを使用します (North: {len(north_teams)}, South: {len(south_teams)})")
+        return north_teams[:6], south_teams[:6]
+    
+    # 不足分を新規生成 (チーム数が足りない場合のみ)
+    print(f"チーム不足のため新規生成 (North: {len(north_teams)}/6, South: {len(south_teams)}/6)")
+    
+    # 既存のファイル名も除外リストに追加（リネームされていないファイルの重複防止）
+    existing_file_names = set()
+    if os.path.exists(team_data_dir):
+        for filename in os.listdir(team_data_dir):
+            if filename.endswith("_team.json"):
+                existing_file_names.add(filename.replace("_team.json", "").replace("_", " "))
+    
     for team_name in north_team_names:
-        team = create_team(team_name, League.NORTH)
-        north_teams.append(team)
-        # 初期データとして保存 (ゲーム中の変更はメモリ内のみ)
-        team_data_manager.save_team(team)
-        player_data_manager.save_team(team)
+        if len(north_teams) >= 6:
+            break
+        # 既存のファイル名とも一致しない場合のみ生成
+        if team_name not in existing_file_names:
+            print(f"  新規チーム生成: {team_name}")
+            team = create_team(team_name, League.NORTH)
+            north_teams.append(team)
+            team_data_manager.save_team(team)
+            player_data_manager.save_team(team)
     
     for team_name in south_team_names:
-        team = create_team(team_name, League.SOUTH)
-        south_teams.append(team)
-        team_data_manager.save_team(team)
-        player_data_manager.save_team(team)
+        if len(south_teams) >= 6:
+            break
+        # 既存のファイル名とも一致しない場合のみ生成
+        if team_name not in existing_file_names:
+            print(f"  新規チーム生成: {team_name}")
+            team = create_team(team_name, League.SOUTH)
+            south_teams.append(team)
+            team_data_manager.save_team(team)
+            player_data_manager.save_team(team)
     
     return north_teams, south_teams

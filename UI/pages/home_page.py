@@ -173,25 +173,11 @@ class TeamColorBar(QWidget):
         self.setFixedSize(width, height)
         self.theme = get_theme()
         
-        # NPB Color Map (Consistent with SchedulePage)
-        npb_colors = {
-            "Tokyo Bravers": "#002569", # Chunichi Blue
-            "Nagoya Sparks": "#F97709", # Giants Orange
-            "Chiba Mariners": "#0055A5", # DeNA Blue
-            "Sapporo Fighters": "#F6C900", # Tigers Yellow
-            "Osaka Thunders": "#FF0000", # Carp Red
-            "Hiroshima Phoenix": "#072C58", # Yakult Navy
-            "Fukuoka Phoenix": "#F9C304", # Softbank Yellow
-            "Sendai Flames": "#860010", # Rakuten Crimson
-            "Yokohama Mariners": "#006298", # Nippon-Ham Blue/Gold
-            "Saitama Bears": "#1F366A", # Seibu Blue
-            "Kobe Buffaloes": "#000019", # Orix Navy
-            "Shinjuku Spirits": "#333333", # Lotte Black
-        }
-        
+        # Get color from team data (loaded from team_data files)
         color = getattr(team, 'color', None)
         if not color:
-            color = npb_colors.get(getattr(team, 'name', ''), self.theme.primary)
+            # Fallback to theme primary color
+            color = self.theme.primary
             
         self.setStyleSheet(f"background-color: {color}; border-radius: 0px;")
 
