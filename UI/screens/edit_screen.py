@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QLineEdit, QSpinBox, QComboBox,
     QCheckBox, QListWidget, QListWidgetItem, QStackedWidget,
     QGridLayout, QDoubleSpinBox, QMessageBox, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QTableWidgetItem, QHeaderView, QDialog, QFormLayout, QTextEdit,
+    QInputDialog, QApplication
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPolygon
@@ -19,6 +20,123 @@ import json
 import shutil
 
 from UI.theme import get_theme
+from network_manager import network_manager
+from UI.dialogs.preset_manager_dialog import PresetManagerDialog
+
+class PresetPublishDialog(QDialog):
+    """Dialog for publishing a preset"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("プリセットの公開")
+        self.setFixedWidth(400)
+        self.theme = get_theme()
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        self.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary};")
+        layout = QVBoxLayout(self)
+        
+        form_layout = QFormLayout()
+        
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("プリセット名を入力")
+        self.name_edit.setStyleSheet(f"background: {self.theme.bg_dark}; border: 1px solid {self.theme.border}; padding: 6px;")
+        form_layout.addRow("プリセット名:", self.name_edit)
+        
+        self.desc_edit = QTextEdit()
+        self.desc_edit.setPlaceholderText("説明を入力（任意）")
+        self.desc_edit.setFixedHeight(100)
+        self.desc_edit.setStyleSheet(f"background: {self.theme.bg_dark}; border: 1px solid {self.theme.border}; padding: 6px;")
+        form_layout.addRow("説明:", self.desc_edit)
+        
+        self.author_edit = QLineEdit()
+        self.author_edit.setPlaceholderText("作成者名（任意）")
+        self.author_edit.setStyleSheet(f"background: {self.theme.bg_dark}; border: 1px solid {self.theme.border}; padding: 6px;")
+        form_layout.addRow("作成者:", self.author_edit)
+        
+        layout.addLayout(form_layout)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        cancel_btn = QPushButton("キャンセル")
+        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet(f"background: {self.theme.bg_dark}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 8px 16px;")
+        btn_layout.addWidget(cancel_btn)
+        
+        publish_btn = QPushButton("公開")
+        publish_btn.clicked.connect(self.accept)
+        publish_btn.setStyleSheet(f"background: {self.theme.primary}; color: #fff; border: none; padding: 8px 16px; font-weight: bold;")
+        btn_layout.addWidget(publish_btn)
+        
+        layout.addLayout(btn_layout)
+
+    def get_data(self):
+        return {
+            "name": self.name_edit.text().strip() or "無名プリセット",
+            "description": self.desc_edit.toPlainText().strip(),
+            "author": self.author_edit.text().strip() or "Anonymous"
+        }
+
+class PresetLoadDialog(QDialog):
+    """Dialog for confirming preset loading"""
+    def __init__(self, metadata, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("プリセットの読み込み確認")
+        self.setFixedWidth(400)
+        self.metadata = metadata
+        self.theme = get_theme()
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        self.setStyleSheet(f"background: {self.theme.bg_card}; color: {self.theme.text_primary};")
+        layout = QVBoxLayout(self)
+        
+        title_label = QLabel("以下のプリセットを読み込みますか？")
+        title_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+        
+        info_frame = QFrame()
+        info_frame.setStyleSheet(f"background: {self.theme.bg_dark}; border: 1px solid {self.theme.border}; border-radius: 4px;")
+        info_layout = QVBoxLayout(info_frame)
+        
+        name_label = QLabel(f"名前: {self.metadata.get('name')}")
+        name_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {self.theme.primary};")
+        info_layout.addWidget(name_label)
+        
+        author_label = QLabel(f"作成者: {self.metadata.get('author')}")
+        info_layout.addWidget(author_label)
+        
+        version_label = QLabel(f"バージョン: {self.metadata.get('version')}")
+        info_layout.addWidget(version_label)
+        
+        desc = self.metadata.get('description')
+        if desc:
+            desc_label = QLabel(f"説明:\n{desc}")
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet(f"margin-top: 8px; color: {self.theme.text_secondary};")
+            info_layout.addWidget(desc_label)
+            
+        layout.addWidget(info_frame)
+        
+        warn_label = QLabel("⚠️ 注意: 現在のデータはすべて上書きされます！")
+        warn_label.setStyleSheet(f"color: {self.theme.error}; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(warn_label)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        cancel_btn = QPushButton("キャンセル")
+        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet(f"background: {self.theme.bg_dark}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border}; padding: 8px 16px;")
+        btn_layout.addWidget(cancel_btn)
+        
+        load_btn = QPushButton("読み込む")
+        load_btn.clicked.connect(self.accept)
+        load_btn.setStyleSheet(f"background: {self.theme.error}; color: #fff; border: none; padding: 8px 16px; font-weight: bold;")
+        btn_layout.addWidget(load_btn)
+        
+        layout.addLayout(btn_layout)
 
 
 class TriangleButton(QPushButton):
@@ -1408,6 +1526,31 @@ class EditScreen(QWidget):
         self.back_btn.clicked.connect(self.back_clicked.emit)
         sidebar_layout.addWidget(self.back_btn)
         
+        # Preset Manager Button
+        preset_sep = QFrame()
+        preset_sep.setFixedHeight(1)
+        preset_sep.setStyleSheet(f"background: {self.theme.border}; margin: 8px 0;")
+        sidebar_layout.addWidget(preset_sep)
+
+        self.preset_mgr_btn = QPushButton("プリセットマネージャー")
+        self.preset_mgr_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.bg_card};
+                color: {self.theme.primary};
+                border: 1px solid {self.theme.primary};
+                padding: 10px 12px;
+                font-weight: 600;
+                margin: 6px 8px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: #ffffff;
+                color: #000000;
+            }}
+        """)
+        self.preset_mgr_btn.clicked.connect(self._open_preset_manager)
+        sidebar_layout.addWidget(self.preset_mgr_btn)
+        
         layout.addWidget(sidebar)
         
         # Main content area
@@ -1529,3 +1672,106 @@ class EditScreen(QWidget):
             player_data_manager.save_default_data()
             save_staff_default_data()
             QMessageBox.information(self, "保存完了", "現在のデータをデフォルトとして保存しました。")
+            
+    def _open_preset_manager(self):
+        """Open the unified Preset Manager Dialog"""
+        # Save current state first to ensure latest data
+        self.team_panel.save_current_team()
+        self.player_panel.save_all_players()
+        self.staff_panel.save_all_staff()
+        
+        dialog = PresetManagerDialog(
+            self, 
+            current_data_callback=self._collect_all_data_from_files,
+            load_callback=self._apply_preset_data
+        )
+        dialog.exec()
+        
+        # After dialog closes, reload data in case something was loaded
+        self.load_data()
+        self.reload_game_state_teams()
+
+    def _collect_all_data_from_files(self):
+        """Collect all team, player, and staff data from files"""
+        from team_data_manager import TeamDataManager
+        from player_data_manager import PlayerDataManager
+
+        
+        data = {
+            "teams": {},
+            "players": {},
+            "staff": {}
+        }
+        
+        # Teams
+        if os.path.exists(TeamDataManager.DATA_DIR):
+            for filename in os.listdir(TeamDataManager.DATA_DIR):
+                if filename.endswith("_team.json"):
+                    with open(os.path.join(TeamDataManager.DATA_DIR, filename), 'r', encoding='utf-8') as f:
+                        t_data = json.load(f)
+                        data["teams"][filename] = t_data
+        
+        # Players
+        if os.path.exists(PlayerDataManager.DATA_DIR):
+            for filename in os.listdir(PlayerDataManager.DATA_DIR):
+                if filename.endswith("_player.json"):
+                    with open(os.path.join(PlayerDataManager.DATA_DIR, filename), 'r', encoding='utf-8') as f:
+                        p_data = json.load(f)
+                        data["players"][filename] = p_data
+
+        # Staff
+        # Staff data is stored in staff_data directory, similar to teams
+        staff_dir = "staff_data"
+        if os.path.exists(staff_dir):
+            for filename in os.listdir(staff_dir):
+                if filename.endswith(".json"):
+                    with open(os.path.join(staff_dir, filename), 'r', encoding='utf-8') as f:
+                        s_data = json.load(f)
+                        data["staff"][filename] = s_data
+                        
+        return data
+
+    def _apply_preset_data(self, data):
+        """Apply preset data to files"""
+        # Backup? Maybe later. For now overwrite.
+        
+        from team_data_manager import TeamDataManager
+        from player_data_manager import PlayerDataManager
+        
+        # Clear existing directories first to avoid orphaned files? 
+        # Ideally yes, but risky. Let's just overwrite/add.
+        # Actually proper "Preset Load" usually implies a clean slate.
+        # Let's delete existing JSONs in data dirs to match the preset exactly.
+        
+        # Helper to clear dir
+        def clear_json_files(directory):
+            if os.path.exists(directory):
+                for f in os.listdir(directory):
+                    if f.endswith(".json"):
+                        os.remove(os.path.join(directory, f))
+        
+        # Ensure dirs exist
+        os.makedirs(TeamDataManager.DATA_DIR, exist_ok=True)
+        os.makedirs(PlayerDataManager.DATA_DIR, exist_ok=True)
+        os.makedirs("staff_data", exist_ok=True)
+        
+        # Clear
+        clear_json_files(TeamDataManager.DATA_DIR)
+        clear_json_files(PlayerDataManager.DATA_DIR)
+        clear_json_files("staff_data")
+        
+        # Write Teams
+        for filename, content in data.get("teams", {}).items():
+            with open(os.path.join(TeamDataManager.DATA_DIR, filename), 'w', encoding='utf-8') as f:
+                json.dump(content, f, ensure_ascii=False, indent=2)
+                
+        # Write Players
+        for filename, content in data.get("players", {}).items():
+            with open(os.path.join(PlayerDataManager.DATA_DIR, filename), 'w', encoding='utf-8') as f:
+                json.dump(content, f, ensure_ascii=False, indent=2)
+                
+        # Write Staff
+        for filename, content in data.get("staff", {}).items():
+            with open(os.path.join("staff_data", filename), 'w', encoding='utf-8') as f:
+                json.dump(content, f, ensure_ascii=False, indent=2)
+
