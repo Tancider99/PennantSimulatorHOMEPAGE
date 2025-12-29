@@ -1004,6 +1004,17 @@ class PlayerEditorPanel(QWidget):
         self.salary_spin.setSingleStep(1000000)
         basic_grid.addWidget(self.salary_spin, 1, 3)
         
+        # Player status checkboxes
+        basic_grid.addWidget(QLabel("育成選手:"), 2, 0)
+        self.ikusei_check = QCheckBox()
+        self.ikusei_check.setStyleSheet(f"QCheckBox {{ color: {self.theme.text_primary}; }}")
+        basic_grid.addWidget(self.ikusei_check, 2, 1)
+        
+        basic_grid.addWidget(QLabel("外国人:"), 2, 2)
+        self.foreign_check = QCheckBox()
+        self.foreign_check.setStyleSheet(f"QCheckBox {{ color: {self.theme.text_primary}; }}")
+        basic_grid.addWidget(self.foreign_check, 2, 3)
+        
         basic_group.layout().addLayout(basic_grid)
         self.editor_layout.addWidget(basic_group)
         
@@ -1220,6 +1231,10 @@ class PlayerEditorPanel(QWidget):
         self.age_spin.setValue(p.get("年齢", 25))
         self.salary_spin.setValue(p.get("年俸", 10000000))
         
+        # Load player status checkboxes
+        self.ikusei_check.setChecked(p.get("育成選手", False))
+        self.foreign_check.setChecked(p.get("外国人", False))
+        
         stats = p.get("能力値", {})
         common = p.get("共通能力", {})
         
@@ -1373,10 +1388,37 @@ class PlayerEditorPanel(QWidget):
             return
         
         p = self.players_data[self.current_player_idx]
+        new_number = self.number_spin.value()
+        new_ikusei = self.ikusei_check.isChecked()
+        old_ikusei = p.get("育成選手", False)
+        
+        # Validate jersey number - check for duplicates
+        for i, other_p in enumerate(self.players_data):
+            if i != self.current_player_idx and other_p.get("背番号", -1) == new_number:
+                QMessageBox.warning(
+                    self, "エラー",
+                    f"背番号 {new_number} は既に「{other_p.get('名前', '不明')}」が使用しています。\n別の背番号を選択してください。"
+                )
+                return
+        
+        # Validate 支配下 player limit (max 70)
+        if old_ikusei and not new_ikusei:  # Changing from 育成 to 支配下
+            shihaika_count = sum(1 for pl in self.players_data if not pl.get("育成選手", False))
+            if shihaika_count >= 70:
+                QMessageBox.warning(
+                    self, "エラー",
+                    "支配下選手は70人を超えることができません。\n先に他の選手を育成選手にするか、解雇してください。"
+                )
+                self.ikusei_check.setChecked(True)  # Revert checkbox
+                return
+        
+        # Save basic info
         p["名前"] = self.name_edit.text()
-        p["背番号"] = self.number_spin.value()
+        p["背番号"] = new_number
         p["年齢"] = self.age_spin.value()
         p["年俸"] = self.salary_spin.value()
+        p["育成選手"] = new_ikusei
+        p["外国人"] = self.foreign_check.isChecked()
         
         if "能力値" not in p:
             p["能力値"] = {}
@@ -1446,7 +1488,11 @@ class PlayerEditorPanel(QWidget):
         pitcher_count = sum(1 for p in self.players_data if p.get("ポジション") == "投手")
         batter_count = count - pitcher_count
         
-        self.player_count_label.setText(f"選手: {count} (投{pitcher_count}/野{batter_count})")
+        # Count by status (支配下 vs 育成)
+        ikusei_count = sum(1 for p in self.players_data if p.get("育成選手", False))
+        shihaika_count = count - ikusei_count
+        
+        self.player_count_label.setText(f"選手: {count} (支配下{shihaika_count}/育成{ikusei_count})")
         
         # Update button states
         self.add_player_btn.setEnabled(count < self.MAX_PLAYERS)
@@ -1478,6 +1524,8 @@ class PlayerEditorPanel(QWidget):
             "年齢": 20,
             "年俸": 5000000,
             "ポジション": "野手",
+            "育成選手": False,
+            "外国人": False,
             "能力値": {
                 "ミート": 40, "パワー": 40, "走力": 40,
                 "肩力": 40, "守備": 40, "捕球": 40,
