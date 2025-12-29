@@ -1,793 +1,577 @@
 <!DOCTYPE html>
-<html lang="ja" class="scroll-smooth">
+<html lang="ja" class="lenis lenis-smooth">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pennant Simulator | Advanced Strategy Engine</title>
-    
+    <title>PennantSimulator</title>
+    <link rel="icon" href="PennantSimulator.ico" type="image/x-icon">
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;700;900&family=Zen+Kaku+Gothic+New:wght@300;400;700&display=swap"
+        rel="stylesheet">
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Tailwind Config -->
+
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/studio-freight/lenis@1.0.29/bundled/lenis.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
+                        sans: ['Zen Kaku Gothic New', 'Inter', 'sans-serif'],
                         mono: ['JetBrains Mono', 'monospace'],
                         display: ['Orbitron', 'sans-serif'],
                     },
                     colors: {
-                        space: {
-                            900: '#050508',
-                            800: '#0a0a12',
-                            700: '#141420',
-                        },
+                        void: '#030305',
+                        panel: 'rgba(255, 255, 255, 0.03)',
                         accent: {
-                            cyan: '#00f3ff',
-                            blue: '#2d6cdf',
-                            purple: '#7d2ae8'
+                            cyan: '#00F0FF',
+                            magenta: '#FF003C',
+                            yellow: '#FCEE0A',
+                            blue: '#2D6CDF'
                         }
                     },
                     animation: {
-                        'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-                        'glitch': 'glitch 1s linear infinite',
-                    },
-                    keyframes: {
-                        glitch: {
-                            '2%, 64%': { transform: 'translate(2px,0) skew(0deg)' },
-                            '4%, 60%': { transform: 'translate(-2px,0) skew(0deg)' },
-                            '62%': { transform: 'translate(0,0) skew(5deg)' },
-                        }
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'spin-slow': 'spin 20s linear infinite',
                     }
                 }
             }
         }
     </script>
 
-    <!-- Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- GSAP -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
-
     <style>
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #050508; 
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #2d6cdf; 
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #00f3ff; 
+        body {
+            background-color: #030305;
+            color: #e2e8f0;
+            overflow-x: hidden;
+            /* Native cursor restored */
         }
 
-        /* Utilities */
-        .glass-panel {
-            background: rgba(10, 10, 18, 0.6);
+        /* Smooth Scroll (Lenis) */
+        html.lenis {
+            height: auto;
+        }
+
+        .lenis.lenis-smooth {
+            scroll-behavior: auto;
+        }
+
+        /* Vibrant Touches */
+        .text-glow {
+            text-shadow: 0 0 20px rgba(0, 240, 255, 0.6);
+        }
+
+        /* Glass Panel */
+        .glass {
+            background: rgba(20, 20, 30, 0.4);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
-        }
-        
-        .text-glow {
-            text-shadow: 0 0 10px rgba(0, 243, 255, 0.5), 0 0 20px rgba(0, 243, 255, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
         }
 
-        .border-glow:hover {
-            box-shadow: 0 0 15px rgba(45, 108, 223, 0.4), inset 0 0 10px rgba(45, 108, 223, 0.2);
-            border-color: rgba(45, 108, 223, 0.8);
-        }
-
-        /* Scanline Effect */
-        .scanlines {
-            background: linear-gradient(
-                to bottom,
-                rgba(255,255,255,0),
-                rgba(255,255,255,0) 50%,
-                rgba(0,0,0,0.2) 50%,
-                rgba(0,0,0,0.2)
-            );
-            background-size: 100% 4px;
+        /* Background Mesh */
+        .bg-gradient-mesh {
             position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            pointer-events: none;
-            z-index: 999;
-            opacity: 0.15;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 15% 50%, rgba(45, 108, 223, 0.08), transparent 40%),
+                radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.08), transparent 40%);
+            filter: blur(80px);
         }
 
-        /* Noise Texture */
-        .noise-bg {
+        /* Grain Overlay */
+        .grain {
             position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             pointer-events: none;
-            z-index: 998;
-            opacity: 0.03;
-            background: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48ZmlsdGVyIGlkPSJnoiPjxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIwLjY1IiBudW1PY3RhdmVzPSIzIiBzdGl0Y2hUaWxlcz0ic3RpdGNoIi8+PC9maWx0ZXI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsdGVyPSJ1cmwoI2cpIiBvcGFjaXR5PSIxIi8+PC9zdmc+');
+            z-index: 9998;
+            opacity: 0.05;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
         }
 
-        /* Loader */
-        #loader {
-            transition: opacity 0.8s ease-out, visibility 0.8s;
+        /* Elegant Dots */
+        .gallery-dot {
+            width: 8px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 999px;
+            transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            cursor: pointer;
         }
-        
-        /* Cursor */
-        .custom-cursor {
-            pointer-events: none;
-            mix-blend-mode: difference;
-            z-index: 9999;
+
+        .gallery-dot:hover {
+            background: rgba(0, 240, 255, 0.5);
+        }
+
+        .gallery-dot.active {
+            width: 40px;
+            background: #00F0FF;
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.5);
+        }
+
+        /* Advanced Title Glitch/Clip Effect */
+        .cyber-title-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        .cyber-title {
+            position: relative;
+            z-index: 10;
+        }
+
+        .cyber-title::before,
+        .cyber-title::after {
+            content: attr(data-text);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #030305;
+        }
+
+        /* Intro Reveal Animation */
+        .intro-reveal {
+            opacity: 0;
+            animation: cinematic-reveal 1.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation-delay: 0.2s;
+        }
+
+        @keyframes cinematic-reveal {
+            0% {
+                opacity: 0;
+                transform: translateY(40px) scale(1.1);
+                filter: blur(30px);
+                letter-spacing: 0.2em;
+            }
+
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+                filter: blur(0);
+                letter-spacing: -0.05em;
+            }
+        }
+
+        /* Gradient Text */
+        .text-gradient-cyan {
+            background: linear-gradient(to right, #00F0FF, #2D6CDF);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
         }
     </style>
 </head>
-<body class="bg-space-900 text-slate-300 overflow-x-hidden cursor-none">
 
-    <!-- Custom Cursor -->
-    <div id="cursor-dot" class="custom-cursor fixed w-2 h-2 bg-accent-cyan rounded-full top-0 left-0 -translate-x-1/2 -translate-y-1/2 transition-transform duration-100 ease-out"></div>
-    <div id="cursor-ring" class="custom-cursor fixed w-10 h-10 border border-white/50 rounded-full top-0 left-0 -translate-x-1/2 -translate-y-1/2 transition-transform duration-300 ease-out"></div>
+<body class="antialiased opacity-0 transition-opacity duration-1000"
+    onload="document.body.classList.remove('opacity-0')">
 
-    <!-- Screen Effects -->
-    <div class="scanlines"></div>
-    <div class="noise-bg"></div>
-
-    <!-- Loading Screen -->
-    <div id="loader" class="fixed inset-0 z-[1000] bg-space-900 flex flex-col items-center justify-center font-mono">
-        <div class="relative w-64 h-1 bg-gray-800 rounded overflow-hidden mb-4">
-            <div id="progress-bar" class="absolute top-0 left-0 h-full bg-accent-cyan w-0 shadow-[0_0_10px_#00f3ff]"></div>
-        </div>
-        <div class="text-xs text-accent-cyan tracking-widest uppercase">
-            <span id="loader-text">Initializing Systems...</span>
-            <span class="animate-pulse">_</span>
-        </div>
-        <div class="absolute bottom-10 text-[10px] text-gray-600">PENNANT SIMULATOR KERNEL v2.5.0</div>
-    </div>
-
-    <!-- Background Canvas -->
-    <canvas id="starfield" class="fixed inset-0 z-0"></canvas>
+    <!-- System UI -->
+    <div class="grain"></div>
+    <div class="bg-gradient-mesh"></div>
 
     <!-- Navigation -->
-    <nav class="fixed top-0 w-full z-50 border-b border-white/5 bg-space-900/80 backdrop-blur-md transition-all duration-300" id="navbar">
-        <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-            <div class="flex items-center gap-3 group cursor-pointer">
-                <div class="relative w-8 h-8 flex items-center justify-center">
-                    <i data-lucide="hexagon" class="text-accent-blue w-full h-full stroke-1 group-hover:stroke-accent-cyan transition-colors"></i>
-                    <div class="absolute inset-0 bg-accent-blue/20 blur-md rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                </div>
-                <span class="font-display text-xl tracking-widest text-white group-hover:text-glow transition-all">PENNANT<span class="font-light text-slate-500">SIM</span></span>
-            </div>
-            
-            <div class="hidden md:flex items-center gap-8 text-xs font-mono tracking-widest text-slate-400">
-                <a href="#system" class="hover:text-accent-cyan transition-colors nav-link">SYSTEM</a>
-                <a href="#features" class="hover:text-accent-cyan transition-colors nav-link">FEATURES</a>
-                <a href="#data" class="hover:text-accent-cyan transition-colors nav-link">DATABASE</a>
-                <button class="px-6 py-2 border border-accent-blue/30 text-accent-blue hover:bg-accent-blue hover:text-white transition-all duration-300 rounded-sm uppercase font-bold relative overflow-hidden group">
-                    <span class="relative z-10">Initialize</span>
-                    <div class="absolute inset-0 bg-gradient-to-r from-accent-blue to-accent-cyan transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-500 ease-out"></div>
-                </button>
-            </div>
+    <nav
+        class="fixed top-0 w-full z-50 p-8 flex justify-between items-center backdrop-blur-sm bg-void/50 border-b border-white/5">
+        <div class="font-display text-2xl font-bold tracking-widest text-white">
+            PENNANT <span class="text-accent-cyan">SIM</span>
+        </div>
+        <div class="hidden md:flex gap-12 font-mono text-[10px] tracking-[0.3em] items-center text-slate-300">
+            <a href="#modules" class="hover:text-accent-cyan transition-colors nav-link relative group">
+                MODULES
+                <span
+                    class="absolute -bottom-2 left-0 w-0 h-[1px] bg-accent-cyan transition-all group-hover:w-full"></span>
+            </a>
+            <a href="#gallery" class="hover:text-accent-cyan transition-colors nav-link relative group">
+                VISUAL
+                <span
+                    class="absolute -bottom-2 left-0 w-0 h-[1px] bg-accent-cyan transition-all group-hover:w-full"></span>
+            </a>
+            <button
+                class="border border-accent-cyan/50 text-accent-cyan px-8 py-3 text-xs hover:bg-accent-cyan hover:text-black transition-all duration-300 shadow-[0_0_15px_rgba(0,240,255,0.1)] hover:shadow-[0_0_25px_rgba(0,240,255,0.4)]">
+                INITIALIZE
+            </button>
         </div>
     </nav>
 
-    <!-- Hero Section -->
-    <header class="relative min-h-screen flex flex-col items-center justify-center px-6 pt-20 overflow-hidden">
-        <!-- Decoration Circles -->
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] border border-white/5 rounded-full animate-[spin_60s_linear_infinite]"></div>
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] border border-white/5 rounded-full border-dashed animate-[spin_40s_linear_infinite_reverse]"></div>
-
-        <div class="relative z-10 text-center space-y-8 max-w-5xl mx-auto">
-            <div class="gsap-hero-reveal opacity-0 translate-y-10 flex items-center justify-center gap-4 mb-4">
-                <div class="h-[1px] w-12 bg-gradient-to-r from-transparent to-accent-cyan"></div>
-                <span class="text-accent-cyan font-mono text-xs tracking-[0.4em] uppercase">Tactical Baseball Simulation</span>
-                <div class="h-[1px] w-12 bg-gradient-to-l from-transparent to-accent-cyan"></div>
-            </div>
-
-            <h1 class="font-display text-5xl md:text-8xl lg:text-9xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white via-white to-slate-600 gsap-hero-reveal opacity-0 scale-90">
-                PENNANT<br>SIMULATOR
-            </h1>
-
-            <p class="gsap-hero-reveal opacity-0 translate-y-5 text-slate-400 max-w-2xl mx-auto text-sm md:text-base leading-relaxed font-light tracking-wide">
-                <span class="text-white">無限の宇宙</span>のような膨大なデータセット。<br>
-                深層学習AIが導き出す、かつてない<span class="text-accent-cyan">リアリティ</span>。
-            </p>
-
-            <div class="gsap-hero-reveal opacity-0 translate-y-5 flex flex-col md:flex-row items-center justify-center gap-6 mt-12">
-                <button class="relative px-10 py-4 bg-white text-black font-display font-bold tracking-widest text-sm hover:scale-105 transition-transform duration-300 shadow-[0_0_20px_rgba(255,255,255,0.3)]">
-                    START SIMULATION
-                    <div class="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-black"></div>
-                    <div class="absolute bottom-0 left-0 w-3 h-3 border-b-2 border-l-2 border-black"></div>
-                </button>
-                <button class="flex items-center gap-2 px-8 py-4 border border-white/20 hover:border-white/60 hover:bg-white/5 transition-all font-mono text-sm tracking-widest">
-                    <i data-lucide="play" class="w-4 h-4"></i> WATCH TEASER
-                </button>
-            </div>
-        </div>
-
-        <!-- Scroll Indicator -->
-        <div class="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-50 animate-bounce">
-            <span class="text-[10px] font-mono tracking-widest">SCROLL TO EXPLORE</span>
-            <i data-lucide="chevron-down" class="w-4 h-4 text-accent-cyan"></i>
-        </div>
-    </header>
-
-    <!-- Main Content Wrapper -->
-    <main class="relative z-10">
-        
-        <!-- Stats/HUD Bar -->
-        <div class="border-y border-white/10 bg-black/40 backdrop-blur-sm py-4">
-            <div class="max-w-7xl mx-auto px-6 flex justify-between items-center font-mono text-xs text-slate-500 overflow-hidden">
-                <div class="flex gap-8 whitespace-nowrap animate-marquee">
-                    <span>SYS_STATUS: <span class="text-green-500">NORMAL</span></span>
-                    <span>AI_CORE: <span class="text-accent-blue">ONLINE</span></span>
-                    <span>DB_CONN: <span class="text-accent-blue">ESTABLISHED</span></span>
-                    <span>FRAME_RATE: <span class="text-white">120FPS</span></span>
-                    <span>LOCATION: <span class="text-white">OSAKA_SERVER_01</span></span>
+    <main>
+        <!-- Hero Section -->
+        <section class="h-screen flex flex-col justify-center items-center relative px-6 text-center overflow-hidden">
+            <!-- Dynamic Background Element -->
+            <div class="absolute inset-0 z-0 flex items-center justify-center opacity-20 pointer-events-none">
+                <div class="w-[800px] h-[800px] border border-accent-cyan/10 rounded-full animate-spin-slow"></div>
+                <div
+                    class="absolute w-[600px] h-[600px] border border-accent-cyan/20 rounded-full animate-[spin_30s_linear_infinite_reverse]">
                 </div>
             </div>
-        </div>
 
-        <!-- Features Grid -->
-        <section id="system" class="py-32 px-6">
-            <div class="max-w-7xl mx-auto">
-                <div class="mb-20 flex items-end justify-between border-b border-white/10 pb-6 gsap-fade-up">
-                    <div>
-                        <h2 class="font-display text-4xl font-bold text-white mb-2">SYSTEM MODULES</h2>
-                        <p class="text-accent-cyan font-mono text-xs tracking-widest">// CORE ARCHITECTURE VISUALIZATION</p>
-                    </div>
-                    <div class="hidden md:flex gap-2">
-                        <div class="w-12 h-1 bg-accent-blue"></div>
-                        <div class="w-2 h-1 bg-slate-700"></div>
-                        <div class="w-2 h-1 bg-slate-700"></div>
-                    </div>
+            <div class="hero-content z-10 space-y-8">
+                <p class="font-mono text-xs tracking-[0.6em] text-accent-cyan animate-pulse">NEXT GEN STRATEGY</p>
+                <div>
+                    <h1
+                        class="intro-reveal font-display text-7xl md:text-[9rem] font-bold tracking-tighter leading-none text-white">
+                        PENNANT
+                    </h1>
                 </div>
+                <!-- Sub line without glitch but stylish -->
+                <h1 class="font-display text-7xl md:text-[9rem] font-bold tracking-tighter leading-none text-transparent stroke-white"
+                    style="-webkit-text-stroke: 1px rgba(255,255,255,0.3);">
+                    SIMULATOR
+                </h1>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" id="card-grid">
-                    <!-- Cards are generated via JS for cleaner HTML, but structured here for template -->
-                    <!-- JS will populate these using the provided filenames -->
+                <p
+                    class="font-sans font-light text-slate-400 text-sm tracking-widest max-w-xl mx-auto leading-loose pt-4">
+                    無数の要素が織りなす、<span class="text-white">唯一無二</span>のプロ野球史<br>
+                </p>
+            </div>
+
+            <div class="absolute bottom-12 w-full flex justify-between px-12 text-slate-500 font-mono text-[10px]">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <span>SYS_ONLINE</span>
                 </div>
+                <span class="text-accent-cyan">SCROLL TO EXPLORE</span>
+                <span>v1.0.0</span>
             </div>
         </section>
 
-        <!-- Feature Spotlight (Parallax) -->
-        <section id="features" class="relative py-40 overflow-hidden bg-gradient-to-b from-space-900 via-space-800 to-space-900">
-            <!-- Background Elements -->
-            <div class="absolute right-0 top-20 w-1/2 h-full bg-accent-blue/5 blur-[100px] rounded-full pointer-events-none"></div>
+        <!-- Modules Section -->
+        <section id="modules" class="py-40 px-6 max-w-[1400px] mx-auto">
+            <div class="mb-24 border-b border-white/10 pb-6 flex justify-between items-end">
+                <div>
+                    <h2 class="font-display text-4xl font-bold text-white">SYSTEM MODULES</h2>
+                    <div class="w-12 h-1 bg-accent-cyan mt-4"></div>
+                </div>
+                <div class="font-mono text-xs text-accent-cyan">CORE COMPONENTS</div>
+            </div>
 
-            <div class="max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-                <div class="order-2 lg:order-1 relative gsap-parallax-img">
-                    <div class="relative z-10 rounded border border-white/10 overflow-hidden shadow-[0_0_50px_rgba(45,108,223,0.1)] group">
-                        <div class="absolute inset-0 bg-accent-blue/10 mix-blend-overlay group-hover:bg-transparent transition-all duration-500"></div>
-                        <img src="スクリーンショット 2025-12-30 053009.png" alt="Detail View" class="w-full h-auto transform group-hover:scale-105 transition-transform duration-700 grayscale-[0.3] group-hover:grayscale-0" onerror="this.src='https://placehold.co/800x500/1e293b/475569?text=Analysis+Mode'">
-                        
-                        <!-- HUD Overlay on Image -->
-                        <div class="absolute inset-0 p-6 pointer-events-none flex flex-col justify-between">
-                            <div class="flex justify-between">
-                                <i data-lucide="crosshair" class="text-white/50 w-6 h-6"></i>
-                                <span class="font-mono text-[10px] text-white/50">REC_001</span>
-                            </div>
-                            <div class="flex justify-between items-end">
-                                <div class="w-20 h-1 bg-white/30"></div>
-                                <i data-lucide="maximize" class="text-white/50 w-4 h-4"></i>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-32">
+                <!-- 1. Player Detail -->
+                <div class="group">
+                    <div class="overflow-hidden mb-8 relative border-l border-t border-white/10 rounded-tr-3xl">
+                        <!-- Removed grayscale, added vibrant hover -->
+                        <div class="relative overflow-hidden aspect-video">
+                            <img src="スクリーンショット 2025-12-30 054537.png" alt="Player Detail"
+                                class="w-full h-full object-cover transition-all duration-700 ease-out transform group-hover:scale-105"
+                                onerror="this.src='https://placehold.co/800x500/222/FFF?text=Player+Detail'">
+                            <div
+                                class="absolute inset-0 bg-accent-blue/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay">
                             </div>
                         </div>
+                        <!-- Decorative corner -->
+                        <div class="absolute top-0 right-0 w-4 h-4 border-t border-r border-accent-cyan"></div>
                     </div>
-                    
-                    <!-- Floating Secondary Image -->
-                    <div class="absolute -bottom-10 -right-10 w-2/3 z-20 rounded border border-white/20 shadow-2xl bg-black/80 backdrop-blur-sm gsap-float-element">
-                         <img src="スクリーンショット 2025-12-30 053028.png" alt="Sub Feature" class="w-full h-auto opacity-80" onerror="this.src='https://placehold.co/600x400/0f172a/334155?text=Sub+Data'">
+                    <div class="flex justify-between items-start pt-4">
+                        <div>
+                            <span class="font-mono text-accent-cyan text-xs mb-2 block tracking-widest">01 // PLAYER
+                                ANALYSIS</span>
+                            <h3
+                                class="font-display text-2xl font-bold mb-3 text-white group-hover:text-accent-cyan transition-colors">
+                                CAPABILITY VIEW</h3>
+                            <p class="text-slate-400 text-sm font-light leading-relaxed">
+                                成績、様々な能力<br>一人の選手を多角的に解剖する</p>
+                        </div>
+                        <i data-lucide="arrow-up-right"
+                            class="w-6 h-6 text-slate-600 group-hover:text-accent-cyan transition-colors -translate-x-2 group-hover:translate-x-0"></i>
                     </div>
                 </div>
 
-                <div class="order-1 lg:order-2 space-y-8 gsap-fade-left">
-                    <div class="flex items-center gap-4 text-accent-cyan font-mono text-sm tracking-widest">
-                        <span>02</span>
-                        <div class="w-10 h-[1px] bg-accent-cyan"></div>
-                        <span>DEEP DIVE ANALYSIS</span>
+                <!-- 2. Statistics -->
+                <div class="group md:mt-24">
+                    <div class="overflow-hidden mb-8 relative border-l border-t border-white/10 rounded-tr-3xl">
+                        <div class="relative overflow-hidden aspect-video">
+                            <img src="スクリーンショット 2025-12-30 054330.png" alt="Statistics"
+                                class="w-full h-full object-cover transition-all duration-700 ease-out transform group-hover:scale-105"
+                                onerror="this.src='https://placehold.co/800x500/222/FFF?text=Statistics'">
+                            <div
+                                class="absolute inset-0 bg-accent-blue/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay">
+                            </div>
+                        </div>
+                        <div class="absolute top-0 right-0 w-4 h-4 border-t border-r border-accent-cyan"></div>
                     </div>
-                    
-                    <h2 class="font-display text-5xl font-bold leading-tight">
-                        勝利の方程式を<br>
-                        <span class="text-transparent bg-clip-text bg-gradient-to-r from-accent-cyan to-accent-blue">可視化</span>せよ
-                    </h2>
-                    
-                    <p class="text-slate-400 leading-relaxed">
-                        セイバーメトリクスのさらに先へ。Pennant Simulatorは、選手の身体データ、精神状態、天候、そして球場の物理特性までをも考慮した超高精度シミュレーションエンジンを搭載しています。
-                    </p>
+                    <div class="flex justify-between items-start pt-4">
+                        <div>
+                            <span class="font-mono text-accent-cyan text-xs mb-2 block tracking-widest">02 // DEEP
+                                METRICS</span>
+                            <h3
+                                class="font-display text-2xl font-bold mb-3 text-white group-hover:text-accent-cyan transition-colors">
+                                STATS ENGINE</h3>
+                            <p class="text-slate-400 text-sm font-light leading-relaxed">wRC+, WAR,
+                                xFIP...<br>現代野球の指標を網羅したスタッツページ</p>
+                        </div>
+                        <i data-lucide="arrow-up-right"
+                            class="w-6 h-6 text-slate-600 group-hover:text-accent-cyan transition-colors -translate-x-2 group-hover:translate-x-0"></i>
+                    </div>
+                </div>
 
-                    <ul class="space-y-4 font-mono text-sm text-slate-300">
-                        <li class="flex items-center gap-3">
-                            <i data-lucide="cpu" class="text-accent-blue w-5 h-5"></i>
-                            <span>AIマネージャーによる学習型采配</span>
-                        </li>
-                        <li class="flex items-center gap-3">
-                            <i data-lucide="activity" class="text-accent-blue w-5 h-5"></i>
-                            <span>バイオメトリクス疲労管理システム</span>
-                        </li>
-                        <li class="flex items-center gap-3">
-                            <i data-lucide="database" class="text-accent-blue w-5 h-5"></i>
-                            <span>過去50年分の架空歴史生成エンジン</span>
-                        </li>
-                    </ul>
+                <!-- 3. Finance -->
+                <div class="group">
+                    <div class="overflow-hidden mb-8 relative border-l border-t border-white/10 rounded-tr-3xl">
+                        <div class="relative overflow-hidden aspect-video">
+                            <img src="スクリーンショット 2025-12-30 054606.png" alt="Finance"
+                                class="w-full h-full object-cover transition-all duration-700 ease-out transform group-hover:scale-105"
+                                onerror="this.src='https://placehold.co/800x500/222/FFF?text=Finance'">
+                            <div
+                                class="absolute inset-0 bg-accent-blue/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay">
+                            </div>
+                        </div>
+                        <div class="absolute top-0 right-0 w-4 h-4 border-t border-r border-accent-cyan"></div>
+                    </div>
+                    <div class="flex justify-between items-start pt-4">
+                        <div>
+                            <span class="font-mono text-accent-cyan text-xs mb-2 block tracking-widest">03 // TEAM
+                                MANAGEMENT</span>
+                            <h3
+                                class="font-display text-2xl font-bold mb-3 text-white group-hover:text-accent-cyan transition-colors">
+                                FINANCIALS</h3>
+                            <p class="text-slate-400 text-sm font-light leading-relaxed">
+                                収支管理こそが常勝への鍵<br>チケット値段設定から新球場建設まで</p>
+                        </div>
+                        <i data-lucide="arrow-up-right"
+                            class="w-6 h-6 text-slate-600 group-hover:text-accent-cyan transition-colors -translate-x-2 group-hover:translate-x-0"></i>
+                    </div>
+                </div>
 
-                    <button class="mt-8 group flex items-center gap-3 text-white font-bold tracking-widest hover:text-accent-cyan transition-colors">
-                        READ FULL DOCS <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-2 transition-transform"></i>
-                    </button>
+                <!-- 4. Edit -->
+                <div class="group md:mt-24">
+                    <div class="overflow-hidden mb-8 relative border-l border-t border-white/10 rounded-tr-3xl">
+                        <div class="relative overflow-hidden aspect-video">
+                            <img src="スクリーンショット 2025-12-30 053028.png" alt="Edit"
+                                class="w-full h-full object-cover transition-all duration-700 ease-out transform group-hover:scale-105"
+                                onerror="this.src='https://placehold.co/800x500/222/FFF?text=Edit'">
+                            <div
+                                class="absolute inset-0 bg-accent-blue/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay">
+                            </div>
+                        </div>
+                        <div class="absolute top-0 right-0 w-4 h-4 border-t border-r border-accent-cyan"></div>
+                    </div>
+                    <div class="flex justify-between items-start pt-4">
+                        <div>
+                            <span class="font-mono text-accent-cyan text-xs mb-2 block tracking-widest">04 //
+                                CUSTOMIZATION</span>
+                            <h3
+                                class="font-display text-2xl font-bold mb-3 text-white group-hover:text-accent-cyan transition-colors">
+                                EDIT MODE</h3>
+                            <p class="text-slate-400 text-sm font-light leading-relaxed">
+                                理想のチーム、理想の選手<br>あなただけのチームを創造</p>
+                        </div>
+                        <i data-lucide="arrow-up-right"
+                            class="w-6 h-6 text-slate-600 group-hover:text-accent-cyan transition-colors -translate-x-2 group-hover:translate-x-0"></i>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- Database / Gallery -->
-        <section id="data" class="py-32">
-            <div class="text-center mb-16 space-y-4 gsap-fade-up">
-                <i data-lucide="database" class="w-8 h-8 text-accent-blue mx-auto mb-4"></i>
-                <h2 class="font-display text-4xl font-bold tracking-widest">VISUAL DATABASE</h2>
-                <p class="font-mono text-xs text-slate-500">ACCESSING RESTRICTED FILES...</p>
-            </div>
+        <!-- Auto-Scroll Gallery Section -->
+        <section id="gallery" class="py-40 bg-space-900 border-t border-white/5 relative">
+            <div class="max-w-[1400px] mx-auto px-6">
+                <div class="mb-12 flex items-center justify-center gap-4">
+                    <div class="w-2 h-2 bg-accent-cyan rounded-full animate-pulse"></div>
+                    <span class="font-mono text-sm text-white tracking-[0.3em]">VISUAL ARCHIVES</span>
+                    <div class="w-2 h-2 bg-accent-cyan rounded-full animate-pulse"></div>
+                </div>
 
-            <!-- Horizontal Scroll Container -->
-            <div class="w-full overflow-x-auto pb-12 px-6 scrollbar-hide cursor-grab active:cursor-grabbing" id="gallery-container">
-                <div class="flex gap-6 w-max mx-auto" id="gallery-track">
-                    <!-- Gallery Items injected by JS -->
+                <div
+                    class="relative w-full aspect-[16/9] md:aspect-[2.35/1] overflow-hidden group shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10 rounded-sm">
+                    <!-- Image Container -->
+                    <div id="slider-container" class="w-full h-full relative">
+                        <!-- Images injected by JS -->
+                    </div>
+
+                    <!-- Decoration -->
+                    <div
+                        class="absolute bottom-6 right-6 font-mono text-[10px] text-white/50 bg-black/50 px-2 py-1 backdrop-blur-sm z-20">
+                        REC_LIVE_FEED // 60FPS
+                    </div>
+                </div>
+
+                <!-- Stylish Dots -->
+                <div class="mt-12 w-full flex justify-center items-center gap-4" id="dots-container">
+                    <!-- Dots injected by JS -->
                 </div>
             </div>
         </section>
 
-        <!-- CTA Section -->
-        <section class="py-24 relative overflow-hidden">
-            <div class="absolute inset-0 bg-accent-blue/10"></div>
-            <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                 <div class="w-[500px] h-[500px] bg-accent-cyan/20 blur-[150px] rounded-full"></div>
-            </div>
+        <!-- Minimal Footer -->
+        <footer class="border-t border-white/10 bg-[#020202] pt-24 pb-12 px-6 font-mono text-xs text-slate-500">
+            <div class="max-w-4xl mx-auto text-center space-y-12">
+                <div class="space-y-4">
+                    <div class="font-display text-3xl text-white tracking-[0.2em] mb-2">PENNANT SIMULATOR</div>
+                    <p class="text-[10px] tracking-widest text-accent-cyan">BASEBALL STRATEGY ENGINE</p>
+                </div>
 
-            <div class="relative z-10 max-w-4xl mx-auto text-center px-6">
-                <h2 class="font-display text-5xl md:text-7xl font-bold mb-8 text-white">READY TO MANAGE?</h2>
-                <p class="text-slate-300 mb-10 max-w-2xl mx-auto">
-                    あなたの戦略が、歴史を変える。究極のシミュレーターで、最強の球団を築き上げろ。
-                </p>
-                <div class="flex flex-col sm:flex-row justify-center gap-6">
-                    <button class="px-12 py-5 bg-white text-black font-display font-bold text-lg tracking-widest hover:bg-accent-cyan transition-colors shadow-[0_0_30px_rgba(255,255,255,0.2)]">
-                        DOWNLOAD NOW v1.0
-                    </button>
-                    <button class="px-12 py-5 border border-white/30 text-white font-mono font-bold tracking-widest hover:bg-white/10 transition-colors backdrop-blur-sm">
-                        VIEW ROADMAP
-                    </button>
+                <div class="flex justify-center gap-12 text-white">
+                    <a href="https://x.com/PennantSIM" target="_blank"
+                        class="hover:text-accent-cyan transition-colors flex items-center gap-2 group">
+                        <i data-lucide="twitter" class="w-4 h-4 group-hover:scale-110 transition-transform"></i>
+                        <span class="border-b border-transparent group-hover:border-accent-cyan pb-0.5">Official
+                            X</span>
+                    </a>
+                    <a href="#" class="hover:text-accent-cyan transition-colors flex items-center gap-2 group">
+                        <i data-lucide="download" class="w-4 h-4 group-hover:scale-110 transition-transform"></i>
+                        <span class="border-b border-transparent group-hover:border-accent-cyan pb-0.5">Download
+                            Latest</span>
+                    </a>
+                </div>
+
+                <div class="pt-12 text-slate-700 text-[10px] border-t border-white/5 mt-12">
+                    <p>© 2025 PENNANT SIMULATOR PROJECT.</p>
                 </div>
             </div>
-        </section>
+        </footer>
+
     </main>
 
-    <!-- Footer -->
-    <footer class="bg-[#020203] border-t border-white/5 py-16 px-6 font-mono text-xs">
-        <div class="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-12 text-slate-500">
-            <div class="col-span-1 md:col-span-2 space-y-4">
-                <div class="flex items-center gap-2 text-white">
-                    <i data-lucide="hexagon" class="w-6 h-6 text-accent-blue"></i>
-                    <span class="font-display text-lg tracking-widest">PENNANT SIM</span>
-                </div>
-                <p class="max-w-xs leading-relaxed">
-                    Designed for the obsessed. <br>
-                    The most detailed baseball management simulation ever created.
-                </p>
-                <div class="pt-4 flex gap-4">
-                    <a href="#" class="hover:text-accent-cyan transition-colors"><i data-lucide="twitter" class="w-5 h-5"></i></a>
-                    <a href="#" class="hover:text-accent-cyan transition-colors"><i data-lucide="github" class="w-5 h-5"></i></a>
-                    <a href="#" class="hover:text-accent-cyan transition-colors"><i data-lucide="disc" class="w-5 h-5"></i></a>
-                </div>
-            </div>
-            
-            <div class="space-y-4">
-                <h4 class="text-white font-bold tracking-widest">PRODUCT</h4>
-                <ul class="space-y-2">
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">Download</a></li>
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">Documentation</a></li>
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">Changelog</a></li>
-                </ul>
-            </div>
-
-            <div class="space-y-4">
-                <h4 class="text-white font-bold tracking-widest">LEGAL</h4>
-                <ul class="space-y-2">
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">Privacy Policy</a></li>
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">Terms of Service</a></li>
-                    <li><a href="#" class="hover:text-accent-cyan transition-colors">EULA</a></li>
-                </ul>
-            </div>
-        </div>
-        <div class="max-w-7xl mx-auto mt-12 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center">
-            <p>&copy; 2025 PENNANT SIMULATOR PROJECT.</p>
-            <p class="mt-2 md:mt-0 text-slate-600">SYSTEM BUILD: 2025.12.30.0600</p>
-        </div>
-    </footer>
-
-    <!-- JavaScript Logic -->
     <script>
-        // --- Data ---
-        const SCREENSHOTS = [
-            "スクリーンショット 2025-12-30 054606.png",
-            "スクリーンショット 2025-12-30 054600.png",
-            "スクリーンショット 2025-12-30 054537.png",
-            "スクリーンショット 2025-12-30 054515.png",
+        // --- Configuration ---
+        const galleryImages = [
             "スクリーンショット 2025-12-30 054415.png",
-            "スクリーンショット 2025-12-30 054357.png",
-            "スクリーンショット 2025-12-30 054330.png",
-            "スクリーンショット 2025-12-30 053028.png",
+            "スクリーンショット 2025-12-30 054515.png",
             "スクリーンショット 2025-12-30 053009.png",
+            "スクリーンショット 2025-12-30 054357.png",
             "スクリーンショット 2025-12-30 054807.png"
         ];
 
-        const FEATURES_INFO = [
-            { title: "Command Center", subtitle: "球団運営の全てをここから" },
-            { title: "Live Match", subtitle: "1球速報リアルタイムエンジン" },
-            { title: "Deep Metrics", subtitle: "数百の指標による徹底分析" },
-            { title: "Scouting Net", subtitle: "世界中に広がるスカウト網" },
-            { title: "Development", subtitle: "覚醒か、停滞か。育成の妙" },
-            { title: "History Book", subtitle: "記録は永遠に残る" }
-        ];
+        let currentSlide = 0;
+        let autoSlideInterval;
+        let isAnimating = false;
 
-        // --- Initialization ---
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener("DOMContentLoaded", () => {
             lucide.createIcons();
-            initLoader();
-            initStarfield();
-            renderCards();
-            renderGallery();
+            // Cursor script removed
+            initGallery();
             initAnimations();
-            initCursor();
+
+            // Lenis Smooth Scroll
+            const lenis = new Lenis({
+                duration: 1.5,
+                easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+                smooth: true,
+            });
+            function raf(time) {
+                lenis.raf(time);
+                requestAnimationFrame(raf);
+            }
+            requestAnimationFrame(raf);
         });
 
-        // --- Loader Logic ---
-        function initLoader() {
-            const bar = document.getElementById('progress-bar');
-            const loader = document.getElementById('loader');
-            const text = document.getElementById('loader-text');
-            
-            let width = 0;
-            const interval = setInterval(() => {
-                width += Math.random() * 5;
-                if (width > 100) width = 100;
-                bar.style.width = width + '%';
-                
-                if (width > 30) text.innerText = "Loading Assets...";
-                if (width > 60) text.innerText = "Connecting to Server...";
-                if (width > 90) text.innerText = "System Ready";
-
-                if (width === 100) {
-                    clearInterval(interval);
-                    setTimeout(() => {
-                        loader.style.opacity = '0';
-                        loader.style.visibility = 'hidden';
-                        
-                        // Start Hero Animations
-                        gsap.to(".gsap-hero-reveal", {
-                            y: 0,
-                            opacity: 1,
-                            scale: 1,
-                            duration: 1.2,
-                            stagger: 0.2,
-                            ease: "power3.out",
-                            delay: 0.5
-                        });
-                    }, 500);
-                }
-            }, 30);
-        }
-
-        // --- Starfield Canvas ---
-        function initStarfield() {
-            const canvas = document.getElementById('starfield');
-            const ctx = canvas.getContext('2d');
-            let width, height;
-            let stars = [];
-            
-            // Mouse Parallax
-            let mouseX = 0;
-            let mouseY = 0;
-            let targetX = 0;
-            let targetY = 0;
-            
-            const numStars = 400;
-
-            function resize() {
-                width = window.innerWidth;
-                height = window.innerHeight;
-                canvas.width = width;
-                canvas.height = height;
-            }
-
-            class Star {
-                constructor() {
-                    this.reset(true);
-                }
-                
-                reset(initial = false) {
-                    this.x = Math.random() * width;
-                    this.y = Math.random() * height;
-                    this.z = Math.random() * 2 + 0.5; // Depth/Speed
-                    this.size = Math.random() * 1.5;
-                    this.opacity = Math.random();
-                    this.blinkSpeed = Math.random() * 0.02 + 0.005;
-                    
-                    if (!initial) {
-                        // Reset to top or bottom depending on direction (optional)
-                        // For now just random respawn
-                    }
-                }
-
-                update() {
-                    // Parallax movement
-                    const dx = (mouseX - width/2) * 0.0005 * this.z;
-                    const dy = (mouseY - height/2) * 0.0005 * this.z;
-                    
-                    this.x -= dx;
-                    this.y -= dy;
-
-                    // Twinkle
-                    this.opacity += this.blinkSpeed;
-                    if (this.opacity > 1 || this.opacity < 0.2) this.blinkSpeed = -this.blinkSpeed;
-
-                    // Boundary check (wrap around)
-                    if (this.x < 0) this.x = width;
-                    if (this.x > width) this.x = 0;
-                    if (this.y < 0) this.y = height;
-                    if (this.y > height) this.y = 0;
-                }
-
-                draw() {
-                    ctx.fillStyle = `rgba(255, 255, 255, ${this.opacity})`;
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, this.size * (this.z * 0.5), 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-
-            function init() {
-                resize();
-                for(let i=0; i<numStars; i++) {
-                    stars.push(new Star());
-                }
-                window.addEventListener('resize', resize);
-                window.addEventListener('mousemove', (e) => {
-                    targetX = e.clientX;
-                    targetY = e.clientY;
-                });
-                animate();
-            }
-
-            function animate() {
-                // Smooth mouse interpolation
-                mouseX += (targetX - mouseX) * 0.05;
-                mouseY += (targetY - mouseY) * 0.05;
-
-                ctx.fillStyle = "rgba(5, 5, 8, 0.3)"; // Trail effect
-                ctx.fillRect(0, 0, width, height);
-
-                stars.forEach(star => {
-                    star.update();
-                    star.draw();
-                });
-
-                requestAnimationFrame(animate);
-            }
-
-            init();
-        }
-
-        // --- Render Cards ---
-        function renderCards() {
-            const container = document.getElementById('card-grid');
-            // Take first 6 for grid
-            const gridItems = SCREENSHOTS.slice(0, 6);
-            
-            gridItems.forEach((src, index) => {
-                const info = FEATURES_INFO[index] || {title: "Feature", subtitle: "System Component"};
-                const delay = index * 100;
-                
-                const card = document.createElement('div');
-                card.className = "glass-panel rounded-lg overflow-hidden relative group h-80 cursor-none tilt-card";
-                card.setAttribute('data-tilt', '');
-                card.style.opacity = '0'; // For GSAP entrance
-                
-                card.innerHTML = `
-                    <div class="absolute inset-0 bg-gradient-to-t from-space-900 via-transparent to-transparent z-10 opacity-90"></div>
-                    <img src="${src}" alt="${info.title}" class="w-full h-full object-cover opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all duration-700 ease-out" onerror="this.src='https://placehold.co/600x400/1e293b/475569?text=System+Image'">
-                    
-                    <div class="absolute top-0 left-0 w-full h-full border border-white/5 z-20 group-hover:border-accent-blue/50 transition-colors duration-300">
-                        <div class="absolute top-0 left-0 w-2 h-2 border-t border-l border-accent-cyan opacity-50"></div>
-                        <div class="absolute top-0 right-0 w-2 h-2 border-t border-r border-accent-cyan opacity-50"></div>
-                        <div class="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-accent-cyan opacity-50"></div>
-                        <div class="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-accent-cyan opacity-50"></div>
-                    </div>
-
-                    <div class="absolute bottom-0 left-0 w-full p-6 z-30 transform translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
-                        <div class="text-accent-cyan text-[10px] font-mono mb-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">SYS_MOD_0${index+1}</div>
-                        <h3 class="text-white text-xl font-bold font-display tracking-wider mb-1">${info.title}</h3>
-                        <p class="text-slate-400 text-xs font-mono leading-tight">${info.subtitle}</p>
-                    </div>
-                `;
-                
-                container.appendChild(card);
-            });
-
-            // Init Tilt Effect logic for these cards
-            initTilt();
-        }
-
-        // --- Render Gallery ---
-        function renderGallery() {
-            const track = document.getElementById('gallery-track');
-            SCREENSHOTS.forEach((src, i) => {
-                const div = document.createElement('div');
-                div.className = "relative w-[400px] aspect-video flex-shrink-0 border border-white/10 rounded overflow-hidden group hover:border-accent-cyan/50 transition-colors";
-                div.innerHTML = `
-                    <img src="${src}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/600x400/1e293b/475569?text=Database+Img'">
-                    <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
-                        <span class="font-mono text-accent-cyan border border-accent-cyan px-2 py-1 text-xs">VIEW DATA</span>
-                    </div>
-                    <div class="absolute bottom-2 right-2 font-mono text-[10px] text-white/50 bg-black/50 px-1">IMG_${1000+i}</div>
-                `;
-                track.appendChild(div);
-            });
-        }
-
-        // --- 3D Tilt Logic ---
-        function initTilt() {
-            const cards = document.querySelectorAll('.tilt-card');
-            
-            cards.forEach(card => {
-                card.addEventListener('mousemove', (e) => {
-                    const rect = card.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
-                    
-                    const centerX = rect.width / 2;
-                    const centerY = rect.height / 2;
-                    
-                    const rotateX = ((y - centerY) / centerY) * -10; // Max rotation deg
-                    const rotateY = ((x - centerX) / centerX) * 10;
-
-                    card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
-                });
-
-                card.addEventListener('mouseleave', () => {
-                    card.style.transform = 'perspective(1000px) rotateX(0) rotateY(0) scale3d(1, 1, 1)';
-                });
-            });
-        }
-
-        // --- Custom Cursor ---
-        function initCursor() {
-            const dot = document.getElementById('cursor-dot');
-            const ring = document.getElementById('cursor-ring');
-            
-            window.addEventListener('mousemove', (e) => {
-                const x = e.clientX;
-                const y = e.clientY;
-                
-                // Direct follow for dot
-                dot.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-                
-                // Laggy follow for ring
-                setTimeout(() => {
-                    ring.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-                }, 50);
-            });
-
-            // Hover effects
-            const interactables = document.querySelectorAll('a, button, .tilt-card');
-            interactables.forEach(el => {
-                el.addEventListener('mouseenter', () => {
-                    ring.style.width = '60px';
-                    ring.style.height = '60px';
-                    ring.style.borderColor = '#00f3ff';
-                    ring.style.backgroundColor = 'rgba(0, 243, 255, 0.1)';
-                });
-                el.addEventListener('mouseleave', () => {
-                    ring.style.width = '40px';
-                    ring.style.height = '40px';
-                    ring.style.borderColor = 'rgba(255,255,255,0.5)';
-                    ring.style.backgroundColor = 'transparent';
-                });
-            });
-        }
-
-        // --- GSAP Scroll Animations ---
+        // --- Animations ---
         function initAnimations() {
             gsap.registerPlugin(ScrollTrigger);
 
-            // Navbar Blur
-            window.addEventListener('scroll', () => {
-                const nav = document.getElementById('navbar');
-                if (window.scrollY > 50) {
-                    nav.classList.add('shadow-lg', 'bg-space-900/95');
-                } else {
-                    nav.classList.remove('shadow-lg', 'bg-space-900/80');
-                }
+            // Simple fade ups
+            const elements = document.querySelectorAll('.group');
+            elements.forEach((el, index) => {
+                gsap.from(el, {
+                    scrollTrigger: {
+                        trigger: el,
+                        start: "top 85%",
+                        toggleActions: 'play none none reverse'
+                    },
+                    y: 30,
+                    opacity: 0,
+                    duration: 0.8,
+                    delay: index * 0.1,
+                    ease: "power2.out"
+                });
+            });
+        }
+
+        // --- Gallery Logic ---
+        function initGallery() {
+            const container = document.getElementById('slider-container');
+            const dotsContainer = document.getElementById('dots-container');
+
+            // Create Slides
+            galleryImages.forEach((src, index) => {
+                const img = document.createElement('img');
+                img.src = src;
+                img.className = `absolute top-0 left-0 w-full h-full object-cover transition-all duration-1000 ease-in-out transform scale-100`;
+                img.style.opacity = index === 0 ? '1' : '0';
+                img.style.zIndex = index === 0 ? '10' : '0';
+                img.dataset.index = index;
+                container.appendChild(img);
+
+                // Create Dots
+                const dot = document.createElement('div');
+                dot.className = `gallery-dot ${index === 0 ? 'active' : ''}`;
+                dot.onclick = () => {
+                    if (currentSlide !== index) goToSlide(index);
+                };
+                dotsContainer.appendChild(dot);
             });
 
-            // Feature Section
-            gsap.to(".gsap-fade-up", {
-                scrollTrigger: {
-                    trigger: ".gsap-fade-up",
-                    start: "top 80%",
-                },
-                y: 0,
-                opacity: 1,
-                duration: 1,
-                ease: "power2.out"
+            startAutoSlide();
+        }
+
+        function goToSlide(index) {
+            if (isAnimating) return;
+            isAnimating = true;
+
+            const slides = document.querySelectorAll('#slider-container img');
+            const dots = document.querySelectorAll('.gallery-dot');
+
+            // Current Slide Exit
+            const current = slides[currentSlide];
+            current.style.opacity = '0';
+            current.style.zIndex = '0';
+            current.style.transform = 'scale(1.05)';
+
+            // Next Slide Enter
+            const next = slides[index];
+            next.style.opacity = '1';
+            next.style.zIndex = '10';
+            next.style.transform = 'scale(1)';
+
+            // Update Dots
+            dots.forEach((dot, i) => {
+                if (i === index) dot.classList.add('active');
+                else dot.classList.remove('active');
             });
 
-            // Grid Items Stagger
-            gsap.to("#card-grid > div", {
-                scrollTrigger: {
-                    trigger: "#card-grid",
-                    start: "top 80%",
-                },
-                opacity: 1,
-                y: 0,
-                duration: 0.8,
-                stagger: 0.1,
-                ease: "power2.out"
-            });
+            currentSlide = index;
+            resetAutoSlide();
 
-            // Parallax Section
-            gsap.from(".gsap-fade-left", {
-                scrollTrigger: {
-                    trigger: ".gsap-fade-left",
-                    start: "top 70%",
-                },
-                x: 50,
-                opacity: 0,
-                duration: 1,
-                ease: "power2.out"
-            });
+            setTimeout(() => {
+                isAnimating = false;
+            }, 1000); // Match transition duration
+        }
 
-            // Float Animation
-            gsap.to(".gsap-float-element", {
-                y: -20,
-                duration: 2,
-                repeat: -1,
-                yoyo: true,
-                ease: "sine.inOut"
-            });
+        function nextSlide() {
+            let next = currentSlide + 1;
+            if (next >= galleryImages.length) next = 0;
+            goToSlide(next);
+        }
 
-            // Horizontal Scroll
-            const galleryTrack = document.getElementById('gallery-container');
-            // Allow drag scrolling for gallery
-            let isDown = false;
-            let startX;
-            let scrollLeft;
+        function startAutoSlide() {
+            autoSlideInterval = setInterval(nextSlide, 5000);
+        }
 
-            galleryTrack.addEventListener('mousedown', (e) => {
-                isDown = true;
-                galleryTrack.classList.add('active:cursor-grabbing');
-                startX = e.pageX - galleryTrack.offsetLeft;
-                scrollLeft = galleryTrack.scrollLeft;
-            });
-            galleryTrack.addEventListener('mouseleave', () => {
-                isDown = false;
-                galleryTrack.classList.remove('active:cursor-grabbing');
-            });
-            galleryTrack.addEventListener('mouseup', () => {
-                isDown = false;
-                galleryTrack.classList.remove('active:cursor-grabbing');
-            });
-            galleryTrack.addEventListener('mousemove', (e) => {
-                if(!isDown) return;
-                e.preventDefault();
-                const x = e.pageX - galleryTrack.offsetLeft;
-                const walk = (x - startX) * 2; // scroll-fast
-                galleryTrack.scrollLeft = scrollLeft - walk;
-            });
+        function resetAutoSlide() {
+            clearInterval(autoSlideInterval);
+            startAutoSlide();
         }
     </script>
 </body>
+
 </html>
