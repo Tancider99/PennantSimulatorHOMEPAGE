@@ -753,13 +753,19 @@ class OrderPage(QWidget):
         self._update_status_label()
 
     def _get_active_player_count(self) -> int:
-        if not self.current_team or not self.edit_state: return 0
+        if not self.current_team: return 0
+        # チームのactive_rosterから直接取得（自動昇格後も正確に反映）
+        if hasattr(self.current_team, 'active_roster'):
+            return len(self.current_team.active_roster)
+        # フォールバック: edit_stateから計算
+        if not self.edit_state: return 0
         active_set = set()
         active_set.update([x for x in self.edit_state['current_lineup'] if x >= 0])
         active_set.update([x for x in self.edit_state['bench_batters'] if x >= 0])
         active_set.update([x for x in self.edit_state['rotation'] if x >= 0])
         active_set.update([x for x in self.edit_state['setup_pitchers'] if x >= 0])
         active_set.update([x for x in self.edit_state['closers'] if x >= 0])
+        active_set.update([x for x in self.edit_state.get('bench_pitchers', []) if x >= 0])
         return len(active_set)
 
     def _update_status_label(self):

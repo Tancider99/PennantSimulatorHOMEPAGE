@@ -271,15 +271,20 @@ class MatchupCard(QFrame):
         self.date_label.setStyleSheet(f"font-size: 11px; color: {self.theme.text_secondary};")
         layout.addWidget(self.date_label)
 
-        self.pitcher_label = QLabel("---")
-        self.pitcher_label.setStyleSheet(f"font-size: 10px; color: {self.theme.accent_blue};")
-        layout.addWidget(self.pitcher_label)
+        self.stadium_label = QLabel("")
+        self.stadium_label.setStyleSheet(f"font-size: 10px; color: {self.theme.accent_blue};")
+        layout.addWidget(self.stadium_label)
 
-    def set_matchup(self, home: str, away: str, date: str, pitcher: str = ""):
-        self.home_label.setText(home[:8] if home else "---")
-        self.away_label.setText(away[:8] if away else "---")
+    def set_matchup(self, home: str, away: str, date: str, stadium: str = ""):
+        from models import TEAM_ABBRS
+        # Use team abbreviations from team data
+        home_abbr = TEAM_ABBRS.get(home, home[:8]) if home else "---"
+        away_abbr = TEAM_ABBRS.get(away, away[:8]) if away else "---"
+        
+        self.home_label.setText(home_abbr)
+        self.away_label.setText(away_abbr)
         self.date_label.setText(date)
-        self.pitcher_label.setText(f"Starter: {pitcher}" if pitcher else "")
+        self.stadium_label.setText(f" {stadium}" if stadium else "")
 
 
 class RecentResultsCard(QFrame):
@@ -454,8 +459,11 @@ class TodayGamesCard(QFrame):
             row = QHBoxLayout()
             row.setSpacing(8)
 
-            away_name = game.away_team_name[:6] if hasattr(game, 'away_team_name') else str(game[1])[:6]
-            home_name = game.home_team_name[:6] if hasattr(game, 'home_team_name') else str(game[0])[:6]
+            from models import TEAM_ABBRS
+            away_full = game.away_team_name if hasattr(game, 'away_team_name') else str(game[1])
+            home_full = game.home_team_name if hasattr(game, 'home_team_name') else str(game[0])
+            away_name = TEAM_ABBRS.get(away_full, away_full[:6])
+            home_name = TEAM_ABBRS.get(home_full, home_full[:6])
 
             away_lbl = QLabel(away_name)
             away_lbl.setStyleSheet(f"font-size: 11px; color: {self.theme.text_primary}; min-width: 60px;")
@@ -1048,9 +1056,24 @@ class HomePage(ContentPanel):
 
         # Header
         self.team_name_label.setText(team.name.upper())
-        league_name = "North League" if getattr(team.league, 'value', None) == "North League" else ("South League" if getattr(team.league, 'value', None) == "South League" else (team.league.value if team.league else ""))
+        # League Name
+        league_names = getattr(game_state, 'league_names', {})
+        north_name = league_names.get('North League', 'North League')
+        south_name = league_names.get('South League', 'South League')
+        
+        raw_val = getattr(team.league, 'value', '')
+        if raw_val == 'North League':
+            league_text = north_name
+        elif raw_val == 'South League':
+            league_text = south_name
+        else:
+            league_text = str(raw_val)
+            
         date_str = getattr(game_state, 'current_date', '2027-03-29')
-        self.season_label.setText(f"{game_state.current_year} SEASON  |  {league_name}  |  {date_str}")
+        if hasattr(date_str, 'strftime'):
+            date_str = date_str.strftime('%Y-%m-%d')
+        
+        self.season_label.setText(f"{game_state.current_year} SEASON  |  {league_text}  |  {date_str}")
         
         # Update Color Bar
         # Clear previous
@@ -1227,7 +1250,7 @@ class HomePage(ContentPanel):
         if hasattr(game_state, 'schedule'):
             for g in game_state.schedule.games:
                 if g.date == today_str and ("ALL-" in g.home_team_name or "ALL-" in g.away_team_name):
-                    self.matchup_card.set_matchup(g.home_team_name, g.away_team_name, today_str, "(AI Broadcast)")
+                    self.matchup_card.set_matchup(g.home_team_name, g.away_team_name, today_str, "All-Star Stadium")
                     return "watch"
 
         # 2. Regular Next Game Logic
@@ -1243,16 +1266,14 @@ class HomePage(ContentPanel):
             if date == today_str:
                 has_game_today = True
             
-            # Find opponent's starter
-            starter_name = ""
-            opponent_name = away if home == team.name else home
+            # Find stadium name from home team
+            stadium_name = ""
             for t in game_state.teams:
-                if t.name == opponent_name:
-                    starter = t.get_today_starter()
-                    if starter:
-                        starter_name = starter.name
+                if t.name == home:
+                    if hasattr(t, 'stadium') and t.stadium:
+                        stadium_name = t.stadium.name
                     break
-            self.matchup_card.set_matchup(home, away, date, starter_name)
+            self.matchup_card.set_matchup(home, away, date, stadium_name)
         else:
             self.matchup_card.set_matchup("---", "---", "No games scheduled", "")
             

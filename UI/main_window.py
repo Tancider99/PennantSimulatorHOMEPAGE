@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
     # Signals
     fullscreen_changed = Signal(bool)
     window_size_changed = Signal(int, int)
+    title_requested = Signal()  # Signal to return to title screen
 
     def __init__(self):
         super().__init__()
@@ -150,6 +151,7 @@ class MainWindow(QMainWindow):
         # SYSTEM
         sidebar.add_separator("SYSTEM")
         sidebar.add_nav_item("", "SAVE / LOAD", "save_load")
+        sidebar.add_nav_item("", "EDIT", "edit")
         sidebar.add_nav_item("", "SETTINGS", "settings")
         sidebar.add_nav_item("", "TITLE", "title")
 
@@ -159,7 +161,16 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_nav(self, section: str):
         if section == "title":
-            self.pages.show_page("title")
+            # Show confirmation dialog
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "確認",
+                "タイトル画面に戻りますか？\n未セーブのデータは失われます。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.title_requested.emit()
         else:
             self._navigate_to(section)
 
@@ -219,6 +230,7 @@ class MainWindow(QMainWindow):
             self.schedule_page = SchedulePage(self)
             self.schedule_page.watch_game_requested.connect(self._on_watch_game_requested)
             self.schedule_page.view_result_requested.connect(self._on_view_past_result)
+            self.schedule_page.autosave_requested.connect(self._trigger_autosave) # ★追加: オートセーブ接続
             
             # Link contracts_page for scouting progress during bulk skip
             # Ensure contracts_page exists (create and cache if not)
@@ -305,6 +317,11 @@ class MainWindow(QMainWindow):
             self.training_page = page
         
         # Unimplemented pages (kept for code reference but not in sidebar)
+            
+        elif section == "edit":
+            from UI.pages.edit_page import EditPage
+            page = EditPage(self)
+            self.edit_page = page
             
         elif section == "settings":
             page = SettingsPage(self)
@@ -417,8 +434,8 @@ class MainWindow(QMainWindow):
             # ★追加: 二軍・三軍試合のシミュレーション
             try:
                 simulate_farm_games_for_day(self.game_state.teams, self.game_state.current_date)
-            except Exception as e:
-                print(f"Farm Simulation Error: {e}")
+            except Exception:
+                pass
 
             # Create contracts_page if not yet navigated to (and cache it!)
             if "contract_changes" not in self.cached_pages:
@@ -430,6 +447,9 @@ class MainWindow(QMainWindow):
                 self.contracts_page.advance_day()
 
             self.game_state.finish_day_and_advance()
+            
+            # ★追加: オートセーブチェック（試合がない日）
+            self._check_autosave()
             
             # 画面更新 (Refresh current page)
             current_page = self.pages.currentWidget()
@@ -955,7 +975,6 @@ class MainWindow(QMainWindow):
         """Handle settings changed from settings page"""
         # Settings are already synced to game_state by the settings page
         # Just show confirmation message
-        print(f"Settings applied: {settings}")
         self.status.show_message("設定を適用しました", 3000)
     
     def _check_autosave(self):
@@ -987,9 +1006,8 @@ class MainWindow(QMainWindow):
             
             self.games_since_save = 0
             self.status.show_message("オートセーブ完了", 2000)
-            print("[Autosave] Game saved automatically")
-        except Exception as e:
-            print(f"[Autosave] Failed: {e}")
+        except Exception:
+            pass
 
     def _on_game_finished_post(self, result):
         """Post-game processing after user saw result"""
@@ -1046,8 +1064,8 @@ class MainWindow(QMainWindow):
             # ★追加: 二軍・三軍試合のシミュレーション
             try:
                 simulate_farm_games_for_day(self.game_state.teams, self.game_state.current_date)
-            except Exception as e:
-                print(f"Farm Simulation Error: {e}")
+            except Exception:
+                pass
 
             # ★追加: 契約関連（スカウト）の日付進行処理
             # Create contracts_page if not yet navigated to (and cache it!)
@@ -1197,7 +1215,7 @@ class MainWindow(QMainWindow):
             "farm_swap": "FARM", "contract_changes": "CONTRACTS",
             "reinforcement": "ACQUISITIONS", "training": "TRAINING",
             "staff": "STAFF", "finance": "FINANCE",
-            "save_load": "SAVE / LOAD", "settings": "SETTINGS", "title": "TITLE"
+            "save_load": "SAVE / LOAD", "edit": "EDIT", "settings": "SETTINGS", "title": "TITLE"
         }
         
         target_label = section_map.get(section)
@@ -1214,9 +1232,8 @@ class MainWindow(QMainWindow):
 
     def _on_page_changed(self, index: int):
         """Handle page change"""
-        if self.game_state:
-            self.status.set_left_text(f"Year {self.game_state.current_year} | {self.game_state.current_date}")
-            self.status.set_right_text(f"Team: {self.game_state.player_team.name if self.game_state.player_team else 'None'}")
+        # Status bar info removed per request
+        pass
 
     def _on_settings_changed(self, settings: dict):
         """Handle settings changes"""
@@ -1484,7 +1501,6 @@ class MainWindow(QMainWindow):
                      away_team = t_south if home_team == t_north else t_north
              else:
                  # リロード直後などでEngineがない場合、再生成を試みる
-                 print("All-Star Engine not found. Regenerating...")
                  try:
                      season_mgr.initialize_allstar(self.game_state.teams)
                      if season_mgr.allstar_engine:
@@ -1534,10 +1550,12 @@ def run_app():
     window = MainWindow()
 
     from game_state import GameState
-    from team_generator import create_all_teams
+    from team_generator import load_or_create_teams
+    from PennantSimulator import north_team_names, south_team_names
 
     # Demo setup
-    teams = create_all_teams()
+    n_teams, s_teams = load_or_create_teams(north_team_names, south_team_names)
+    teams = n_teams + s_teams
     game_state = GameState(
         teams=teams,
         current_year=2027,

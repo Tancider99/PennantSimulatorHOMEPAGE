@@ -6,6 +6,9 @@ Unified window flow: Loading -> Title -> Team Select -> Game
 import sys
 import os
 
+# Suppress Qt internal warning messages (QBackingStore etc.)
+os.environ["QT_LOGGING_RULES"] = "*.warning=false"
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -128,9 +131,11 @@ class GameController(QMainWindow):
         # 修正: QMainWindowのメソッド名は setCentralWidget のままである必要があります
         self.setCentralWidget(self.stack)
         
-        # Disable default status bar to prevent unwanted white bar at bottom
-        self.statusBar().hide()
-        self.statusBar().setStyleSheet("background: transparent; min-height: 0px; height: 0px; border: none;")
+        # 修正: QMainWindowのメソッド名は setCentralWidget のままである必要があります
+        self.setCentralWidget(self.stack)
+        
+        # Status bar removed completely to fix bottom gap
+        self.setStatusBar(None)
         
         # Create screens
         self.loading_screen = self.LoadingScreen()
@@ -163,7 +168,6 @@ class GameController(QMainWindow):
         self.title_screen.continue_clicked.connect(self._on_continue)
         self.title_screen.load_game_clicked.connect(self._on_load_game)
         self.title_screen.edit_clicked.connect(self._on_edit)
-        self.title_screen.settings_clicked.connect(self._on_settings)
         self.title_screen.exit_clicked.connect(self._on_exit)
         self.team_select_screen.back_clicked.connect(self._on_team_select_back)
         self.team_select_screen.confirm_clicked.connect(self._on_team_confirmed)
@@ -224,7 +228,6 @@ class GameController(QMainWindow):
             "Kobe Thunders",
             "Nagoya Sparks",
             "Hiroshima Phoenix",
-            
             "Yokohama Mariners",
             "Shinjuku Spirits"
         ]
@@ -390,32 +393,29 @@ class GameController(QMainWindow):
 
         print("-" * 60)
         print("  Starting game!")
-        print("  F11: Toggle fullscreen")
         print("  Ctrl+1-0: Navigate to pages")
         print("-" * 60)
 
         # Create main window
         self.main_window = MainWindow()
         self.main_window.set_game_state(self.game_state)
+        
+        # Connect title return signal
+        self.main_window.title_requested.connect(self._on_return_to_title)
 
         # Add to stack and show
         self.stack.addWidget(self.main_window)
         self.stack.setCurrentWidget(self.main_window)
+    
+    def _on_return_to_title(self):
+        """Handle request to return to title screen from main game"""
+        print("  Returning to title screen...")
+        self.stack.setCurrentIndex(1)  # Title screen is index 1
 
     def keyPressEvent(self, event):
-        """Handle key press events"""
-        from PySide6.QtCore import Qt
-
-        if event.key() == Qt.Key_F11:
-            if self.isFullScreen():
-                self.showNormal()
-            else:
-                self.showFullScreen()
-        elif event.key() == Qt.Key_Escape:
-            if self.isFullScreen():
-                self.showNormal()
-        else:
-            super().keyPressEvent(event)
+        """Handle key press events - Fullscreen enforced"""
+        # F11/Esc toggles removed to enforce fullscreen
+        pass
 
 
 if __name__ == "__main__":

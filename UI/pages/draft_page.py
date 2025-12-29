@@ -647,7 +647,9 @@ class DraftPage(QWidget):
             """)
             frame_layout.addWidget(pick_label)
 
-            team_label = QLabel(team.name[:4])
+            from models import TEAM_ABBRS
+            team_abbr = TEAM_ABBRS.get(team.name, team.name[:4])
+            team_label = QLabel(team_abbr)
             team_label.setStyleSheet(f"""
                 font-size: 12px;
                 font-weight: {'700' if is_current else '500'};

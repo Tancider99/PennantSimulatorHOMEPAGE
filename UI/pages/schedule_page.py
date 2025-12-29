@@ -682,9 +682,11 @@ class SimulationProgressDialog(QDialog):
             self.player_result_card.setStyleSheet(f"background-color: {bg}; border: 2px solid {border_color};")
             
             # Matchup Label
+            from models import TEAM_ABBRS
             opponent = my_game.away_team_name if my_game.home_team_name == my_team else my_game.home_team_name
+            opponent_abbr = TEAM_ABBRS.get(opponent, opponent[:6])
             location = "vs" if my_game.home_team_name == my_team else "@"
-            lbl_matchup = QLabel(f"{location} {opponent[:6]}")
+            lbl_matchup = QLabel(f"{location} {opponent_abbr}")
             lbl_matchup.setAlignment(Qt.AlignCenter)
             lbl_matchup.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 11px; border: none;")
             self.player_result_layout.addWidget(lbl_matchup)
@@ -720,7 +722,10 @@ class SimulationProgressDialog(QDialog):
         self.player_result_card.setStyleSheet(f"background-color: {bg}; border: 2px solid {border_color};")
         
         # Matchup Label
-        lbl_matchup = QLabel(f"{my_game.away_team_name[:6]} vs {my_game.home_team_name[:6]}")
+        from models import TEAM_ABBRS
+        away_abbr = TEAM_ABBRS.get(my_game.away_team_name, my_game.away_team_name[:6])
+        home_abbr = TEAM_ABBRS.get(my_game.home_team_name, my_game.home_team_name[:6])
+        lbl_matchup = QLabel(f"{away_abbr} vs {home_abbr}")
         lbl_matchup.setAlignment(Qt.AlignCenter)
         lbl_matchup.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 11px; border: none;")
         self.player_result_layout.addWidget(lbl_matchup)
@@ -884,6 +889,7 @@ class SchedulePage(QWidget):
     game_selected = Signal(object)
     watch_game_requested = Signal(object) # New Signal
     view_result_requested = Signal(object)  # Signal to navigate to past game result
+    autosave_requested = Signal()  # ★追加: オートセーブ要求シグナル
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1160,11 +1166,15 @@ class SchedulePage(QWidget):
         # オフシーズン予定表を非表示
         if hasattr(self, 'offseason_schedule_widget'):
             self.offseason_schedule_widget.hide()
+        
+        # シーズン中はスキップボタンを表示
+        if hasattr(self, 'skip_btn'):
+            self.skip_btn.show()
     
     def _setup_offseason_schedule(self, game_state):
         """オフシーズンスケジュールの表示設定"""
         # ヘッダーを更新
-        self.current_ym_label.setText("🏆 OFFSEASON SCHEDULE")
+        self.current_ym_label.setText("OFFSEASON SCHEDULE")
         
         # カレンダーを非表示
         self.calendar.hide()
@@ -1190,45 +1200,39 @@ class SchedulePage(QWidget):
         if hasattr(game_state, 'get_current_offseason_phase'):
             current_phase = game_state.get_current_offseason_phase()
         
-        self.matchup_label.setText("🌟 オフシーズン")
+        self.matchup_label.setText("オフシーズン")
         self.score_label.setText(f"{current_phase}" if current_phase else "---")
-        self.status_label.setText("ホームタブから次のイベントへ進めます")
+        self.status_label.setText("HOMEから次のイベントへ進めます")
+        
+        # オフシーズン中はスキップボタンを非表示
+        if hasattr(self, 'skip_btn'):
+            self.skip_btn.hide()
     
     def _create_offseason_schedule_widget(self):
-        """オフシーズン予定表ウィジェットを作成"""
-        from PySide6.QtWidgets import QScrollArea
-        
-        # スクロールエリア
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
-                border: none;
-                background: {self.theme.bg_card};
-                border-radius: 12px;
-            }}
-        """)
-        
-        # コンテナ
+        """オフシーズン予定表ウィジェットを作成 (角張った大画面表示)"""
+        # 固定コンテナ (スクロールなし、画面いっぱいに表示、角張ったデザイン)
         container = QWidget()
-        container.setStyleSheet(f"background: {self.theme.bg_card};")
-        self.offseason_events_layout = QVBoxLayout(container)
-        self.offseason_events_layout.setContentsMargins(20, 20, 20, 20)
-        self.offseason_events_layout.setSpacing(10)
+        container.setStyleSheet(f"""
+            background: {self.theme.bg_card};
+            border: 2px solid {self.theme.border};
+        """)
+        container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        scroll.setWidget(container)
+        self.offseason_events_layout = QVBoxLayout(container)
+        self.offseason_events_layout.setContentsMargins(40, 30, 40, 30)
+        self.offseason_events_layout.setSpacing(10)
         
         # カレンダーの親レイアウトに追加
         if self.calendar.parent():
             parent_layout = self.calendar.parent().layout()
             if parent_layout:
-                parent_layout.addWidget(scroll)
+                parent_layout.addWidget(container, 1)
         
-        self.offseason_schedule_widget = scroll
+        self.offseason_schedule_widget = container
         self.offseason_schedule_widget.hide()
     
     def _update_offseason_schedule_display(self, game_state):
-        """オフシーズン予定表の内容を更新"""
+        """オフシーズン予定表の内容を更新 (大画面表示)"""
         if not hasattr(self, 'offseason_events_layout'):
             return
         
@@ -1238,16 +1242,7 @@ class SchedulePage(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         
-        # ヘッダー
-        header = QLabel("📅 オフシーズンイベント一覧")
-        header.setStyleSheet(f"""
-            font-size: 20px;
-            font-weight: bold;
-            color: {self.theme.text_primary};
-            padding: 10px 0;
-            background: transparent;
-        """)
-        self.offseason_events_layout.addWidget(header)
+        # ヘッダーを削除してスケジュールを大きく表示
         
         # イベントリスト取得
         offseason_events = []
@@ -1258,65 +1253,70 @@ class SchedulePage(QWidget):
         if hasattr(game_state, 'offseason_phase'):
             current_phase = game_state.offseason_phase
         
-        # 各イベントを表示
+        # 各イベントを表示 (枠なし、現在フェーズのみ強調)
         for event_date, phase in offseason_events:
             row = QFrame()
+            is_current = current_phase and phase == current_phase
             row.setStyleSheet(f"""
                 QFrame {{
-                    background: {self.theme.bg_card_elevated if current_phase == phase else 'transparent'};
-                    border-radius: 8px;
-                    padding: 5px;
+                    background: {self.theme.bg_card_elevated if is_current else 'transparent'};
+                    {"border: 3px solid " + self.theme.primary + ";" if is_current else "border: none;"}
                 }}
             """)
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(15, 12, 15, 12)
+            row_layout.setContentsMargins(20, 14, 20, 14)
+            row_layout.setSpacing(16)
             
-            # 日付
-            date_str = event_date.strftime("%m月%d日") if hasattr(event_date, 'strftime') else str(event_date)
+            # 日付 (大きく)
+            date_str = event_date.strftime("%m/%d") if hasattr(event_date, 'strftime') else str(event_date)
             date_label = QLabel(date_str)
             date_label.setStyleSheet(f"""
-                font-size: 14px;
+                font-size: 18px;
+                font-weight: bold;
                 color: {self.theme.text_secondary};
                 background: transparent;
-                min-width: 80px;
+                min-width: 70px;
             """)
             row_layout.addWidget(date_label)
             
-            # フェーズ名
+            # フェーズ名 (大きく)
             phase_name = phase.value if hasattr(phase, 'value') else str(phase)
-            is_current = current_phase and phase == current_phase
             
             phase_label = QLabel(phase_name)
             if is_current:
                 phase_label.setStyleSheet(f"""
-                    font-size: 16px;
+                    font-size: 20px;
                     font-weight: bold;
-                    color: {self.theme.accent_blue};
+                    color: {self.theme.primary};
                     background: transparent;
                 """)
             else:
                 phase_label.setStyleSheet(f"""
-                    font-size: 14px;
+                    font-size: 18px;
                     color: {self.theme.text_primary};
                     background: transparent;
                 """)
             row_layout.addWidget(phase_label, 1)
             
-            # ステータスアイコン
+            # ステータスインジケータ (大きく)
+            status_frame = QFrame()
+            status_frame.setFixedSize(16, 16)
             if is_current:
-                status_label = QLabel("🔵 現在")
-                status_label.setStyleSheet(f"""
-                    font-size: 12px;
-                    color: {self.theme.accent_blue};
-                    background: transparent;
+                status_frame.setStyleSheet(f"""
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {self.theme.primary}, stop:1 {self.theme.accent_blue});
+                    border-radius: 8px;
                 """)
             else:
-                status_label = QLabel("⚪")
-                status_label.setStyleSheet("background: transparent;")
-            row_layout.addWidget(status_label)
+                status_frame.setStyleSheet(f"""
+                    background: {self.theme.bg_input};
+                    border-radius: 8px;
+                    border: 2px solid {self.theme.border};
+                """)
+            row_layout.addWidget(status_frame)
             
             self.offseason_events_layout.addWidget(row)
         
+        # 残りスペースを埋める
         self.offseason_events_layout.addStretch()
 
     def _refresh_calendar_data(self):
@@ -1528,11 +1528,14 @@ class SchedulePage(QWidget):
         
     def _cancel_simulation(self):
         if self.worker: self.worker.is_cancelled = True; self.worker.wait()
-        self.progress_dialog.reject() # rejectで閉じる
+        self.progress_dialog.reject()
     
     def _on_simulation_finished(self):
         # 修正: accept()を呼ぶだけで、メッセージボックスはexec()の後で処理する
         self.progress_dialog.accept()
+        
+        # ★追加: オートセーブ要求
+        self.autosave_requested.emit()
 
     def _on_day_advanced(self):
         """Handle day advanced signal from worker thread - run in main thread"""

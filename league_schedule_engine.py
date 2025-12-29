@@ -325,7 +325,9 @@ class LeagueScheduleEngine:
                 pre_il_dates.append(d)
             elif self.calendar.interleague_start <= d <= self.calendar.interleague_end:
                 il_dates.append(d)
-            elif d > self.calendar.interleague_reserve_end:
+            else:
+                # interleague_end以降の日程はすべてpost_il_datesに含める
+                # (interleague_reserve_endまでの予備日も含む)
                 post_il_dates.append(d)
 
             d += datetime.timedelta(days=1)
@@ -674,11 +676,11 @@ class LeagueScheduleEngine:
 
         return cancelled_games
 
-    def reschedule_postponed_games(self) -> List[Tuple[ScheduledGame, str]]:
+    def reschedule_postponed_games(self, current_date_str: str = None) -> List[Tuple[ScheduledGame, str]]:
         rescheduled = []
 
         for game in self.postponed_games[:]:
-            new_date = self._find_makeup_date(game)
+            new_date = self._find_makeup_date(game, current_date_str)
             if new_date:
                 game.status = GameStatus.SCHEDULED
                 old_date = game.date
@@ -688,25 +690,35 @@ class LeagueScheduleEngine:
 
         return rescheduled
 
-    def _find_makeup_date(self, game: ScheduledGame) -> Optional[datetime.date]:
+    def _find_makeup_date(self, game: ScheduledGame, current_date_str: str = None) -> Optional[datetime.date]:
         """延期試合の振替日を探す
 
         ルール:
         - 交流戦: 交流戦予備日（interleague_end + 1 ～ interleague_reserve_end）に振替
         - リーグ戦: 元の日付以降の9月～で空きを探す
         - 元の日付より前には振替しない
+        - 現在日付より前には振替しない (new)
         """
         try:
             original_date = datetime.datetime.strptime(game.date, "%Y-%m-%d").date()
         except:
             return None
+        
+        # Determine the earliest allowed date (must be after both original and current)
+        earliest_allowed = original_date + datetime.timedelta(days=1)
+        if current_date_str:
+            try:
+                current_date = datetime.datetime.strptime(current_date_str, "%Y-%m-%d").date()
+                earliest_allowed = max(earliest_allowed, current_date + datetime.timedelta(days=1))
+            except:
+                pass
 
         # 交流戦かどうか判定
         is_interleague = (game.home_team_name in self.north_teams) != (game.away_team_name in self.north_teams)
 
         if is_interleague:
-            # 交流戦は予備日に振替
-            d = self.calendar.interleague_end + datetime.timedelta(days=1)
+            # 交流戦は予備日に振替 (earliest_allowed以降のみ)
+            d = max(self.calendar.interleague_end + datetime.timedelta(days=1), earliest_allowed)
             while d <= self.calendar.interleague_reserve_end:
                 if d.weekday() != 0:  # 月曜以外
                     if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
@@ -714,17 +726,17 @@ class LeagueScheduleEngine:
                 d += datetime.timedelta(days=1)
             # 予備日に空きがない場合は9月以降で探す
             september_start = datetime.date(self.year, 9, 1)
-            d = september_start
+            d = max(september_start, earliest_allowed)
             while d <= self.calendar.regular_season_end:
                 if d.weekday() != 0:
                     if self._can_schedule_on_date(d, game.home_team_name, game.away_team_name):
                         return d
                 d += datetime.timedelta(days=1)
         else:
-            # リーグ戦: 元の日付以降の9月～で探す
+            # リーグ戦: earliest_allowed以降の9月～で探す
             september_start = datetime.date(self.year, 9, 1)
-            # 元の日付と9月1日の遅い方から開始
-            search_start = max(original_date + datetime.timedelta(days=1), september_start)
+            # earliest_allowedと9月1日の遅い方から開始
+            search_start = max(earliest_allowed, september_start)
 
             d = search_start
             while d <= self.calendar.regular_season_end:
@@ -733,9 +745,8 @@ class LeagueScheduleEngine:
                         return d
                 d += datetime.timedelta(days=1)
 
-        # シーズン終了後〜CS前で探す（元の日付以降のみ）
-        d = max(self.calendar.regular_season_end + datetime.timedelta(days=1),
-                original_date + datetime.timedelta(days=1))
+        # シーズン終了後〜CS前で探す（earliest_allowed以降のみ）
+        d = max(self.calendar.regular_season_end + datetime.timedelta(days=1), earliest_allowed)
         max_search = d + datetime.timedelta(days=30)
         while d < max_search:
             if d.weekday() != 0:
@@ -1268,6 +1279,7 @@ class PostseasonSeries:
     team2: str
     team1_wins: int = 0
     team2_wins: int = 0
+    draws: int = 0  # 引き分け数
     games_played: int = 0
     max_games: int = 3  # チャレンジャー=3, リーグファイナル=6, グランドチャンピオンシップ=7
     initial_games: int = 2  # 最初に生成する試合数 (動的生成用)
@@ -1389,8 +1401,14 @@ class PostseasonEngine:
             current_date += datetime.timedelta(days=1)
 
             # グランドチャンピオンシップ移動日
-            if series.stage == PostseasonStage.JAPAN_SERIES and (i == 1 or i == 4):
-                current_date += datetime.timedelta(days=1)
+            # 第1戦(i=0)後、第2戦(i=1) -> 移動日 -> 第3戦
+            # 第3戦(i=2)、第4戦(i=3)、第5戦(i=4) -> 移動日 -> 第6戦 (NEW) -> 第7戦
+            # iは0始まり: 0, 1(移動), 2, 3, 4(移動), 5, 6
+            if series.stage == PostseasonStage.JAPAN_SERIES:
+                 if i == 1: # 第2戦終了後
+                     current_date += datetime.timedelta(days=1)
+                 elif i == 4: # 第5戦終了後 (要望により追加)
+                     current_date += datetime.timedelta(days=1)
     
     def add_next_game_if_needed(self, series: PostseasonSeries, start_date: datetime.date) -> Optional[ScheduledGame]:
         """決着がついていなければ次の試合を追加
@@ -1408,6 +1426,17 @@ class PostseasonEngine:
             last_game_date_str = series.schedule[-1].date
             last_date = datetime.datetime.strptime(last_game_date_str, "%Y-%m-%d").date()
             next_date = last_date + datetime.timedelta(days=1)
+            
+            # グランドチャンピオンシップ（日本シリーズ）移動日・休養日
+            # game_index は次に生成する試合のインデックス (0始まり)
+            # 第2戦(index=1)終了後 -> 第3戦(index=2)の前に移動日
+            # 第5戦(index=4)終了後 -> 第6戦(index=5)の前に休養日
+            if series.stage == PostseasonStage.JAPAN_SERIES:
+                last_game_index = len(series.schedule) - 1  # 最後に生成した試合のインデックス
+                if last_game_index == 1:  # 第2戦終了後
+                    next_date += datetime.timedelta(days=1)
+                elif last_game_index == 4:  # 第5戦終了後
+                    next_date += datetime.timedelta(days=1)
         else:
             next_date = start_date
         
@@ -1445,32 +1474,67 @@ class PostseasonEngine:
         elif team2_score > team1_score:
             series.team2_wins += 1
         else:
-            pass  # 引き分け: どちらの勝利数も増えない
+            series.draws += 1  # 引き分け記録
 
         # --- 勝敗判定 ---
-        # CSファースト/ファイナル: 上位チーム(team1)のアドバンテージ考慮 + 勝率判定
-        # 日本シリーズ: 4勝先勝。7戦で決まらなければ8戦、9戦と実施
+        # CSファースト: 2勝先勝 (または上位1勝1分で勝ち抜け)
+        # CSファイナル: 4勝先勝 (アドバンテージ1含む) (または上位3勝1分 / 2勝3分 / 1勝5分...)
+        # 日本シリーズ: 4勝先勝
         
         has_winner = False
         
         if series.stage != PostseasonStage.JAPAN_SERIES:
             # === CSファースト & CSファイナル ===
-            wins_needed = (series.max_games // 2) + 1
-            if series.stage == PostseasonStage.CS_FINAL:
-                wins_needed = 4  # アドバンテージ込みで4勝必要
-            
             total_team1_wins = series.team1_wins + series.team1_advantage
             
-            # 勝ち抜け決定条件 (勝利数到達)
-            if total_team1_wins >= wins_needed:
-                series.winner = series.team1
-                has_winner = True
-            elif series.team2_wins >= wins_needed:
-                series.winner = series.team2
-                has_winner = True
+            # --- CSファーストステージ (2勝先勝) ---
+            if series.stage == PostseasonStage.CS_FIRST:
+                # ホーム(2位)が1勝1分以上なら勝ち抜け (敗退行為がない限り、アウェイは残り全勝しても届かない or 同率上位優先)
+                # ルール: 2勝先勝だが、引き分けありの場合は勝者が決まった時点で終了
+                # ホーム1勝1分 -> 実質1.5勝。残り1試合でアウェイが勝っても1勝1分同士 -> 上位優位でホーム勝利
+                
+                if total_team1_wins >= 2:
+                    series.winner = series.team1
+                    has_winner = True
+                elif series.team2_wins >= 2:
+                    series.winner = series.team2
+                    has_winner = True
+                
+                # 要望: ホーム側が1勝1分になった時点でホーム側の勝利
+                elif total_team1_wins == 1 and series.draws >= 1:
+                     series.winner = series.team1
+                     has_winner = True
+                     print(f"CSファースト: {series.team1}が1勝1分のため規定により勝利")
+
+            # --- CSファイナルステージ (4勝先勝 / Ad含む) ---
+            elif series.stage == PostseasonStage.CS_FINAL:
+                # 勝ち抜け決定条件 (勝利数到達)
+                if total_team1_wins >= 4:
+                    series.winner = series.team1
+                    has_winner = True
+                elif series.team2_wins >= 4:
+                    series.winner = series.team2
+                    has_winner = True
+                    
+                # 要望: ホーム側が 3勝1分 / 2勝3分 / 1勝5分 (全てAd込) で勝利
+                # Note: total_team1_wins はAd込み (Ad=1 + RealWins)
+                elif total_team1_wins == 3 and series.draws >= 1:
+                     series.winner = series.team1
+                     has_winner = True
+                     print(f"CSファイナル: {series.team1}が3勝1分(Ad込)のため規定により勝利")
+                elif total_team1_wins == 2 and series.draws >= 3:
+                     series.winner = series.team1
+                     has_winner = True
+                     print(f"CSファイナル: {series.team1}が2勝3分(Ad込)のため規定により勝利")
+                elif total_team1_wins == 1 and series.draws >= 5:
+                     # これはAdのみで0勝5分ということ
+                     series.winner = series.team1
+                     has_winner = True
+                     print(f"CSファイナル: {series.team1}が1勝5分(Ad込)のため規定により勝利")
+
             
-            # 規定試合数終了時の判定 (引き分け等で決着つかない場合)
-            elif series.games_played >= series.max_games:
+            # 規定試合数終了時の判定 (まだ決着ついてない場合)
+            if not has_winner and series.games_played >= series.max_games:
                 # 勝率判定: アドバンテージを含めた勝利数が多い方が勝者
                 # 同数の場合は上位チーム(team1)が勝者
                 if total_team1_wins >= series.team2_wins:
@@ -1490,10 +1554,7 @@ class PostseasonEngine:
                 has_winner = True
             elif series.games_played >= 7:
                 # 7戦終了時点で勝者が決まっていない場合
-                # 第8戦以降を追加 (引き分けなし、延長無制限は LiveGameEngine 側で制御)
-                # ここでは試合追加のみ行う。勝利数到達で終了。
-                # ただし無限ループ防止のため、一応上限を設ける（例えば第14戦までとか...だが要望は9戦まで?）
-                # 要望: "8戦やって勝者が決まらなかったら9戦を生成"
+                # 第8戦以降を追加
                 pass 
 
         # 勝者が決まっていなければ次の試合を追加
@@ -1801,6 +1862,14 @@ class SeasonManager:
         return self.get_current_phase(date_str) == SeasonPhase.OFF_SEASON
 
     def mark_postseason_complete(self):
+        # グランドチャンピオンシップが終了したら、無駄に生成された残りの日程（未消化試合）を削除
+        if self.postseason_engine and self.postseason_engine.japan_series:
+            js = self.postseason_engine.japan_series
+            if js.winner:
+                # 予定されていたが実施されなかった試合を削除
+                js.schedule = [g for g in js.schedule if g.status != GameStatus.SCHEDULED]
+                print(f"オフシーズン移行: グランドチャンピオンシップの未消化日程を削除しました")
+
         self.postseason_complete = True
         self.phase = SeasonPhase.OFF_SEASON
 

@@ -573,3 +573,14 @@ class SpeedControl(QWidget):
 
     def get_speed(self) -> int:
         return self._speed
+
+
+class PrimaryButton(PremiumButton):
+    """Primary Action Button (Blue)"""
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, style="primary", parent=parent)
+
+class SecondaryButton(PremiumButton):
+    """Secondary Action Button (Gray)"""
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, style="secondary", parent=parent)

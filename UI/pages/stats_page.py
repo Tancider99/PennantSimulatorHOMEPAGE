@@ -9,11 +9,12 @@ from PySide6.QtWidgets import (
     QComboBox, QPushButton, QScrollArea, QAbstractItemView, QButtonGroup,
     QScrollBar, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QBrush, QFont
+from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint
+from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPen, QLinearGradient, QPainterPath, QPolygon
 
 import sys
 import os
+import re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from UI.theme import get_theme
@@ -21,6 +22,241 @@ from UI.widgets.panels import ToolbarPanel
 from UI.widgets.tables import SortableTableWidgetItem
 from models import TeamLevel, PlayerRecord
 from stats_records import update_league_stats
+
+
+class PostseasonBracketWidget(QWidget):
+    """Visual Bracket for Postseason Results"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+        self.game_state = None
+        self.setMinimumHeight(600)
+        self.setStyleSheet("background: transparent;")
+        
+    def set_data(self, game_state):
+        self.game_state = game_state
+        self.update()
+        
+    def paintEvent(self, event):
+        if not self.game_state: return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        w, h = self.width(), self.height()
+        
+        # Stylish Background (Cyberpunk/Sci-Fi Dark) - No Grid
+        painter.fillRect(self.rect(), QColor("#080810")) # Deep Space Black
+        
+        # Get Data
+        sm = getattr(self.game_state, 'season_manager', None)
+        pe = getattr(sm, 'postseason_engine', None) if sm else None
+        
+        if not pe:
+            painter.setPen(QPen(QColor("#00D4FF"), 2))
+            painter.setFont(QFont("Segoe UI", 16, QFont.Bold))
+            painter.drawText(self.rect(), Qt.AlignCenter, "NO POSTSEASON DATA")
+            return
+
+        box_w, box_h = 240, 90 
+        
+        # Helper to strip emojis (remove high surrogate pairs and common emoji ranges)
+        # Simple regex for non-Basic Multilingual Plane characters (often emojis)
+        def clean_text(text):
+            if not text: return ""
+            return re.sub(r'[^\u0000-\uFFFF]', '', str(text)).strip()
+
+        # Names Resolution
+        names = getattr(self.game_state, 'league_names', {})
+        n_league = clean_text(names.get("North League", "North League"))
+        s_league = clean_text(names.get("South League", "South League"))
+        cs1_name = clean_text(names.get("CS First", "CS First"))
+        cs2_name = clean_text(names.get("CS Final", "CS Final"))
+        js_name = clean_text(names.get("Japan Series", "Japan Series"))
+        
+        # Helper to draw series
+        def draw_series(x, y, series, title, is_highlight=False):
+            # Gradient Brush for Box
+            grad = QLinearGradient(x, y, x + box_w, y + box_h)
+            if is_highlight:
+                grad.setColorAt(0, QColor("#333344"))
+                grad.setColorAt(1, QColor("#14141E"))
+                border_color = QColor("#FFD700") # Gold
+            else:
+                grad.setColorAt(0, QColor("#1E1E2E"))
+                grad.setColorAt(1, QColor("#101018"))
+                border_color = QColor("#00D4FF") # Neon Cyan
+
+            painter.setBrush(QBrush(grad))
+            painter.setPen(QPen(border_color, 2))
+            
+            # Draw Shadow
+            painter.save()
+            painter.setBrush(QColor(0, 0, 0, 100))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(x+5, y+5, box_w, box_h, 8, 8)
+            painter.restore()
+
+            # Main Box with rounded corners
+            path = QPainterPath()
+            path.addRoundedRect(x, y, box_w, box_h, 8, 8)
+            painter.drawPath(path)
+            
+            # Header Bar (Top rounded only) with Gradient
+            header_grad = QLinearGradient(x, y, x + box_w, y)
+            header_grad.setColorAt(0, QColor(border_color.red(), border_color.green(), border_color.blue(), 80))
+            header_grad.setColorAt(1, QColor(border_color.red(), border_color.green(), border_color.blue(), 10))
+            
+            header_path = QPainterPath()
+            header_path.moveTo(x, y + 24)
+            header_path.lineTo(x, y + 8)
+            header_path.arcTo(x, y, 16, 16, 180, 90) # Top-left corner
+            header_path.lineTo(x + box_w - 8, y)
+            header_path.arcTo(x + box_w - 16, y, 16, 16, 90, -90) # Top-right corner
+            header_path.lineTo(x + box_w, y + 24)
+            header_path.lineTo(x, y + 24)
+            
+            painter.fillPath(header_path, header_grad)
+            
+            # Title
+            painter.setPen(border_color)
+            painter.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            clean_title = clean_text(title.upper())
+            painter.drawText(QRect(x+10, y, box_w-20, 24), Qt.AlignVCenter | Qt.AlignLeft, clean_title)
+
+            # Advantage Text for Final Stage
+            if "FINAL" in clean_title and series:
+                painter.setFont(QFont("Segoe UI", 8))
+                painter.drawText(QRect(x+5, y, box_w-15, 24), Qt.AlignVCenter | Qt.AlignRight, "ADVANTAGE (+1)")
+            
+            if series:
+                # Teams & Scores
+                t1 = clean_text(series.team1 or "TBD")
+                t2 = clean_text(series.team2 or "TBD")
+                
+                # Check for advantage (ファイナルステージのアドバンテージ表示修正)
+                is_final = False
+                if hasattr(series, 'stage'):
+                    is_final = str(series.stage) == "PostseasonStage.CS_FINAL" or "CS_FINAL" in str(series.stage)
+                if not is_final and "FINAL" in clean_title: is_final = True
+                
+                # team1はアドバンテージ込みで表示
+                adv = getattr(series, 'team1_advantage', 0)
+                t1_wins = series.team1_wins + adv  # アドバンテージを加算して表示
+                t2_wins = series.team2_wins
+                draws = getattr(series, 'draws', 0)
+                
+                # アドバンテージがある場合は★マーク
+                adv_mark = "★" if adv > 0 else ""
+                
+                # 引き分けがある場合は表示 (例: "2-1-1D")
+                if draws > 0:
+                    s1 = f"{t1_wins}"
+                    s2 = f"{t2_wins}"
+                    draw_text = f"{draws}D"
+                else:
+                    s1 = str(t1_wins)
+                    s2 = str(t2_wins)
+                    draw_text = ""
+                
+                painter.setFont(QFont("Segoe UI", 12, QFont.Bold))
+                
+                # Team 1 (with advantage mark if applicable)
+                painter.setPen(QColor("#FFFFFF"))
+                t1_display = f"{adv_mark}{t1}" if adv_mark else t1
+                painter.drawText(x + 12, y + 50, t1_display)
+                
+                # Score 1 (Accent Color if winning)
+                score_color = QColor("#00D4FF") if t1_wins > t2_wins else QColor("#FFFFFF")
+                painter.setPen(score_color)
+                painter.drawText(x + box_w - 36, y + 50, s1)
+                
+                # Team 2
+                painter.setPen(QColor("#FFFFFF"))
+                painter.drawText(x + 12, y + 75, t2)
+                
+                # Score 2
+                score_color = QColor("#00D4FF") if t2_wins > t1_wins else QColor("#FFFFFF")
+                painter.setPen(score_color)
+                painter.drawText(x + box_w - 36, y + 75, s2)
+                
+                # 引き分け表示 (右下に小さく)
+                if draw_text:
+                    painter.setFont(QFont("Segoe UI", 9))
+                    painter.setPen(QColor("#888888"))
+                    painter.drawText(x + box_w - 30, y + box_h - 5, draw_text)
+            else:
+                painter.setPen(QColor(100, 100, 100))
+                painter.setFont(QFont("Segoe UI", 12, QFont.Italic))
+                painter.drawText(QRect(x, y+24, box_w, box_h-24), Qt.AlignCenter, "WAITING...")
+
+            return (x, y + box_h/2) # Connection point
+
+        # Calculate Coordinates (Tree Layout)
+        cy = h // 2
+        cx = w // 2
+        
+        # Japan Series (Center Top)
+        js_x = cx - box_w // 2
+        js_y = 60
+        draw_series(js_x, js_y, pe.japan_series, js_name, True)
+        
+        # Calculate Y positions
+        y_final = 250
+        y_first = 450
+        
+        # North (Left)
+        # Final
+        nf_x = cx - 180 - box_w
+        draw_series(nf_x, y_final, pe.cs_north_final, f"{cs2_name} ({n_league})")
+        
+        # First
+        n1_x = cx - 300 - box_w
+        draw_series(n1_x, y_first, pe.cs_north_first, f"{cs1_name} ({n_league})")
+
+        # South (Right)
+        # Final
+        sf_x = cx + 180
+        draw_series(sf_x, y_final, pe.cs_south_final, f"{cs2_name} ({s_league})")
+        
+        # First
+        s1_x = cx + 300
+        draw_series(s1_x, y_first, pe.cs_south_first, f"{cs1_name} ({s_league})")
+        
+        # Draw Connectors (Angular / Tech lines)
+        painter.setPen(QPen(QColor(60, 60, 80), 2))
+        
+        # North Side
+        points_n = [
+            QPoint(n1_x + box_w//2, y_first), 
+            QPoint(n1_x + box_w//2, y_first - 20), 
+            QPoint(nf_x + box_w//2, y_first - 20),
+            QPoint(nf_x + box_w//2, y_final + box_h)
+        ]
+        if pe.cs_north_first: painter.drawPolyline(points_n)
+        
+        points_nf_js = [
+            QPoint(nf_x + box_w//2, y_final), 
+            QPoint(nf_x + box_w//2, js_y + box_h//2), 
+            QPoint(js_x, js_y + box_h//2) 
+        ]
+        if pe.cs_north_final: painter.drawPolyline(points_nf_js)
+        
+        # South Side
+        points_s = [
+            QPoint(s1_x + box_w//2, y_first),
+            QPoint(s1_x + box_w//2, y_first - 20),
+            QPoint(sf_x + box_w//2, y_first - 20),
+            QPoint(sf_x + box_w//2, y_final + box_h)
+        ]
+        if pe.cs_south_first: painter.drawPolyline(points_s)
+        
+        points_sf_js = [
+            QPoint(sf_x + box_w//2, y_final),
+            QPoint(sf_x + box_w//2, js_y + box_h//2),
+            QPoint(js_x + box_w, js_y + box_h//2)
+        ]
+        if pe.cs_south_final: painter.drawPolyline(points_sf_js)
+
 
 def safe_enum_val(obj):
     """Safely get value from Enum or return string representation"""
@@ -329,8 +565,7 @@ class StatsTable(QTableWidget):
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     
                     self.setItem(row, col, item)
-            except Exception as e:
-                print(f"Stats Table Error on row {row}: {e}")
+            except Exception:
                 self.setItem(row, 0, SortableTableWidgetItem("Error"))
                 continue
 
@@ -560,10 +795,18 @@ class StatsPage(QWidget):
         self.game_state = game_state
         if not game_state: return
         
+        # Update League Combo Texts based on settings
+        league_names = getattr(game_state, 'league_names', {})
+        north_name = league_names.get('North League', 'North League')
+        south_name = league_names.get('South League', 'South League')
+        
+        self.league_combo.setItemText(1, north_name)
+        self.league_combo.setItemText(2, south_name)
+        
         try:
             update_league_stats(game_state.teams)
-        except Exception as e:
-            print(f"Stats Update Error: {e}")
+        except Exception:
+            pass
 
         current_team_data = self.current_team
         self.team_combo.blockSignals(True)
@@ -839,72 +1082,11 @@ class StatsPage(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         
-        if not self.game_state:
-            self.postseason_placeholder.setVisible(True)
-            return
+        # Use PostseasonBracketWidget
+        bracket = PostseasonBracketWidget()
+        if self.game_state:
+            bracket.set_data(self.game_state)
+            
+        self.postseason_content.addWidget(bracket)
+
         
-        # Check if postseason engine exists via season_manager
-        season_mgr = getattr(self.game_state, 'season_manager', None)
-        ps_engine = getattr(season_mgr, 'postseason_engine', None) if season_mgr else None
-        if not ps_engine:
-            self.postseason_placeholder.setVisible(True)
-            return
-        
-        self.postseason_placeholder.setVisible(False)
-        
-        # CS First Stage - North
-        if ps_engine.cs_north_first:
-            self._add_series_result("CSファースト (North)", ps_engine.cs_north_first)
-        
-        # CS First Stage - South
-        if ps_engine.cs_south_first:
-            self._add_series_result("CSファースト (South)", ps_engine.cs_south_first)
-        
-        # CS Final Stage - North
-        if ps_engine.cs_north_final:
-            self._add_series_result("CSファイナル (North)", ps_engine.cs_north_final)
-        
-        # CS Final Stage - South
-        if ps_engine.cs_south_final:
-            self._add_series_result("CSファイナル (South)", ps_engine.cs_south_final)
-        
-        # Japan Series
-        if ps_engine.japan_series:
-            self._add_series_result("日本シリーズ", ps_engine.japan_series, is_champion=True)
-    
-    def _add_series_result(self, title: str, series, is_champion: bool = False):
-        """シリーズ結果を追加"""
-        frame = QFrame()
-        frame.setStyleSheet(f"""
-            QFrame {{
-                background: {self.theme.bg_card_elevated};
-                border-radius: 8px;
-                padding: 12px;
-            }}
-        """)
-        layout = QVBoxLayout(frame)
-        
-        # Title
-        title_label = QLabel(title)
-        title_style = f"color: {self.theme.accent_orange if is_champion else self.theme.text_primary}; font-size: 16px; font-weight: bold;"
-        title_label.setStyleSheet(title_style)
-        layout.addWidget(title_label)
-        
-        # Matchup
-        team1 = series.team1 or "TBD"
-        team2 = series.team2 or "TBD"
-        score = f"{series.team1_wins} - {series.team2_wins}"
-        
-        matchup_label = QLabel(f"{team1}  {score}  {team2}")
-        matchup_label.setStyleSheet(f"color: {self.theme.text_primary}; font-size: 14px;")
-        matchup_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(matchup_label)
-        
-        # Winner
-        if series.winner:
-            winner_label = QLabel(f"勝者: {series.winner}")
-            winner_label.setStyleSheet(f"color: {self.theme.success}; font-size: 12px; font-weight: bold;")
-            winner_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(winner_label)
-        
-        self.postseason_content.addWidget(frame)

@@ -184,10 +184,6 @@ class SettingsPage(QWidget):
         if hasattr(self.game_state, 'pitcher_stamina_weight'):
             self.stamina_weight_slider.setValue(int(self.game_state.pitcher_stamina_weight * 100))
         
-        # Rest days
-        if hasattr(self.game_state, 'starter_rest_days'):
-            self.starter_rest_spin.setValue(self.game_state.starter_rest_days)
-        
         # AI settings
         if hasattr(self.game_state, 'ai_bunt_tendency'):
             self.ai_bunt_slider.setValue(self.game_state.ai_bunt_tendency)
@@ -205,6 +201,16 @@ class SettingsPage(QWidget):
             self.autosave_check.setChecked(self.game_state.autosave_enabled)
         if hasattr(self.game_state, 'autosave_interval'):
             self.autosave_spin.setValue(self.game_state.autosave_interval)
+        
+        # Auto demotion frequency
+        if hasattr(self.game_state, 'auto_demotion_frequency'):
+            freq = self.game_state.auto_demotion_frequency
+            if freq == "strict":
+                self.demotion_frequency_combo.setCurrentIndex(0)
+            elif freq == "relaxed":
+                self.demotion_frequency_combo.setCurrentIndex(2)
+            else:
+                self.demotion_frequency_combo.setCurrentIndex(1)  # normal
     
     def _sync_to_game_state(self):
         """Sync UI controls to game state"""
@@ -233,9 +239,6 @@ class SettingsPage(QWidget):
         self.game_state.substitute_stamina_threshold = self.sub_stamina_slider.value()
         self.game_state.pinch_hitter_inning = self.pinch_hitter_spin.value()
         
-        # Rest days
-        self.game_state.starter_rest_days = self.starter_rest_spin.value()
-        
         # AI settings
         self.game_state.ai_bunt_tendency = self.ai_bunt_slider.value()
         self.game_state.ai_steal_tendency = self.ai_steal_slider.value()
@@ -248,6 +251,15 @@ class SettingsPage(QWidget):
         # Autosave
         self.game_state.autosave_enabled = self.autosave_check.isChecked()
         self.game_state.autosave_interval = self.autosave_spin.value()
+        
+        # Auto demotion frequency
+        demotion_idx = self.demotion_frequency_combo.currentIndex()
+        if demotion_idx == 0:
+            self.game_state.auto_demotion_frequency = "strict"
+        elif demotion_idx == 2:
+            self.game_state.auto_demotion_frequency = "relaxed"
+        else:
+            self.game_state.auto_demotion_frequency = "normal"
         
         return True
     
@@ -421,13 +433,13 @@ class SettingsPage(QWidget):
         row.set_control(self.pinch_hitter_spin)
         order_section.add_widget(row)
         
-        # Starter rest days
-        row = SettingRow("先発投手休養日数", "先発登板後の休養日数")
-        self.starter_rest_spin = QSpinBox()
-        self.starter_rest_spin.setRange(4, 7)
-        self.starter_rest_spin.setValue(6)
-        self.starter_rest_spin.setStyleSheet(self._get_spinbox_style())
-        row.set_control(self.starter_rest_spin)
+        # Auto demotion frequency
+        row = SettingRow("自動降格頻度", "成績不振選手の降格判定期間（厳格:10日 / 通常:15日 / 緩め:20日）")
+        self.demotion_frequency_combo = QComboBox()
+        self.demotion_frequency_combo.addItems(["厳格 (10日)", "通常 (15日)", "緩め (20日)"])
+        self.demotion_frequency_combo.setCurrentIndex(1)  # Default: normal
+        self.demotion_frequency_combo.setStyleSheet(self._get_combo_style())
+        row.set_control(self.demotion_frequency_combo)
         order_section.add_widget(row)
         
         content_layout.addWidget(order_section)
@@ -508,7 +520,7 @@ class SettingsPage(QWidget):
         save_section.add_widget(row)
         
         # Auto-save interval
-        row = SettingRow("オートセーブ間隔", "自動保存の頻度（試合数）")
+        row = SettingRow("オートセーブ間隔", "自動保存の頻度（日数）")
         self.autosave_spin = QSpinBox()
         self.autosave_spin.setRange(1, 30)
         self.autosave_spin.setValue(5)
@@ -635,10 +647,43 @@ class SettingsPage(QWidget):
             }}
         """
     
+    def _sync_to_game_state(self):
+        """Sync UI settings to GameState object"""
+        if not self.game_state:
+            return False
+            
+        try:
+            # Game System Settings
+            self.game_state.weather_enabled = self.weather_check.isChecked()
+            self.game_state.injuries_enabled = self.injuries_check.isChecked()
+            self.game_state.auto_order_enabled = self.auto_order_check.isChecked()
+            
+            p_map = ["ability", "condition", "balanced"]
+            if self.order_priority_combo.currentIndex() < len(p_map):
+                self.game_state.auto_order_priority = p_map[self.order_priority_combo.currentIndex()]
+            
+            # Numeric Settings
+            self.game_state.pitcher_stamina_weight = self.stamina_weight_slider.value() / 100.0
+            self.game_state.substitute_stamina_threshold = self.sub_stamina_slider.value()
+            self.game_state.pinch_hitter_inning = self.pinch_hitter_spin.value()
+            self.game_state.starter_rest_days = self.starter_rest_spin.value()
+            
+            # AI Settings
+            self.game_state.ai_bunt_tendency = self.ai_bunt_slider.value()
+            self.game_state.ai_steal_tendency = self.ai_steal_slider.value()
+            self.game_state.ai_pitching_change_tendency = self.ai_pitch_change_slider.value()
+            self.game_state.ai_defensive_shift = self.ai_shift_check.isChecked()
+            
+            # Autosave Settings
+            self.game_state.autosave_enabled = self.autosave_check.isChecked()
+            self.game_state.autosave_interval = self.autosave_spin.value()
+            
+            return True
+        except Exception:
+            return False
+    
     def _apply_settings(self):
         """Apply current settings to game state"""
-        print("Settings _apply_settings called!")  # Debug
-        
         success = self._sync_to_game_state()
         
         # Collect all settings
@@ -650,7 +695,6 @@ class SettingsPage(QWidget):
             "pitcher_stamina_weight": self.stamina_weight_slider.value(),
             "substitute_stamina_threshold": self.sub_stamina_slider.value(),
             "pinch_hitter_inning": self.pinch_hitter_spin.value(),
-            "starter_rest_days": self.starter_rest_spin.value(),
             "ai_bunt_tendency": self.ai_bunt_slider.value(),
             "ai_steal_tendency": self.ai_steal_slider.value(),
             "ai_pitching_change_tendency": self.ai_pitch_change_slider.value(),
@@ -659,20 +703,18 @@ class SettingsPage(QWidget):
             "autosave_interval": self.autosave_spin.value(),
         }
         
-        print(f"Emitting settings_changed signal with: {self.settings}")  # Debug
         self.settings_changed.emit(self.settings)
         
         # Show confirmation dialog
         if success:
             QMessageBox.information(self, "設定", "設定を適用しました")
-        else:
-            QMessageBox.warning(self, "設定", "ゲームが開始されていないため、一部の設定が適用されませんでした")
+        # ゲーム未開始時は警告を表示しない（設定は保存される）
     
     def _reset_settings(self):
         """Reset to default settings"""
         self.weather_check.setChecked(True)
         self.injuries_check.setChecked(True)
-        self.auto_order_check.setChecked(False)  # Default OFF
+        self.auto_order_check.setChecked(True)  # Default ON
         self.order_priority_combo.setCurrentIndex(0)
         self.stamina_weight_slider.setValue(50)
         self.sub_stamina_slider.setValue(30)

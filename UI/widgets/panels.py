@@ -212,18 +212,7 @@ class SidebarPanel(QWidget):
 
         layout.addStretch()
         
-        # Bottom Tech Status
-        status_area = QFrame()
-        status_area.setFixedHeight(40)
-        status_area.setStyleSheet(f"border-top: 1px solid {self.theme.border}; background-color: {self.theme.bg_darkest};")
-        s_layout = QHBoxLayout(status_area)
-        s_layout.setContentsMargins(16, 0, 16, 0)
-        
-        status_lbl = QLabel("SYS: ONLINE")
-        status_lbl.setStyleSheet(f"font-size: 10px; color: {self.theme.success}; letter-spacing: 1px;")
-        s_layout.addWidget(status_lbl)
-        
-        layout.addWidget(status_area)
+
 
     def add_nav_item(self, icon: str, text: str, section: str):
         # 循環インポート回避のため関数内でインポート
@@ -364,8 +353,9 @@ class StatusPanel(QWidget):
         l = QHBoxLayout(self)
         l.setContentsMargins(16, 0, 16, 0)
         
-        self.left = QLabel("READY")
-        self.left.setStyleSheet(f"color: {self.theme.text_muted}; font-size: 10px; font-family: 'Consolas';")
+        # Self.left and right restored for API compatibility (prevent crashes)
+        self.left = QLabel("")
+        self.left.setVisible(False) # Hidden by default since user wanted them gone
         l.addWidget(self.left)
         l.addStretch()
         

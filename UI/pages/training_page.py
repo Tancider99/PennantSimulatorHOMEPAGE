@@ -46,7 +46,7 @@ KEY_TO_MENU_PITCHER = {
     "stability": TrainingMenu.STABILITY,
     "durability": TrainingMenu.DURABILITY, 
     "intelligence": TrainingMenu.INTELLIGENCE,
-    "gb_tendency": None, 
+    "gb_tendency": TrainingMenu.MENTAL,  # ゴロ傾向はメンタル練習で向上
     "new_pitch_progress": TrainingMenu.NEW_PITCH,
 }
 
@@ -664,6 +664,7 @@ class TrainingPage(ContentPanel):
             items.append(("球威", stats.stuff, "stuff", 100, False))
             items.append(("制球", stats.control, "control", 100, False))
             items.append(("変化量", stats.movement, "movement", 100, False))
+            items.append(("ゴロ傾向", stats.gb_tendency, "gb_tendency", 100, False))
             items.append(("新球種習得", stats.new_pitch_progress, "new_pitch_progress", 100, False))
             
         else:

@@ -696,8 +696,8 @@ class TeamEditorPanel(QWidget):
                             data = json.load(f)
                         self.team_data[team_name] = data
                         self.team_list.addItem(team_name)
-                    except Exception as e:
-                        print(f"Error loading {filename}: {e}")
+                    except Exception:
+                        pass
     
     def _on_team_selected(self, row: int):
         if row < 0:
@@ -856,6 +856,13 @@ class TeamEditorPanel(QWidget):
 
 class PlayerEditorPanel(QWidget):
     """Player data editor panel"""
+    
+    # Player count limits (支配下選手)
+    MIN_PITCHERS = 15  # 最低支配下投手数
+    MIN_BATTERS = 16   # 最低支配下野手数
+    MAX_PLAYERS = 70   # 最大支配下選手数
+    MAX_IKUSEI = 50    # 最大育成選手数
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.theme = get_theme()
@@ -907,6 +914,57 @@ class PlayerEditorPanel(QWidget):
         """)
         self.player_list.currentRowChanged.connect(self._on_player_selected)
         list_layout.addWidget(self.player_list)
+        
+        # Player count label
+        self.player_count_label = QLabel("選手数: 0")
+        self.player_count_label.setStyleSheet(f"font-size: 11px; color: {self.theme.text_muted}; margin-top: 4px;")
+        list_layout.addWidget(self.player_count_label)
+        
+        # Add/Delete buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        
+        self.add_player_btn = QPushButton("追加")
+        self.add_player_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.success};
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: #33cc66;
+            }}
+            QPushButton:disabled {{
+                background: {self.theme.bg_input};
+                color: {self.theme.text_muted};
+            }}
+        """)
+        self.add_player_btn.clicked.connect(self._add_player)
+        btn_layout.addWidget(self.add_player_btn)
+        
+        self.delete_player_btn = QPushButton("削除")
+        self.delete_player_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.error};
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: #ff4444;
+            }}
+            QPushButton:disabled {{
+                background: {self.theme.bg_input};
+                color: {self.theme.text_muted};
+            }}
+        """)
+        self.delete_player_btn.clicked.connect(self._delete_player)
+        btn_layout.addWidget(self.delete_player_btn)
+        
+        list_layout.addLayout(btn_layout)
         
         layout.addWidget(list_frame)
         
@@ -1023,6 +1081,67 @@ class PlayerEditorPanel(QWidget):
         common_group.layout().addLayout(common_grid)
         self.editor_layout.addWidget(common_group)
         
+        # Per-Pitch Stats Section
+        pitch_group = self._create_group("球種別能力")
+        pitch_layout = QVBoxLayout()
+        
+        # Pitch selector row with add/delete buttons
+        pitch_select = QHBoxLayout()
+        pitch_select.addWidget(QLabel("球種:"))
+        self.pitch_combo = QComboBox()
+        self.pitch_combo.setStyleSheet(self._input_style())
+        self.pitch_combo.setMinimumWidth(120)
+        self.pitch_combo.currentTextChanged.connect(self._on_pitch_type_selected)
+        pitch_select.addWidget(self.pitch_combo)
+        
+        # Add pitch button
+        add_pitch_btn = QPushButton("+")
+        add_pitch_btn.setFixedSize(28, 28)
+        add_pitch_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.success}; color: white;
+                border: none; border-radius: 4px; font-weight: bold; font-size: 16px;
+            }}
+            QPushButton:hover {{ background: {self.theme.success}cc; }}
+        """)
+        add_pitch_btn.clicked.connect(self._add_pitch_type)
+        pitch_select.addWidget(add_pitch_btn)
+        
+        # Delete pitch button
+        del_pitch_btn = QPushButton("-")
+        del_pitch_btn.setFixedSize(28, 28)
+        del_pitch_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.danger}; color: white;
+                border: none; border-radius: 4px; font-weight: bold; font-size: 16px;
+            }}
+            QPushButton:hover {{ background: {self.theme.danger}cc; }}
+        """)
+        del_pitch_btn.clicked.connect(self._delete_pitch_type)
+        pitch_select.addWidget(del_pitch_btn)
+        
+        pitch_select.addStretch()
+        pitch_layout.addLayout(pitch_select)
+        
+        # Per-pitch spinboxes
+        pitch_stats_grid = QGridLayout()
+        pitch_stats_grid.setSpacing(6)
+        
+        self.pitch_spins = {}
+        pitch_stat_items = [("制球", "control"), ("球威", "stuff"), ("変化量", "movement")]
+        
+        for i, (label, key) in enumerate(pitch_stat_items):
+            pitch_stats_grid.addWidget(QLabel(f"{label}:"), 0, i * 2)
+            spin = TriangleSpinBox()
+            spin.setRange(1, 99)
+            spin.setValue(50)
+            pitch_stats_grid.addWidget(spin, 0, i * 2 + 1)
+            self.pitch_spins[key] = spin
+        
+        pitch_layout.addLayout(pitch_stats_grid)
+        pitch_group.layout().addLayout(pitch_layout)
+        self.editor_layout.addWidget(pitch_group)
+        
         self.editor_layout.addStretch()
         
         editor_scroll.setWidget(editor_widget)
@@ -1064,8 +1183,10 @@ class PlayerEditorPanel(QWidget):
         self.current_team = team_name
         self.player_list.clear()
         self.players_data = []
+        self.current_player_idx = -1
         
         if not team_name:
+            self._update_player_count()
             return
         
         safe_name = team_name.replace(" ", "_").replace("/", "_")
@@ -1081,8 +1202,10 @@ class PlayerEditorPanel(QWidget):
                     pos = p.get("ポジション", "不明")
                     num = p.get("背番号", 0)
                     self.player_list.addItem(f"#{num} {name} ({pos})")
-            except Exception as e:
-                print(f"Error loading players: {e}")
+            except Exception:
+                pass
+        
+        self._update_player_count()
     
     def _on_player_selected(self, row: int):
         """Load player data into editor"""
@@ -1113,6 +1236,136 @@ class PlayerEditorPanel(QWidget):
                 val = stats.get(key, 2)
             
             spin.setValue(val if isinstance(val, int) else 50)
+        
+        # Load pitch types into combo - pitches are in 能力値.持ち球
+        self.pitch_combo.blockSignals(True)
+        self.pitch_combo.clear()
+        stats = p.get("能力値", {})
+        pitches = stats.get("持ち球", {}) or {}
+        if pitches:
+            for pitch_name in pitches.keys():
+                self.pitch_combo.addItem(pitch_name)
+        else:
+            self.pitch_combo.addItem("ストレート")
+        self.pitch_combo.blockSignals(False)
+        
+        # Trigger load of first pitch
+        if self.pitch_combo.count() > 0:
+            self._on_pitch_type_selected(self.pitch_combo.currentText())
+    
+    def _on_pitch_type_selected(self, pitch_name: str):
+        """Load per-pitch stats for selected pitch type"""
+        if self.current_player_idx < 0 or not pitch_name:
+            return
+        
+        p = self.players_data[self.current_player_idx]
+        stats = p.get("能力値", {})
+        pitches = stats.get("持ち球", {}) or {}
+        pitch_data = pitches.get(pitch_name, {})
+        
+        if isinstance(pitch_data, dict):
+            self.pitch_spins["control"].setValue(pitch_data.get("control", 50))
+            self.pitch_spins["stuff"].setValue(pitch_data.get("stuff", 50))
+            self.pitch_spins["movement"].setValue(pitch_data.get("movement", 50))
+        elif isinstance(pitch_data, int):
+            # Old format - just one value
+            for spin in self.pitch_spins.values():
+                spin.setValue(pitch_data)
+        else:
+            for spin in self.pitch_spins.values():
+                spin.setValue(50)
+    
+    def _add_pitch_type(self):
+        """Add a new pitch type to the current player"""
+        if self.current_player_idx < 0:
+            return
+        
+        p = self.players_data[self.current_player_idx]
+        stats = p.get("能力値", {})
+        pitches = stats.get("持ち球", {}) or {}
+        
+        # Check max limit (10 pitches)
+        if len(pitches) >= 10:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "エラー", "球種は最大10個までです。")
+            return
+        
+        # Available pitch types
+        all_pitches = ["ストレート", "スライダー", "カーブ", "フォーク", "チェンジアップ", 
+                       "カットボール", "シンカー", "ツーシーム", "シュート", "ナックル",
+                       "スプリット", "パーム", "スクリュー", "ナックルカーブ", "スラッター"]
+        
+        # Filter available pitches
+        available = [pt for pt in all_pitches if pt not in pitches]
+        
+        if not available:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "エラー", "追加可能な球種がありません。")
+            return
+        
+        from PySide6.QtWidgets import QInputDialog
+        pitch_type, ok = QInputDialog.getItem(self, "球種追加", "追加する球種を選択:", available, 0, False)
+        
+        if ok and pitch_type:
+            # Add new pitch type with default values
+            if "能力値" not in p:
+                p["能力値"] = {}
+            if "持ち球" not in p["能力値"]:
+                p["能力値"]["持ち球"] = {}
+            
+            p["能力値"]["持ち球"][pitch_type] = {
+                "control": 50,
+                "stuff": 50,
+                "movement": 50
+            }
+            
+            # Refresh pitch combo
+            self.pitch_combo.blockSignals(True)
+            self.pitch_combo.addItem(pitch_type)
+            self.pitch_combo.setCurrentText(pitch_type)
+            self.pitch_combo.blockSignals(False)
+            self._on_pitch_type_selected(pitch_type)
+    
+    def _delete_pitch_type(self):
+        """Delete the currently selected pitch type"""
+        if self.current_player_idx < 0:
+            return
+        
+        pitch_name = self.pitch_combo.currentText()
+        if not pitch_name:
+            return
+        
+        p = self.players_data[self.current_player_idx]
+        stats = p.get("能力値", {})
+        pitches = stats.get("持ち球", {}) or {}
+        
+        # Check min limit (1 pitch required)
+        if len(pitches) <= 1:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "エラー", "球種は最低1つ必要です。")
+            return
+        
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(self, "確認", 
+                                      f"「{pitch_name}」を削除しますか？",
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            # Remove pitch type
+            if "能力値" in p and "持ち球" in p["能力値"]:
+                if pitch_name in p["能力値"]["持ち球"]:
+                    del p["能力値"]["持ち球"][pitch_name]
+            
+            # Refresh pitch combo
+            self.pitch_combo.blockSignals(True)
+            idx = self.pitch_combo.findText(pitch_name)
+            if idx >= 0:
+                self.pitch_combo.removeItem(idx)
+            self.pitch_combo.blockSignals(False)
+            
+            # Select first available pitch
+            if self.pitch_combo.count() > 0:
+                self._on_pitch_type_selected(self.pitch_combo.currentText())
     
     def _save_current_player(self):
         """Save current player changes"""
@@ -1137,6 +1390,26 @@ class PlayerEditorPanel(QWidget):
                 p["共通能力"][key] = spin.value()
             else:
                 p["能力値"][key] = spin.value()
+        
+        # Save current pitch stats to 能力値.持ち球
+        pitch_name = self.pitch_combo.currentText()
+        if pitch_name:
+            if "持ち球" not in p["能力値"]:
+                p["能力値"]["持ち球"] = {}
+            if pitch_name not in p["能力値"]["持ち球"]:
+                p["能力値"]["持ち球"][pitch_name] = {}
+            
+            if isinstance(p["能力値"]["持ち球"][pitch_name], dict):
+                p["能力値"]["持ち球"][pitch_name]["control"] = self.pitch_spins["control"].value()
+                p["能力値"]["持ち球"][pitch_name]["stuff"] = self.pitch_spins["stuff"].value()
+                p["能力値"]["持ち球"][pitch_name]["movement"] = self.pitch_spins["movement"].value()
+            else:
+                # Convert old format to dict
+                p["能力値"]["持ち球"][pitch_name] = {
+                    "control": self.pitch_spins["control"].value(),
+                    "stuff": self.pitch_spins["stuff"].value(),
+                    "movement": self.pitch_spins["movement"].value()
+                }
         
         # Save to file - preserve original structure
         from player_data_manager import PlayerDataManager
@@ -1164,6 +1437,144 @@ class PlayerEditorPanel(QWidget):
         """Save all player changes - called from main save"""
         # First update current player data from UI
         self._save_current_player()
+    
+    def _update_player_count(self):
+        """Update the player count label and button states"""
+        count = len(self.players_data)
+        
+        # Count by position
+        pitcher_count = sum(1 for p in self.players_data if p.get("ポジション") == "投手")
+        batter_count = count - pitcher_count
+        
+        self.player_count_label.setText(f"選手: {count} (投{pitcher_count}/野{batter_count})")
+        
+        # Update button states
+        self.add_player_btn.setEnabled(count < self.MAX_PLAYERS)
+        # Delete enabled only if above minimum for that position
+        can_delete = False
+        if self.current_player_idx >= 0 and self.current_player_idx < len(self.players_data):
+            current_pos = self.players_data[self.current_player_idx].get("ポジション", "")
+            if current_pos == "投手":
+                can_delete = pitcher_count > self.MIN_PITCHERS
+            else:
+                can_delete = batter_count > self.MIN_BATTERS
+        self.delete_player_btn.setEnabled(can_delete)
+    
+    def _add_player(self):
+        """Add a new player to the team"""
+        if not self.current_team:
+            return
+        
+        if len(self.players_data) >= self.MAX_PLAYERS:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "制限", f"選手数が最大({self.MAX_PLAYERS}人)に達しています。")
+            return
+        
+        # Create default player data
+        new_number = self._get_next_available_number()
+        new_player = {
+            "名前": "新規選手",
+            "背番号": new_number,
+            "年齢": 20,
+            "年俸": 5000000,
+            "ポジション": "野手",
+            "能力値": {
+                "ミート": 40, "パワー": 40, "走力": 40,
+                "肩力": 40, "守備": 40, "捕球": 40,
+                "選球眼": 40, "チャンス": 40, "ギャップ": 40,
+                "三振回避": 40, "盗塁": 40, "走塁": 40,
+                "バント": 40, "セーフティ": 40, "弾道": 2,
+                "対左投手": 40, "捕手リード": 40,
+                "球速": 140, "スタミナ": 40,
+                "対左打者": 40, "対ピンチ": 40,
+                "安定感": 40, "ゴロ傾向": 50, "クイック": 40
+            },
+            "共通能力": {
+                "ケガしにくさ": 50, "回復": 50,
+                "練習態度": 50, "野球脳": 50, "メンタル": 50
+            }
+        }
+        
+        self.players_data.append(new_player)
+        self._save_players_to_file()
+        self._on_team_changed(self.current_team)
+        
+        # Select the new player
+        self.player_list.setCurrentRow(len(self.players_data) - 1)
+    
+    def _delete_player(self):
+        """Delete the currently selected player"""
+        if not self.current_team or self.current_player_idx < 0:
+            return
+        
+        # Check position-based limits
+        from PySide6.QtWidgets import QMessageBox
+        current_player = self.players_data[self.current_player_idx]
+        current_pos = current_player.get("ポジション", "")
+        
+        pitcher_count = sum(1 for p in self.players_data if p.get("ポジション") == "投手")
+        batter_count = len(self.players_data) - pitcher_count
+        
+        if current_pos == "投手" and pitcher_count <= self.MIN_PITCHERS:
+            QMessageBox.warning(self, "制限", f"投手が最低({self.MIN_PITCHERS}人)に達しています。")
+            return
+        elif current_pos != "投手" and batter_count <= self.MIN_BATTERS:
+            QMessageBox.warning(self, "制限", f"野手が最低({self.MIN_BATTERS}人)に達しています。")
+            return
+        
+        # Confirmation dialog
+        from PySide6.QtWidgets import QMessageBox
+        player_name = self.players_data[self.current_player_idx].get("名前", "不明")
+        result = QMessageBox.question(
+            self, "選手削除",
+            f"「{player_name}」を削除しますか？\nこの操作は取り消せません。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if result != QMessageBox.Yes:
+            return
+        
+        del self.players_data[self.current_player_idx]
+        self._save_players_to_file()
+        self._on_team_changed(self.current_team)
+        
+        # Select previous player or first one
+        new_idx = min(self.current_player_idx, len(self.players_data) - 1)
+        if new_idx >= 0:
+            self.player_list.setCurrentRow(new_idx)
+    
+    def _get_next_available_number(self) -> int:
+        """Get the next available uniform number"""
+        used_numbers = {p.get("背番号", 0) for p in self.players_data}
+        for num in range(1, 100):
+            if num not in used_numbers:
+                return num
+        return 99
+    
+    def _save_players_to_file(self):
+        """Save current players data to file"""
+        if not self.current_team:
+            return
+        
+        from player_data_manager import PlayerDataManager
+        safe_name = self.current_team.replace(" ", "_").replace("/", "_")
+        filepath = os.path.join(PlayerDataManager.DATA_DIR, f"{safe_name}_player.json")
+        
+        # Read original file to preserve metadata
+        original_data = {}
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    original_data = json.load(f)
+            except:
+                pass
+        
+        original_data["選手一覧"] = self.players_data
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(original_data, f, ensure_ascii=False, indent=2)
+
+
 class StaffEditorPanel(QWidget):
     """Staff data editor panel"""
     def __init__(self, parent=None):
@@ -1316,8 +1727,8 @@ class StaffEditorPanel(QWidget):
                         }
                         self.staff_data.append(staff_entry)
                         self.staff_list.addItem(f"{staff_entry['名前']} ({staff_entry['役職']})")
-            except Exception as e:
-                print(f"Error loading staff: {e}")
+            except Exception:
+                pass
     
     def _on_staff_selected(self, row: int):
         if row < 0 or row >= len(self.staff_data):
@@ -1379,6 +1790,119 @@ class StaffEditorPanel(QWidget):
         """Save all staff changes - called from main save"""
         # First update current staff data from UI
         self._save_current_staff()
+
+class NameEditorPanel(QWidget):
+    """Editor for league and postseason names"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+        self.game_state = None
+        self.editors = {}
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(24)
+        
+        # Header
+        header = QLabel("名称設定")
+        header.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {self.theme.text_primary};")
+        layout.addWidget(header)
+        
+        # Form Container
+        form_frame = QFrame()
+        form_frame.setStyleSheet(f"background: {self.theme.bg_card}; border-radius: 8px;")
+        form_layout = QVBoxLayout(form_frame)
+        form_layout.setContentsMargins(24, 24, 24, 24)
+        form_layout.setSpacing(16)
+        
+        # Define fields
+        self.fields = [
+            ("North League", "North League 名前"),
+            ("South League", "South League 名前"),
+            ("Japan Series", "グランドチャンピオンシップ名称"),
+            ("CS First", "ファーストステージ 名前"),
+            ("CS Final", "ファイナルステージ 名前")
+        ]
+        
+        for key, label_text in self.fields:
+            row = QVBoxLayout()
+            row.setSpacing(4)
+            
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(f"color: {self.theme.text_secondary}; font-size: 13px;")
+            
+            edit = QLineEdit()
+            edit.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {self.theme.bg_input};
+                    color: {self.theme.text_primary};
+                    border: 1px solid {self.theme.border};
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: 14px;
+                }}
+                QLineEdit:focus {{
+                    border-color: {self.theme.primary};
+                }}
+            """)
+            self.editors[key] = edit
+            
+            row.addWidget(lbl)
+            row.addWidget(edit)
+            form_layout.addLayout(row)
+            
+        layout.addWidget(form_frame)
+        layout.addStretch()
+
+    def load_data(self, game_state):
+        self.game_state = game_state
+        if not game_state:
+            return
+            
+        # Ensure dict exists if loading from old save
+        if not hasattr(game_state, 'league_names'):
+            game_state.league_names = {
+                "North League": "North League",
+                "South League": "South League",
+                "Japan Series": "グランドチャンピオンシップ",
+                "CS First": "CS First Stage",
+                "CS Final": "CS Final Stage"
+            }
+            
+        for key, edit in self.editors.items():
+            if key in game_state.league_names:
+                edit.setText(game_state.league_names[key])
+    
+    def save_data(self):
+        if not self.game_state:
+            return
+        
+        # Make sure dict exists
+        if not hasattr(self.game_state, 'league_names'):
+            self.game_state.league_names = {}
+            
+        for key, edit in self.editors.items():
+            self.game_state.league_names[key] = edit.text()
+            
+        # Write to user_config.json for immediate persistence
+        import json
+        import os
+        config_path = "user_config.json"
+        try:
+            config = {}
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            
+            config['league_names'] = self.game_state.league_names
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Config save failed: {e}")
 class EditScreen(QWidget):
     """Full-screen edit mode interface"""
     
@@ -1424,7 +1948,6 @@ class EditScreen(QWidget):
                     self.game_state.player_team = team
                     break
         
-        print(f"[INFO] Reloaded teams: North={len(north_teams)}, South={len(south_teams)}")
     
     def _setup_ui(self):
         self.setStyleSheet(f"background: {self.theme.bg_dark};")
@@ -1471,6 +1994,10 @@ class EditScreen(QWidget):
         self.staff_btn.clicked.connect(lambda: self._switch_panel(2))
         sidebar_layout.addWidget(self.staff_btn)
         
+        self.name_btn = SidebarButton("名称データ")
+        self.name_btn.clicked.connect(lambda: self._switch_panel(3))
+        sidebar_layout.addWidget(self.name_btn)
+        
         sidebar_layout.addStretch()
         
         # Action buttons
@@ -1508,25 +2035,7 @@ class EditScreen(QWidget):
         self.save_btn.clicked.connect(self._on_save)
         sidebar_layout.addWidget(self.save_btn)
         
-        self.back_btn = QPushButton("戻る")
-        self.back_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {self.theme.bg_dark};
-                color: {self.theme.text_muted};
-                border: 1px solid {self.theme.border};
-                padding: 10px 16px;
-                font-weight: 600;
-                margin: 8px;
-            }}
-            QPushButton:hover {{
-                background: {self.theme.bg_card};
-                color: {self.theme.text_primary};
-            }}
-        """)
-        self.back_btn.clicked.connect(self.back_clicked.emit)
-        sidebar_layout.addWidget(self.back_btn)
-        
-        # Preset Manager Button
+        # Preset Manager Button (moved before back button)
         preset_sep = QFrame()
         preset_sep.setFixedHeight(1)
         preset_sep.setStyleSheet(f"background: {self.theme.border}; margin: 8px 0;")
@@ -1551,6 +2060,24 @@ class EditScreen(QWidget):
         self.preset_mgr_btn.clicked.connect(self._open_preset_manager)
         sidebar_layout.addWidget(self.preset_mgr_btn)
         
+        self.back_btn = QPushButton("戻る")
+        self.back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.theme.bg_dark};
+                color: {self.theme.text_muted};
+                border: 1px solid {self.theme.border};
+                padding: 10px 16px;
+                font-weight: 600;
+                margin: 8px;
+            }}
+            QPushButton:hover {{
+                background: {self.theme.bg_card};
+                color: {self.theme.text_primary};
+            }}
+        """)
+        self.back_btn.clicked.connect(self.back_clicked.emit)
+        sidebar_layout.addWidget(self.back_btn)
+        
         layout.addWidget(sidebar)
         
         # Main content area
@@ -1559,10 +2086,12 @@ class EditScreen(QWidget):
         self.team_panel = TeamEditorPanel()
         self.player_panel = PlayerEditorPanel()
         self.staff_panel = StaffEditorPanel()
+        self.name_panel = NameEditorPanel()
         
         self.content_stack.addWidget(self.team_panel)
         self.content_stack.addWidget(self.player_panel)
         self.content_stack.addWidget(self.staff_panel)
+        self.content_stack.addWidget(self.name_panel)
         
         layout.addWidget(self.content_stack, 1)
         
@@ -1574,12 +2103,14 @@ class EditScreen(QWidget):
         self.team_btn.set_active(index == 0)
         self.player_btn.set_active(index == 1)
         self.staff_btn.set_active(index == 2)
+        self.name_btn.set_active(index == 3)
     
     def load_data(self):
         """Load all data when entering edit mode"""
         self.team_panel.load_teams()
         self.player_panel.load_teams()
         self.staff_panel.load_teams()
+        self.name_panel.load_data(self.game_state)
     
     def _on_save(self):
         """Save all changes to data files"""
@@ -1591,6 +2122,9 @@ class EditScreen(QWidget):
         
         # Save staff data
         self.staff_panel.save_all_staff()
+        
+        # Save name data
+        self.name_panel.save_data()
         
         # Reload all data
         self.load_data()

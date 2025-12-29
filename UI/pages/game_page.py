@@ -600,8 +600,12 @@ class GamePage(QWidget):
         self.count_label.setText("0アウト")
 
         # Update team labels
-        self.score_labels["away_0"].setText(away_team.name[:3])
-        self.score_labels["home_0"].setText(home_team.name[:3])
+        # Update team labels
+        from models import TEAM_ABBRS
+        away_abbr = TEAM_ABBRS.get(away_team.name, away_team.name[:3])
+        home_abbr = TEAM_ABBRS.get(home_team.name, home_team.name[:3])
+        self.score_labels["away_0"].setText(away_abbr)
+        self.score_labels["home_0"].setText(home_abbr)
 
         # Clear log
         while self.log_layout.count():

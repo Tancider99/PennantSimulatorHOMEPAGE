@@ -1466,7 +1466,6 @@ class Player:
     throws: str = "右"
     
     recent_records: List[Tuple[str, PlayerRecord]] = field(default_factory=list)
-    recent_records: List[Tuple[str, PlayerRecord]] = field(default_factory=list)
     days_until_promotion: int = 0
     
     # スタミナは球数ベース（20〜120球）
@@ -1623,7 +1622,21 @@ class Player:
         """
         if self.position == Position.PITCHER:
             # 投手は投球数ベース (疲労蓄積を大幅増: 1球=1疲労)
-            self.fatigue += int(pitches_thrown * 1.0)
+            base_fatigue = int(pitches_thrown * 1.0)
+            
+            # 先発かどうかの判定
+            apt_starter = getattr(self.stats, 'aptitude_starter', 1)
+            is_starter = apt_starter >= 3
+            
+            # 中継ぎの連投ペナルティ: 連投日数に応じて追加疲労
+            consecutive = getattr(self, 'consecutive_days', 0)
+            if not is_starter and consecutive >= 1:
+                # 連投すると疲労が1.5倍～2倍に
+                consecutive_mult = 1.0 + (consecutive * 0.25)  # 1連投=1.25x, 2連投=1.5x, 3連投=1.75x...
+                consecutive_mult = min(consecutive_mult, 2.5)  # 上限2.5倍
+                base_fatigue = int(base_fatigue * consecutive_mult)
+            
+            self.fatigue += base_fatigue
             if pitches_thrown > 0:
                 self.consecutive_days += 1
         else:
@@ -1701,10 +1714,10 @@ class Player:
                 self.current_stamina = max_pitches
             else:
                 # 段階的回復（中0日でも少し回復）
-                # 基本回復量: 回復力に応じて5〜25球
-                base_recovery = 5 + int(recovery_stat * 0.2)
-                # 休養日数ボーナス: 1日あたり+3〜8球
-                day_bonus = int(self.days_rest * (3 + recovery_stat * 0.05))
+                # 基本回復量: 回復力の影響を減らす (10球固定 + 回復力による微調整)
+                base_recovery = 10 + int((recovery_stat - 50) * 0.1)  # 5-15球
+                # 休養日数ボーナス: 1日あたり+4球固定（回復力の影響を削除）
+                day_bonus = int(self.days_rest * 4)
                 total_recovery = base_recovery + day_bonus
                 self.current_stamina = min(max_pitches, self.current_stamina + total_recovery)
             
@@ -1712,9 +1725,33 @@ class Player:
             if self.days_rest >= 1:
                 self.consecutive_days = 0
         
-        # 5. 疲労回復（全選手）
+        # 5. 疲労回復（先発と中継ぎを分離）
         recovery_stat = getattr(self.stats, 'recovery', 50)
-        fatigue_recovery = int(20 + (recovery_stat - 50) * 0.3)  # 15-25/日
+        
+        # 先発かどうかの判定 (aptitude_starter >= 3 = ◎ or 〇)
+        is_starter = False
+        if self.position == Position.PITCHER:
+            apt_starter = getattr(self.stats, 'aptitude_starter', 1)
+            is_starter = apt_starter >= 3
+        
+        if is_starter:
+            # 先発投手: 回復力50で約16/日回復 (6日で約100回復 = ほぼ全回復)
+            # 回復力の影響は0.08 (回復力1=約12/日, 回復力99=約20/日)
+            fatigue_recovery = int(16 + (recovery_stat - 50) * 0.08)
+        else:
+            # 中継ぎ投手: 回復力50で約10/日回復
+            # 回復力の影響は0.04 (回復力1=約8/日, 回復力99=約12/日)
+            fatigue_recovery = int(10 + (recovery_stat - 50) * 0.04)
+            
+            # 連投ペナルティ: consecutive_days > 0 なら回復量を減少
+            consecutive = getattr(self, 'consecutive_days', 0)
+            if consecutive >= 3:
+                fatigue_recovery = int(fatigue_recovery * 0.5)  # 3連投以上: 回復量半減
+            elif consecutive >= 2:
+                fatigue_recovery = int(fatigue_recovery * 0.7)  # 2連投: 回復量30%減
+            elif consecutive >= 1:
+                fatigue_recovery = int(fatigue_recovery * 0.9)  # 1連投: 回復量10%減
+        
         self.fatigue = max(0, self.fatigue - fatigue_recovery)
         
         # 6. 当日出場フラグリセット

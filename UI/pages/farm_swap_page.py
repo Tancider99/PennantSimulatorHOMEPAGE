@@ -152,9 +152,13 @@ class DraggableTableWidget(QTableWidget):
         if not item: return
 
         row = item.row()
-        # 名前カラムは通常2番目 (FarmSwapPageの仕様: [Condition, Name, ...])
-        name_col = 1
-        if self.columnCount() <= 1: name_col = 0
+        # 名前カラムをヘッダーから動的に特定
+        name_col = 1 # Default
+        for col in range(self.columnCount()):
+            header = self.horizontalHeaderItem(col)
+            if header and header.text() == "選手名":
+                name_col = col
+                break
         
         item_data = self.item(row, 0)
         if not item_data: return

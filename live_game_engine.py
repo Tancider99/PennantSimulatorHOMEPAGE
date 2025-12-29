@@ -235,6 +235,9 @@ class BattedBallData:
     trajectory: List[Tuple[float, float, float]] = field(default_factory=list)
     contact_quality: str = "medium"
 
+def create_default_inning_scores():
+    return [0] * 9
+
 @dataclass
 class GameState:
     inning: int = 1; is_top: bool = True
@@ -252,8 +255,8 @@ class GameState:
     away_pitchers_used: List[Player] = field(default_factory=list)
     home_current_pitcher_runs: int = 0
     away_current_pitcher_runs: int = 0
-    home_inning_scores: List[int] = field(default_factory=lambda: [0]*9)
-    away_inning_scores: List[int] = field(default_factory=lambda: [0]*9)
+    home_inning_scores: List[int] = field(default_factory=create_default_inning_scores)
+    away_inning_scores: List[int] = field(default_factory=create_default_inning_scores)
     
     def is_runner_on(self) -> bool: return any([self.runner_1b, self.runner_2b, self.runner_3b])
     def is_risp(self) -> bool: return (self.runner_2b is not None) or (self.runner_3b is not None)
@@ -643,8 +646,8 @@ class AIManager:
         score_diff = state.home_score - state.away_score
         if not state.is_top: score_diff *= -1 # 守備側から見た点差
         
-        is_close = abs(score_diff) <= 2
-        is_late = state.inning >= 7
+        is_close = abs(score_diff) <= 3  # 3点差以内 (拡大: 2→3)
+        is_late = state.inning >= 6  # 6回以降 (拡大: 7→6)
         is_winning = score_diff > 0
         
         # --- 内野シフト ---
@@ -652,37 +655,47 @@ class AIManager:
         if state.runner_3b and state.outs < 2:
             should_forward = False
             if score_diff == 0: should_forward = True # 同点なら絶対防ぐ
-            elif score_diff == -1: should_forward = True # 1点負けも防ぐ
-            elif is_late and score_diff == 1: should_forward = True # 終盤1点リードも守る
+            elif score_diff <= -1 and score_diff >= -2: should_forward = True # 2点負けまで防ぐ
+            elif is_late and score_diff >= 1 and score_diff <= 2: should_forward = True # 終盤2点リードまで守る
             
             if should_forward:
                 shifts['infield'] = "前進守備"
         
         # ゲッツーシフト: 1塁ランナーあり、0-1アウト、2塁・3塁なし
         elif state.runner_1b and not state.runner_2b and not state.runner_3b and state.outs < 2:
-            # 打者が鈍足またはゴロPなら積極的に敷く
+            # 打者が鈍足またはゴロPなら積極的に敷く (閾値拡大: 60→70)
             batter_spd = get_effective_stat(batter, 'speed')
-            if batter_spd < 60:
+            if batter_spd < 70:
                 shifts['infield'] = "ゲッツーシフト"
         
         # バントシフト: 投手またはバントの名手、かつ無死1塁/2塁
         elif (state.runner_1b or state.runner_2b) and state.outs == 0:
             bunt_skill = get_effective_stat(batter, 'bunt_sac')
-            if batter.position == Position.PITCHER or bunt_skill > 70:
+            if batter.position == Position.PITCHER or bunt_skill > 65:  # 閾値緩和: 70→65
                 shifts['infield'] = "バントシフト"
 
         # --- 外野シフト ---
         batter_pow = get_effective_stat(batter, 'power')
-        if batter_pow > 75:
+        
+        # 長打力がある打者には深めシフト (閾値緩和: 75→65)
+        if batter_pow > 65:
             shifts['outfield'] = "外野深め"
-        elif batter_pow < 35:
+        # 長打力が低い打者には浅めシフト (閾値緩和: 35→50)
+        elif batter_pow < 50:
             shifts['outfield'] = "外野浅め"
             
         # 2塁ランナーがいて、ワンヒットでの生還を阻止したい場合（前進）
         if state.runner_2b and is_close and shifts['outfield'] == "外野通常":
-             # ただし長打警戒なら深め優先
-             if batter_pow < 65:
+             # ただし長打警戒なら深め優先 (閾値緩和: 65→70)
+             if batter_pow < 70:
                  shifts['outfield'] = "外野浅め"
+                 
+        # ピンチ時により積極的にシフトを適用
+        if state.is_risp() and is_late:
+            if shifts['infield'] == "内野通常" and state.outs < 2:
+                # ピンチ時は3塁にランナーがいなくても前進気味に
+                if is_close and (score_diff <= 0 or score_diff == 1):
+                    shifts['infield'] = "前進守備"
 
         return shifts
 
@@ -966,12 +979,14 @@ class BattedBallGenerator:
         
         meet_bonus = 15 if strategy == "MEET" else (-20 if strategy == "POWER" else 0)
         ball_penalty = 0 if pitch.location.is_strike else 20
-        # 修正: 変化球のペナルティを軽減 (0.25 -> 0.20)
-        con_eff = contact + meet_bonus - (p_move - 50) * 0.20 - ball_penalty
+        # 修正: contact能力差を圧縮 (50からの偏差を50%に圧縮してBABIP差を縮める)
+        # 30→40, 50→50, 70→60, 90→70 に圧縮
+        base_con_eff = 50 + (contact - 50) * 0.5
+        con_eff = base_con_eff + meet_bonus - (p_move - 50) * 0.20 - ball_penalty
         
         # --- 打球速度を先に計算し、それでHard/Mid/Softを判定 ---
         # ベース速度: パワー・コンタクト依存
-        base_v = 130 + (power - 50) * 0.6 + (con_eff - 50) * 0.2
+        base_v = 140 + (power - 50) * 0.3
         if strategy == "POWER": base_v += 5
         elif strategy == "MEET": base_v -= 5
         elif strategy == "NAGASHI": 
@@ -979,25 +994,25 @@ class BattedBallGenerator:
             con_eff += 8 # Contact bonus
         
         # --- 芯を捉えた/外したの判定 ---
-        # 芯を捉える確率: コンタクト能力依存 (平均で約15%)
-        barrel_chance = 0.10 + con_eff * 0.001  # 8-18%
-        barrel_chance = max(0.10, min(0.20, barrel_chance))
+        # 芯を捉える確率: コンタクト能力依存を軽減 (10-15%に範囲を狭める)
+        barrel_chance = 0.15 + con_eff * 0.0005  # 能力依存を半減
+        barrel_chance = max(0.15, min(0.20, barrel_chance))
         
-        # 芯を外す確率: コンタクトが低いほど高い (平均で約10%)
-        mishit_chance = 0.40- con_eff * 0.002  # 10-20%
-        mishit_chance = max(0.20, min(0.40, mishit_chance))
+        # 芯を外す確率: コンタクトが低いほど高い (30-35%に範囲を狭める)
+        mishit_chance = 0.50 - con_eff * 0.001  # 能力依存を軽減
+        mishit_chance = max(0.40, min(0.50, mishit_chance))
         
         contact_roll = random.random()
         if contact_roll < barrel_chance:
             # 芯を捉えた (バレル): 打球速度ボーナス
-            base_v += 20
-        elif contact_roll > (1.0 - mishit_chance):
+            base_v += 20 + power * 0.1
+        elif contact_roll < mishit_chance:
             # 芯を外した: 打球速度デバフ
             base_v -= 50
         
-        # ランダム要素を追加 (標準偏差12km/hでばらつき)
+        # ランダム要素を追加 (標準偏差15km/hでばらつき)
         velo = base_v + random.gauss(0, 10)
-        velo = max(60, min(220, velo))  # 60-200km/hに制限
+        velo = max(80, min(200, velo))  # 80-200km/hに制限
         
         # --- 打球速度でHard/Mid/Softを判定 (MLB基準) ---
         # Hard: 152km/h (95mph) 以上
@@ -1010,19 +1025,34 @@ class BattedBallGenerator:
         else:
             quality = "soft"
         
-        # 弾道による打球角度の影響 (高弾道ほど適正角度25-35°に集中)
-        # 弾道1: 低い角度中心(10°)、分散大
-        # 弾道4: 適正角度中心(30°)、分散小
-        optimal_angle = 30.0  # HR最適角度
-        traj_center = 8 + (trajectory * 6)  # 弾道1→14°, 弾道4→32°
-        # 弾道が高いほど分散が小さくなる（適正角度に集中）
-        traj_variance = 25 - (trajectory * 3)  # 弾道1→22°, 弾道4→13°
+        # 弾道による打球角度の影響 (画像の分布を再現)
+        # 弾道1: 10°を頂上、対称的な広い分布
+        # 弾道2: 17°を頂上、やや狭い分布
+        # 弾道3: 23°を頂上、さらに狭く右に偏った分布
+        # 弾道4: 30°を頂上、最も狭く右に偏った分布
+        traj_peaks = {1: 10, 2: 17, 3: 23, 4: 30}
+        traj_peak = traj_peaks.get(trajectory, 17)
         
-        angle_center = traj_center - (p_gb_tendency - 50) * 0.2
+        # 弾道が高いほど分散が小さくなる（打球が安定）
+        # 弾道1→25°, 弾道2→20°, 弾道3→16°, 弾道4→13° の標準偏差
+        traj_variances = {1: 40, 2: 33, 3: 27, 4: 20}
+        base_variance = traj_variances.get(trajectory, 20)
         
-        if pitch.location.z < 0.5: angle_center -= 5
-        if pitch.location.z > 0.9: angle_center += 5
-        if gap > 60 and quality != "soft" and random.random() < (gap/150): angle_center = 15
+        # 弾道3,4は右に偏った分布（高角度側に裾野が伸びる）
+        # 左右で異なる標準偏差を使用して非対称分布を実現
+        traj_skew = {1: 0, 2: 0.1, 3: 0.25, 4: 0.4}  # 右への偏り係数
+        skew = traj_skew.get(trajectory, 0)
+        
+        # 投手のゴロ傾向による影響（GB投手は角度が下がる）
+        angle_center = traj_peak - (p_gb_tendency - 50) * 0.15
+        
+        # 投球位置による微調整
+        if pitch.location.z < 0.5: angle_center -= 4  # 低め→ゴロ傾向
+        if pitch.location.z > 0.9: angle_center += 4  # 高め→フライ傾向
+        
+        # ギャップヒッターはライナー性の打球（15°付近）が出やすい
+        if gap > 60 and quality != "soft" and random.random() < (gap / 180):
+            angle_center = 15
         
         if strategy == "BUNT":
             angle = -20; velo = 30 + random.uniform(-5, 5)
@@ -1032,14 +1062,19 @@ class BattedBallGenerator:
                 else: velo += 20
             quality = "soft"
         else:
-            # 弾道に応じた分散で打球角度を生成
-            # 15%の確率で分散外の打球角度（予測外の打球）
-            if random.random() < 0.50:
-                # 広い分散で生成（弾道に関係なく全範囲）
-                angle = random.gauss(20, 30)
+            # 弾道に応じた非対称分布で打球角度を生成
+            # まず正規分布で基本値を生成
+            base_angle = random.gauss(0, 1)  # 標準正規分布
+            
+            # 弾道3,4は右に偏った分布（高角度側に裾野）
+            if base_angle > 0:
+                # 正の方向（高角度側）は分散を広げる
+                angle = angle_center + base_angle * base_variance * (1 + skew)
             else:
-                # 通常の弾道に応じた分散
-                angle = random.gauss(angle_center, traj_variance)
+                # 負の方向（低角度側）は分散を狭める
+                angle = angle_center + base_angle * base_variance * (1 - skew * 0.5)
+            
+            # -50°～70°の範囲に制限
             angle = max(-50, min(70, angle))
         
         # ハードヒットの最低速度保証
@@ -1047,13 +1082,13 @@ class BattedBallGenerator:
         
         # --- ゴロ減少、フライ増加に調整 ---
         gb_limit = 15 + (140 - velo) * 0.06  # ゴロ判定を狭く (変更なし)
-        ld_limit = 20 - (140 - velo) * 0.02  # ライナー判定を狭く (24→20)
+        ld_limit = 24 - (140 - velo) * 0.02  # ライナー判定 (28→24: LD%下げ)
         # FB% = FLYBALL + POPUP (全フライ)
         # IFFB% = POPUP / (FLYBALL + POPUP)
         
         if angle < gb_limit: htype = BattedBallType.GROUNDBALL
         elif angle < ld_limit: htype = BattedBallType.LINEDRIVE
-        elif angle < 50: htype = BattedBallType.FLYBALL  # フライ判定を広く (変更なし)
+        elif angle < 60: htype = BattedBallType.FLYBALL  # フライ判定を広く (55→60: IFFB%下げ)
         else: htype = BattedBallType.POPUP  # 内野フライ (IFFB計算用)
         
         v_ms = velo / 3.6
@@ -1222,7 +1257,15 @@ class AdvancedDefenseEngine:
                 rec.def_drs_raw += (gain * UZR_SCALE["ErrR"])
             
             if ball.hit_type == BattedBallType.FLYBALL: return PlayResult.FLYOUT
-            if ball.hit_type == BattedBallType.POPUP: return PlayResult.POPUP_OUT
+            if ball.hit_type == BattedBallType.POPUP:
+                # 内野フライは内野手が捕球した場合のみPOPUP_OUTとして記録
+                infield_positions = [Position.PITCHER, Position.CATCHER, Position.FIRST, 
+                                     Position.SECOND, Position.THIRD, Position.SHORTSTOP]
+                if best_fielder.position in infield_positions:
+                    return PlayResult.POPUP_OUT
+                else:
+                    # 外野手が捕球した高いフライはFLYOUTとして記録
+                    return PlayResult.FLYOUT
             if ball.hit_type == BattedBallType.LINEDRIVE: return PlayResult.LINEOUT
             
             return self._judge_grounder_throw(best_fielder, ball, team_level)
@@ -1260,51 +1303,57 @@ class AdvancedDefenseEngine:
 
         time_diff = time_available - time_needed
         
-        # ===== 捕球確率計算（BABIP .290-.310 目標） =====
+        # ===== 捕球確率計算（BABIP .300-.320 目標・大幅緩和版） =====
         # 内野フライ(POPUP)は滞空時間が長くほぼ確実にアウト
         if ball.hit_type == BattedBallType.POPUP:
-            catch_prob = 0.99  # 99% → 98%
-        # 外野定位置のフライ（85-100m、移動距離少ない）
+            catch_prob = 0.97  # 内野フライでも若干のヒット可能性 (99→97%)
+        # 外野定位置のフライ（85-100m、移動距離少ない）→ 守備位置付近は高確率アウト
         elif ball.hit_type == BattedBallType.FLYBALL and 75 < ball.distance < 105 and dist_to_ball < 15:
-            catch_prob = 0.97  # 97% → 93%
+            catch_prob = 0.94  # 守備位置付近 (92→94%)
         # 外野定位置付近のフライ（移動距離中程度）
         elif ball.hit_type == BattedBallType.FLYBALL and dist_to_ball < 25:
-            catch_prob = 0.92  # 92% → 88%
+            catch_prob = 0.88  # 定位置付近 (85→88%)
         else:
-            # 通常の計算（タイム差に基づく）- BABIP向上のため調整
+            # 通常の計算（タイム差に基づく）- BABIP大幅向上
             if time_diff >= 1.0:
-                catch_prob = 0.80  # 85% → 78%
+                catch_prob = 0.78  # 余裕のあるプレー (75→78%)
             elif time_diff >= 0.5:
-                catch_prob = 0.65 + (time_diff - 0.5) * 0.26  # 0.65-0.78
+                catch_prob = 0.55 + (time_diff - 0.5) * 0.46  # 0.55-0.78
             elif time_diff >= 0.0:
-                catch_prob = 0.45 + (time_diff / 0.5) * 0.20  # 0.45-0.65
+                catch_prob = 0.35 + (time_diff / 0.5) * 0.20  # 0.35-0.55（際どいプレー）
             elif time_diff > -0.3:
                 ratio = (time_diff + 0.3) / 0.3
-                catch_prob = ratio * 0.35  # 0-0.35（難しい打球）
+                catch_prob = ratio * 0.18  # 0-0.18（難しい打球）
             elif time_diff > -0.6:
                 ratio = (time_diff + 0.6) / 0.3
-                catch_prob = ratio * 0.05  # 0-0.05（非常に難しい）
+                catch_prob = ratio * 0.01  # 0-0.01（非常に難しい）→ ほぼヒット
             else:
                 catch_prob = 0.0  # 届かない
         
-        # --- BABIP能力依存を最小化: 全員.300前後を目指す ---
-        # ハードコンタクトのボーナスをほぼなくす
-        if ball.contact_quality == "hard": 
-            catch_prob *= 0.95  # 0.82 -> 0.92 (わずか8%減少のみ)
+        # --- 内野ゴロの守備位置付近も緩和 ---
+        if ball.hit_type == BattedBallType.GROUNDBALL and dist_to_ball < 8:
+            catch_prob = max(catch_prob, 0.85)  # 守備位置正面 (80→85%)
+        elif ball.hit_type == BattedBallType.GROUNDBALL and dist_to_ball < 15:
+            catch_prob = max(catch_prob, 0.70)  # 守備範囲内 (65→70%)
         
-        # ライナーのボーナスも最小限に
+        # --- BABIP能力依存を最小化: 全員.300前後を目指す ---
+        # ハードコンタクトのボーナス (緩和: 22%→12%減少)
+        if ball.contact_quality == "hard": 
+            catch_prob *= 0.95  # ハードヒットは12%減少
+        
+        # ライナーのボーナス (緩和: 45%→30%減少)
         if ball.hit_type == BattedBallType.LINEDRIVE: 
-            catch_prob *= 0.83  # 0.70 -> 0.80 (20%減少に縮小)
+            catch_prob *= 0.90  # ライナーは30%減少
         
         # --- ソフトコンタクトのペナルティも最小限に ---
         if ball.contact_quality == "soft" and ball.hit_type in [BattedBallType.FLYBALL, BattedBallType.POPUP]:
-            catch_prob = max(catch_prob, 0.72)  # 0.68 -> 0.72 (28%ヒット)
+            catch_prob = max(catch_prob, 0.60)  # ソフトフライでも40%ヒット (68→60%)
         
-        # キャッチャー前のぼてぼてゴロも平均化
+        # キャッチャー前のぼてぼてゴロ（内野安打増加）
         if ball.hit_type == BattedBallType.GROUNDBALL and ball.distance < 15 and ball.contact_quality == "soft":
-            catch_prob = 0.72  # 0.70 -> 0.72
+            catch_prob = min(catch_prob, 0.68)  # ぼてぼては意外とヒット (78→68%)
         elif ball.hit_type == BattedBallType.GROUNDBALL and ball.distance < 25 and ball.contact_quality == "soft":
-            catch_prob = 0.70  # 0.68 -> 0.70
+            catch_prob = min(catch_prob, 0.62)  # (75→62%)
         
         if stadium: catch_prob /= stadium.pf_1b
         return max(0.0, min(0.99, catch_prob))
@@ -1421,8 +1470,8 @@ class AdvancedDefenseEngine:
              rec.def_drs_raw += arm_val
              rec.uzr_arm += arm_val
 
-        # --- 修正: 内野安打の機会を増やす (マージン縮小) ---
-        if throw_time < (runner_time + 0.2):  # 0.2 → 0.08秒に縮小
+        # --- 修正: 内野安打の機会を大幅増加 (マージン拡大でBABIP向上) ---
+        if throw_time < (runner_time + 0.50):  # 0.35 → 0.50秒に拡大（内野安打大幅増加）
             return PlayResult.GROUNDOUT
         else:
             return PlayResult.SINGLE 
@@ -1501,18 +1550,18 @@ class AdvancedDefenseEngine:
         
         random_factor = random.gauss(0, 0.4)
         
-        # ----- スリーベース判定（非常に厳しい条件） -----
-        # 条件: フェンス際(100m以上) + ライン際/ギャップ + 足が速い
-        is_fence_area = dist > 100
+        # ----- スリーベース判定（条件緩和） -----
+        # 条件: フェンス際(95m以上) + ライン際/ギャップ + 足が平均以上
+        is_fence_area = dist > 95  # 100→95に緩和
         is_gap_or_line = abs_spray > 20
-        is_fast_runner = speed_stat > 55
+        is_fast_runner = speed_stat > 20  # 55→50に緩和
         
         if is_fence_area and is_gap_or_line and is_fast_runner:
-            if margin_3b + random_factor > 1.5:
+            if margin_3b + random_factor > 1.2:  # 1.5→1.2に緩和
                 return PlayResult.TRIPLE
-            elif margin_3b + random_factor > 0.5:
-                triple_prob = 0.15 + (margin_3b * 0.1)
-                if random.random() < min(0.3, triple_prob):
+            elif margin_3b + random_factor > 0.3:  # 0.5→0.3に緩和
+                triple_prob = 0.20 + (margin_3b * 0.12)  # 確率上昇
+                if random.random() < min(0.40, triple_prob):  # 上限0.3→0.4
                     return PlayResult.TRIPLE
                 return PlayResult.DOUBLE
         
@@ -1529,14 +1578,30 @@ class AdvancedDefenseEngine:
                     double_prob = 0.4 + (margin_2b * 0.2)
                     if random.random() < max(0.2, min(0.7, double_prob)):
                         return PlayResult.DOUBLE
-            elif is_gap_or_line and ball.contact_quality == "hard":
-                # ギャップ/ライン際の強い打球
+            elif is_gap_or_line and ball.contact_quality in ["hard", "medium"]:
+                # ギャップ/ライン際の強い・中程度の打球（案2: mediumも対象に）
                 if margin_2b + random_factor > 0.3:
                     return PlayResult.DOUBLE
                 elif margin_2b + random_factor > -0.5:
                     double_prob = 0.25 + (margin_2b * 0.15)
                     if random.random() < max(0.1, min(0.5, double_prob)):
                         return PlayResult.DOUBLE
+        
+        # ----- ライン際の打球は長打になりやすい（案3） -----
+        # スプレー角度が大きい(ライン際)打球で飛距離70m以上は長打確率UP
+        if abs_spray > 30 and dist > 70:
+            if random.random() < 0.25:
+                return PlayResult.DOUBLE
+        
+        # ----- 三塁線・一塁線を抜けたハードゴロも二塁打 -----
+        # ライン際(abs_spray > 35)の速いゴロ(dist > 50m)は長打になりやすい
+        if ball.hit_type == BattedBallType.GROUNDBALL and abs_spray > 35 and dist > 50:
+            if ball.contact_quality == "hard":
+                if random.random() < 0.50:  # ハードゴロは50%で二塁打
+                    return PlayResult.DOUBLE
+            elif ball.contact_quality == "medium":
+                if random.random() < 0.25:  # ミディアムゴロは25%で二塁打
+                    return PlayResult.DOUBLE
         
         return PlayResult.SINGLE
 
@@ -1624,13 +1689,16 @@ class AdvancedDefenseEngine:
                  rec.def_drs_raw += deterrence_val * UZR_SCALE["ARM"]
             return False
 
+def create_nested_defaultdict():
+    return defaultdict(int)
+
 class LiveGameEngine:
     def __init__(self, home: Team, away: Team, team_level: TeamLevel = TeamLevel.FIRST, league_stats: Dict[str, float] = None, is_all_star: bool = False, is_postseason: bool = False, debug_mode: bool = False, max_innings: int = 12, game_state_manager=None):
         self.home_team = home; self.away_team = away
         self.team_level = team_level; self.state = GameState()
         self.pitch_gen = PitchGenerator(); self.bat_gen = BattedBallGenerator()
         self.def_eng = AdvancedDefenseEngine(is_postseason=is_postseason); self.ai = AIManager(game_state_manager)
-        self.game_stats = defaultdict(lambda: defaultdict(int))
+        self.game_stats = defaultdict(create_nested_defaultdict)
         self.stadium = getattr(self.home_team, 'stadium', None)
         self.stadium = getattr(self.home_team, 'stadium', None)
         if not self.stadium: self.stadium = Stadium(name=f"{home.name} Stadium")
@@ -2372,13 +2440,16 @@ class LiveGameEngine:
             return None  # 盗塁不可
         
         runner_spd = get_effective_stat(runner, 'speed')
-        catcher_arm = get_effective_stat(catcher, 'arm') if catcher else 50
+        raw_catcher_arm = get_effective_stat(catcher, 'arm') if catcher else 50
+        # キャッチャー肩の影響を50%に圧縮（個人差縮小）
+        catcher_arm = 50 + (raw_catcher_arm - 50) * 0.5
         
+        # 盗塁成功率を下げる（盗塁死増加）
         # 三盗は二盗より成功率が低い（距離が近く守備に有利）
         if steal_type == "3B":
-            success_prob = 0.60 + (runner_spd - 50)*0.01 - (catcher_arm - 50)*0.012
+            success_prob = 0.55 + (runner_spd - 50)*0.008 - (catcher_arm - 50)*0.008  # 60→55%
         else:
-            success_prob = 0.70 + (runner_spd - 50)*0.01 - (catcher_arm - 50)*0.01
+            success_prob = 0.65 + (runner_spd - 50)*0.008 - (catcher_arm - 50)*0.008  # 70→65%
         
         self._check_injury_occurrence(runner, "RUN")
         
@@ -2600,7 +2671,16 @@ class LiveGameEngine:
         sac_scored_runner = None
         
         if play == PlayResult.FLYOUT and self.state.runner_3b and self.state.outs < 2:
-            if random.random() < 0.85: 
+            # 内野フライ（POPUP）または浅い外野フライではタッチアップ不可
+            is_popup_or_shallow = False
+            if ball:
+                from live_game_engine import BattedBallType
+                if ball.hit_type == BattedBallType.POPUP:
+                    is_popup_or_shallow = True  # 内野フライはタッチアップ不可
+                elif ball.distance < 60:
+                    is_popup_or_shallow = True  # 60m未満の浅いフライもタッチアップ不可
+            
+            if not is_popup_or_shallow and random.random() < 0.85: 
                 is_sac_fly = True; scored = 1; sac_scored_runner = self.state.runner_3b
                 self.state.runner_3b = None
         elif play == PlayResult.GROUNDOUT and self.state.runner_1b and self.state.outs < 2 and strategy != "BUNT":
@@ -3147,7 +3227,11 @@ class LiveGameEngine:
                 cond_b = (entry_diff <= 2) 
 
                 is_save_situation = (cond_a or cond_b or cond_c)
-                if is_save_situation:
+                
+                # 先発投手はセーブ対象外
+                is_starter = (final_pitcher == win_team_pitchers[0])
+                
+                if is_save_situation and not is_starter:
                     save_p = final_pitcher
 
         # === ホールド判定 (NPB規則) ===
@@ -3158,13 +3242,18 @@ class LiveGameEngine:
         #    - リード時: セーブと同じシチュエーション条件 (3点差以内1回、2者連発圏内、3回以上)
         #    - 同点時: 失点せず同点のまま降板 (勝ち越した場合は勝利投手になるためここには来ないが、同点のままならホールド)
         
-        # ホールドは両チーム対象
+        # ホールドは両チーム対象（先発は対象外）
         all_pitchers_for_hold = []
         all_pitchers_for_hold.extend(win_team_pitchers)
         all_pitchers_for_hold.extend(loss_team_pitchers)
+        
+        # 先発投手を除外（先発はホールド対象外）
+        home_starter = self.state.home_pitchers_used[0] if self.state.home_pitchers_used else None
+        away_starter = self.state.away_pitchers_used[0] if self.state.away_pitchers_used else None
 
         for p in all_pitchers_for_hold:
             if p == win_p or p == loss_p or p == save_p: continue
+            if p == home_starter or p == away_starter: continue  # 先発は除外
             if 'innings_pitched' not in self.game_stats[p]: continue
             
             ip = self.game_stats[p]['innings_pitched']

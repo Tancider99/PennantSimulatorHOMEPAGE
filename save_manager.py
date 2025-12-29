@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 import pickle
+import sqlite3
+import dill
 
 
 class SaveManager:
@@ -98,6 +100,8 @@ class SaveManager:
         except Exception as e:
             print(f"セーブエラー: {e}")
             return False
+
+
     
     def load_game(self, slot_num: int) -> Optional[Dict[str, Any]]:
         """ゲームを読み込み
@@ -626,3 +630,167 @@ def _deserialize_player(data: Dict[str, Any]):
 
 # グローバルインスタンス
 save_manager = SaveManager()
+
+
+class HybridSaver:
+    """ハイブリッド保存システム (SQLite + Pickle)"""
+    
+    @staticmethod
+    def save_game(game_state, filepath):
+        import sqlite3
+        import dill
+        import pickle
+        import os
+        import json
+        
+        db_path = filepath + ".db"
+        
+        # 1. 重いデータをDBに待避
+        # DB接続
+        try:
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute('CREATE TABLE IF NOT EXISTS game_logs (game_id TEXT PRIMARY KEY, data BLOB)')
+            
+            # ゲームログの保存と削除
+            restoration_data = [] # (game_obj, log_data)
+            batch_data = [] # (gid, blob)
+            
+            if hasattr(game_state, 'schedule') and hasattr(game_state.schedule, 'games'):
+                for i, game in enumerate(game_state.schedule.games):
+                    status = str(getattr(game, 'status', ''))
+                    # 完了済みかつログがある場合
+                    # play_log が存在し、空でない場合のみ保存
+                    # GameStatus.COMPLETED check is safer with string conversion
+                    if 'COMPLETED' in status and hasattr(game, 'play_log') and game.play_log:
+                        gid = f"game_{i}"
+                        # Pickle log list
+                        log_data = game.play_log
+                        blob = pickle.dumps(log_data)
+                        batch_data.append((gid, blob))
+                        
+                        # Store for restore
+                        restoration_data.append((game, log_data))
+                        
+                        # Clear from object (set to empty list or None)
+                        game.play_log = []
+            
+            if batch_data:
+                c.executemany('INSERT OR REPLACE INTO game_logs VALUES (?, ?)', batch_data)
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Hybrid Save DB Error: {e}")
+            # DBエラーでも続行可能なら続行するが、データ肥大化のリスクあり
+        
+        # 2. 本体を保存
+        success = False
+        try:
+            # セーブディレクトリ作成
+            save_dir = os.path.dirname(filepath)
+            if save_dir and not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+            save_data = {
+                "version": "2.0",
+                "save_info": game_state.get_save_info(),
+                "game_state": game_state,
+            }
+            with open(filepath, 'wb', buffering=1024*1024) as f:
+                # Optimized Save Strategy: Try pickle first (Faster), fallback to dill (Robust)
+                try:
+                    pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                except Exception as p_err:
+                    print(f"Standard pickle failed, falling back to dill: {p_err}")
+                    f.seek(0)
+                    f.truncate()
+                    dill.dump(save_data, f, protocol=dill.HIGHEST_PROTOCOL)
+            
+            # Additional User Config Save (Task 2)
+            config_path = "user_config.json"
+            try:
+                config = {}
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                
+                # Check if attributes exist securely
+                if hasattr(game_state, 'league_names'):
+                    config['league_names'] = game_state.league_names
+                    
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=4, ensure_ascii=False)
+            except: pass
+            
+            success = True
+        except Exception as e:
+            print(f"Hybrid Save File Error: {e}")
+            success = False
+        finally:
+            # 3. データを復元 (メモリ上のオブジェクトを元に戻す)
+            for game, log in restoration_data:
+                game.play_log = log
+                
+        return success
+
+    @staticmethod
+    def load_game(filepath):
+        import dill
+        import sqlite3
+        import pickle
+        import os
+        
+        if not os.path.exists(filepath):
+            return None
+        
+        # 1. 本体ロード
+        game_state = None
+        try:
+            with open(filepath, 'rb') as f:
+                try:
+                    data = pickle.load(f)
+                except:
+                    f.seek(0)
+                    data = dill.load(f)
+                # Version check
+                version = data.get("version", "0.0")
+                if version == "2.0":
+                    game_state = data.get("game_state")
+                else:
+                    print(f"Old version save: {version}")
+                    return None
+        except Exception as e:
+            print(f"Hybrid Load File Error: {e}")
+            return None
+            
+        if not game_state:
+            return None
+
+        # 2. DBから復元
+        db_path = filepath + ".db"
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                c = conn.cursor()
+                
+                # スケジュールオブジェクトがあれば
+                if hasattr(game_state, 'schedule') and hasattr(game_state.schedule, 'games'):
+                    for i, game in enumerate(game_state.schedule.games):
+                        # ログが空ならロードを試みる
+                        if not getattr(game, 'play_log', []):
+                            gid = f"game_{i}"
+                            # テーブルがあるか確認
+                            try:
+                                c.execute('SELECT data FROM game_logs WHERE game_id=?', (gid,))
+                                row = c.fetchone()
+                                if row:
+                                    game.play_log = pickle.loads(row[0])
+                            except sqlite3.OperationalError:
+                                # テーブルがない場合などはスキップ
+                                pass
+                conn.close()
+            except Exception as e:
+                print(f"Hybrid Load DB Error: {e}")
+        
+        return game_state

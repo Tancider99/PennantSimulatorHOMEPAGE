@@ -161,8 +161,13 @@ class PreGamePage(QWidget):
         self.theme = get_theme()
         self.home_team = None
         self.away_team = None
+        self.game_state = None  # Will be set via set_game_state
         
         self.setup_ui()
+    
+    def set_game_state(self, game_state):
+        """Set game state to determine player team"""
+        self.game_state = game_state
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -340,7 +345,16 @@ class PreGamePage(QWidget):
         self.header.set_teams(home_team, away_team)
         self.comparison.set_stats(home_team, away_team)
         
-        self._refresh_lineup_table(home_team)
+        # Always show player team's order (could be home or away)
+        # Determine which team is the player's team
+        player_team = home_team  # Default to home
+        if hasattr(self, 'game_state') and self.game_state and self.game_state.player_team:
+            if self.game_state.player_team == away_team:
+                player_team = away_team
+            else:
+                player_team = home_team
+        
+        self._refresh_lineup_table(player_team)
 
     def _refresh_lineup_table(self, team: Team):
         from PySide6.QtWidgets import QTableWidgetItem

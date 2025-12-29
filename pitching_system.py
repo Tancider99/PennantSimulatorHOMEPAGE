@@ -263,6 +263,13 @@ class PitchingDirector:
             if ctx.runs_allowed >= 5:
                 return self._select_reliever(ctx, used_pitchers, next_batter)
         
+        # (E) 9回守護神投入ロジック (完投防止) - より厳格に
+        # 3点差以内のリード時、9回に入ったらスタミナが十分残っていなければ交代
+        # スタミナ50未満 または 球数100球以上 ならクローザーへ (厳格化)
+        if ctx.inning >= 9 and ctx.score_diff > 0 and ctx.score_diff <= 3:
+            if ctx.current_stamina < 50 or ctx.pitch_count >= 100:
+                return self._select_reliever(ctx, used_pitchers, next_batter)
+
         return None
     
     def _check_reliever_change(self, ctx: PitchingContext, pitcher: 'Player', 
@@ -350,11 +357,16 @@ class PitchingDirector:
         return None
     
     def _get_target_roles(self, ctx: PitchingContext) -> List[PitcherRole]:
-        """状況に応じた目標役割リストを返す"""
-        is_winning = ctx.score_diff > 0
+        """状況に応じた目標役割リストを返す
         
-        # (A) 勝ちパターン
-        if is_winning and ctx.is_close:
+        勝ちパターン投手 (CLOSER/SETUP_A) は3点差以内のリード時のみ使用
+        それ以外はMIDDLE/LONGを優先して勝ちパターン温存
+        """
+        is_winning = ctx.score_diff > 0
+        is_hold_situation = is_winning and 1 <= ctx.score_diff <= 3  # ホールドシチュエーション: 1-3点リード
+        
+        # (A) 勝ちパターン (ホールドシチュエーション: 1-3点リード)
+        if is_hold_situation:
             if ctx.inning >= 9:
                 return [PitcherRole.CLOSER, PitcherRole.SETUP_A]
             elif ctx.inning == 8:
@@ -364,18 +376,22 @@ class PitchingDirector:
             else:
                 return [PitcherRole.MIDDLE, PitcherRole.LONG]
         
-        # (B) 同点
+        # (B) 4点差以上のリード - 勝ちパターン温存
+        if is_winning and ctx.score_diff >= 4:
+            return [PitcherRole.LONG, PitcherRole.MIDDLE]
+        
+        # (C) 同点
         if ctx.score_diff == 0:
             if ctx.inning >= 8:
                 return [PitcherRole.SETUP_A, PitcherRole.SETUP_B, PitcherRole.CLOSER]
             else:
                 return [PitcherRole.MIDDLE, PitcherRole.SETUP_B]
         
-        # (C) ビハインド接戦
+        # (D) ビハインド接戦
         if not is_winning and ctx.is_close:
-            return [PitcherRole.MIDDLE, PitcherRole.SETUP_B]
+            return [PitcherRole.MIDDLE, PitcherRole.LONG]
         
-        # (D) 大差
+        # (E) 大差ビハインド
         return [PitcherRole.LONG, PitcherRole.MIDDLE]
     
     def _find_reliever_by_role(self, target_role: PitcherRole, 
@@ -479,6 +495,28 @@ class PitchingDirector:
         # 既に今日出場した選手は出場不可（複数軍出場防止）
         if getattr(pitcher, 'has_played_today', False):
             return False
+        
+        # 連投防止: 中継ぎは連投をほぼさせない
+        # 先発適性がない投手 = 中継ぎ
+        apt_starter = getattr(pitcher.stats, 'aptitude_starter', 1)
+        is_reliever = apt_starter < 3
+        
+        if is_reliever:
+            consecutive_days = getattr(pitcher, 'consecutive_days', 0)
+            fatigue = getattr(pitcher, 'fatigue', 0)
+            
+            # 2連投以上は原則使用不可
+            if consecutive_days >= 2:
+                return False
+            
+            # 1連投でも疲労度が高い場合は使用不可（閾値を厳しく）
+            if consecutive_days >= 1 and fatigue >= 30:
+                return False
+            
+            # スタミナが低い場合も連投禁止
+            if consecutive_days >= 1 and pitcher.current_stamina < 40:
+                return False
+        
         return True
 
 

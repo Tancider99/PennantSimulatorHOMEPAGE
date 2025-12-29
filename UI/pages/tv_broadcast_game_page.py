@@ -172,8 +172,8 @@ class LineupDialog(QDialog):
             
             self.detail_container.addWidget(detail_page)
             self.stack.setCurrentIndex(1)
-        except Exception as e:
-            print(f"Player detail error: {e}")
+        except Exception:
+            pass
     
     def _show_full_stats(self, player):
         """詳細統計をポップアップで表示"""
@@ -181,8 +181,8 @@ class LineupDialog(QDialog):
             from UI.widgets.dialogs import PlayerStatsDialog
             dialog = PlayerStatsDialog(player, self)
             dialog.exec()
-        except Exception as e:
-            print(f"Stats dialog error: {e}")
+        except Exception:
+            pass
         
     def _create_table(self, team, title):
         container = QWidget()
@@ -1228,9 +1228,28 @@ class TVBroadcastGamePage(QWidget):
         
         cl.addLayout(left, stretch=2)
         
+        # フィールドとシフト表示のコンテナ
+        field_container = QVBoxLayout()
+        field_container.setSpacing(4)
+        
+        # シフト表示ラベル（フィールド上部に配置）
+        self.lbl_shift_indicator = QLabel("■ 内野: 通常 | 外野: 通常")
+        self.lbl_shift_indicator.setStyleSheet(f"""
+            background: rgba(0, 0, 0, 0.7);
+            color: {THEME.primary};
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        """)
+        self.lbl_shift_indicator.setAlignment(Qt.AlignRight)
+        field_container.addWidget(self.lbl_shift_indicator)
+        
         self.field_widget = TacticalField()
         self.field_widget.animation_finished.connect(self._on_animation_step_finished)
-        cl.addWidget(self.field_widget, stretch=4)
+        field_container.addWidget(self.field_widget, stretch=1)
+        
+        cl.addLayout(field_container, stretch=4)
         
         right = QVBoxLayout(); right.setSpacing(10)
         self.batter_card = PlayerInfoPanel("BATTER", True)
@@ -1632,7 +1651,7 @@ class TVBroadcastGamePage(QWidget):
         m = {
             'SINGLE': '安打', 'DOUBLE': '二塁打', 'TRIPLE': '三塁打', 'HOME_RUN': '本塁打', 
             'ERROR': '失策', 'GROUNDOUT': 'ゴロ', 'FLYOUT': 'フライ', 'LINEOUT': 'ライナー',
-            'POPUP_OUT': '飛球', 'DOUBLE_PLAY': '併殺', 'SACRIFICE_FLY': '犠飛',
+            'POPUP_OUT': 'フライ', 'DOUBLE_PLAY': '併殺', 'SACRIFICE_FLY': '犠飛',
             'SACRIFICE_BUNT': '犠打', 'FIELDERS_CHOICE': '野選'
         }
         
@@ -1773,6 +1792,12 @@ class TVBroadcastGamePage(QWidget):
             self.mgr_title.setText(f"[観戦] AI対戦中")
             self.mgr_title.setStyleSheet(f"color:#888; font-weight:bold; font-size:11px;")
         
+        # シフト表示を更新
+        if hasattr(self, 'lbl_shift_indicator') and hasattr(self, 'cmb_infield') and hasattr(self, 'cmb_outfield'):
+            infield_shift = self.cmb_infield.currentText()
+            outfield_shift = self.cmb_outfield.currentText()
+            self.lbl_shift_indicator.setText(f"⬡ 内野: {infield_shift.replace('内野', '')} | 外野: {outfield_shift.replace('外野', '')}")
+        
         # Scoreboard Update
 
         
@@ -1904,7 +1929,9 @@ class TVBroadcastGamePage(QWidget):
             "hits": (self.live_engine.state.home_hits, self.live_engine.state.away_hits),
             "errors": (self.live_engine.state.home_errors, self.live_engine.state.away_errors),
             "game_stats": game_result.get("game_stats", {}),
-            "highlights": game_result.get("highlights", [])
+            "highlights": game_result.get("highlights", []),
+            "home_pitchers_used": list(self.live_engine.state.home_pitchers_used),
+            "away_pitchers_used": list(self.live_engine.state.away_pitchers_used)
         }
         self.game_finished.emit(res)
 

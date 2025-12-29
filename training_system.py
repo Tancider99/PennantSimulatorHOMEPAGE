@@ -257,7 +257,8 @@ def apply_training(player: Player, days: int = 1, team=None) -> Dict[str, Any]:
     # 休養の場合は疲労回復のみ
     if player.training_menu == TrainingMenu.REST:
         old_fatigue = player.fatigue
-        recovery_amount = 10 + int(player.stats.recovery * 0.2)
+        # Reduced REST recovery: 8 + 0.10*recovery (was 10 + 0.2*recovery)
+        recovery_amount = 8 + int(player.stats.recovery * 0.10)
         player.fatigue = max(0, player.fatigue - recovery_amount * days)
         result["changes"]["fatigue"] = (old_fatigue, player.fatigue, player.fatigue - old_fatigue)
         return result
@@ -266,9 +267,9 @@ def apply_training(player: Player, days: int = 1, team=None) -> Dict[str, Any]:
     current_fatigue = getattr(player, 'fatigue', 0)
     if current_fatigue > 0:
         rec_stat = getattr(player.stats, 'recovery', 50)
-        # Recover 8-15 per day naturally even when training (must exceed training fatigue of 2-5)
-        natural_rec = 8 + int((rec_stat - 50) * 0.15) * days
-        if natural_rec < 3: natural_rec = 3 * days
+        # Reduced natural recovery during training (5-10 per day)
+        natural_rec = 5 + int((rec_stat - 50) * 0.10) * days
+        if natural_rec < 2: natural_rec = 2 * days
         player.fatigue = max(0, current_fatigue - natural_rec)
     
     # Auto-training (お任せ): Select a random appropriate training menu

@@ -20,7 +20,7 @@ from UI.widgets.panels import ContentPanel
 class SaveSlotCard(QFrame):
     """Angular save slot card matching home page industrial style"""
     load_requested = Signal(str)
-    delete_requested = Signal(str)
+    delete_requested = Signal(int)
     save_to_slot_requested = Signal(int)
     
     def __init__(self, slot_data: dict = None, slot_number: int = 1, 
@@ -194,7 +194,7 @@ class SaveSlotCard(QFrame):
                     border-color: {self.theme.danger};
                 }}
             """)
-            delete_btn.clicked.connect(lambda: self.delete_requested.emit(self.filepath))
+            delete_btn.clicked.connect(lambda: self.delete_requested.emit(self.slot_number))
             btn_layout.addWidget(delete_btn)
         else:
             # Save to empty slot button (only if save allowed)
@@ -221,6 +221,140 @@ class SaveSlotCard(QFrame):
         content_layout.addLayout(btn_layout)
         layout.addWidget(content)
 
+
+class AutoSaveSlotCard(QFrame):
+    """Autosave slot card - load only, no save/delete"""
+    load_requested = Signal(str)
+    
+    def __init__(self, slot_data: dict = None, parent=None):
+        super().__init__(parent)
+        self.theme = get_theme()
+        self.slot_data = slot_data
+        self.filepath = slot_data.get("filepath") if slot_data else None
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        # Angular design with distinct accent color for autosave
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {self.theme.bg_card};
+                border: none;
+                border-radius: 0px;
+            }}
+        """)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Left accent bar - Orange for autosave
+        accent = QFrame()
+        accent.setFixedWidth(4)
+        accent.setStyleSheet("background: #ff9800; border-radius: 0px;")
+        layout.addWidget(accent)
+        
+        # Main content
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(16, 12, 16, 12)
+        content_layout.setSpacing(16)
+        
+        # Slot label - "AUTO" instead of number
+        slot_label = QLabel("AUTO")
+        slot_label.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: 800;
+            color: #ff9800;
+            font-family: 'Consolas', 'Monaco', monospace;
+            min-width: 50px;
+        """)
+        content_layout.addWidget(slot_label)
+        
+        # Info section
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+        
+        if self.slot_data:
+            # Team name
+            team_name = self.slot_data.get("team_name", "Unknown")
+            team_label = QLabel(team_name)
+            team_label.setStyleSheet(f"""
+                font-size: 16px;
+                font-weight: 700;
+                color: {self.theme.text_primary};
+                letter-spacing: 1px;
+            """)
+            info_layout.addWidget(team_label)
+            
+            # Details
+            year = self.slot_data.get("year", 2027)
+            date = self.slot_data.get("date", "")
+            wins = self.slot_data.get("wins", 0)
+            losses = self.slot_data.get("losses", 0)
+            game_num = self.slot_data.get("game_number", 0)
+            
+            if self.slot_data.get("is_offseason"):
+                detail_text = f"{year} OFFSEASON"
+            else:
+                detail_text = f"{year} | {date} | {wins}W-{losses}L | GAME {game_num}"
+            
+            detail_label = QLabel(detail_text)
+            detail_label.setStyleSheet(f"""
+                font-size: 11px;
+                color: {self.theme.text_secondary};
+                letter-spacing: 1px;
+            """)
+            info_layout.addWidget(detail_label)
+            
+            # Modified time with "AUTOSAVE" label
+            modified = self.slot_data.get("modified")
+            if modified:
+                mod_time = datetime.datetime.fromtimestamp(modified)
+                time_label = QLabel(f"AUTOSAVED: {mod_time.strftime('%Y/%m/%d %H:%M')}")
+                time_label.setStyleSheet(f"""
+                    font-size: 9px;
+                    color: #ff9800;
+                    letter-spacing: 1px;
+                """)
+                info_layout.addWidget(time_label)
+        else:
+            empty_label = QLabel("NO AUTOSAVE DATA")
+            empty_label.setStyleSheet(f"""
+                font-size: 14px;
+                color: {self.theme.text_muted};
+                letter-spacing: 2px;
+            """)
+            info_layout.addWidget(empty_label)
+        
+        content_layout.addLayout(info_layout, stretch=1)
+        
+        # Buttons - LOAD only
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        
+        if self.slot_data:
+            # Load button - Orange accent to match autosave theme
+            load_btn = QPushButton("LOAD")
+            load_btn.setStyleSheet("""
+                QPushButton {
+                    background: #ff9800;
+                    color: white;
+                    border: none;
+                    border-radius: 0px;
+                    padding: 10px 24px;
+                    font-weight: 700;
+                    font-size: 12px;
+                    letter-spacing: 2px;
+                }
+                QPushButton:hover {
+                    background: #ffb74d;
+                }
+            """)
+            load_btn.clicked.connect(lambda: self.load_requested.emit(self.filepath))
+            btn_layout.addWidget(load_btn)
+        
+        content_layout.addLayout(btn_layout)
+        layout.addWidget(content)
 
 class SaveLoadPage(ContentPanel):
     """Save/Load page with angular industrial design"""
@@ -379,7 +513,13 @@ class SaveLoadPage(ContentPanel):
             except:
                 pass
         
-        # Display 10 slots
+        # Display Autosave slot (slot 0) at top
+        autosave_data = slot_map.get(0)
+        autosave_card = AutoSaveSlotCard(autosave_data)
+        autosave_card.load_requested.connect(self._on_load)
+        self.slots_layout.addWidget(autosave_card)
+        
+        # Display 10 regular slots
         for i in range(1, 11):
             slot_data = slot_map.get(i)
             card = SaveSlotCard(slot_data, i, allow_save=self.allow_save)
@@ -390,10 +530,18 @@ class SaveLoadPage(ContentPanel):
         
         self.slots_layout.addStretch()
     
+    def _save_to_slot(self, slot_number: int, auto: bool = False):
+        """Save to specific slot - used for autosave (slot 0)"""
+        if not self.game_state:
+            return False
+        
+        filepath = os.path.join(self.save_dir, f"slot_{slot_number:02d}.psav")
+        return self.game_state.save_to_file(filepath)
+    
     def _on_save_to_slot(self, slot_number: int):
         """Handle save to specific slot"""
         if not self.game_state:
-            QMessageBox.warning(self, "ERROR", "No game loaded to save.")
+            QMessageBox.warning(self, "エラー", "セーブするゲームデータがありません。")
             return
         
         if not self.allow_save:
@@ -409,8 +557,8 @@ class SaveLoadPage(ContentPanel):
         
         if slot_exists:
             result = QMessageBox.question(
-                self, "OVERWRITE",
-                f"Overwrite save slot {slot_number}?",
+                self, "上書き確認",
+                f"スロット {slot_number} を上書きしますか？",
                 QMessageBox.Yes | QMessageBox.No
             )
             if result != QMessageBox.Yes:
@@ -419,10 +567,10 @@ class SaveLoadPage(ContentPanel):
         # Save
         filepath = os.path.join(self.save_dir, f"slot_{slot_number:02d}.psav")
         if self.game_state.save_to_file(filepath):
-            QMessageBox.information(self, "SAVED", f"Game saved to slot {slot_number}.")
+            QMessageBox.information(self, "保存完了", f"スロット {slot_number} に保存しました。")
             self._refresh_slots()
         else:
-            QMessageBox.critical(self, "ERROR", "Save failed.")
+            QMessageBox.critical(self, "エラー", "保存に失敗しました。")
     
     def _on_load(self, filepath: str):
         """Handle load request"""
@@ -430,8 +578,8 @@ class SaveLoadPage(ContentPanel):
             return
         
         result = QMessageBox.question(
-            self, "LOAD GAME",
-            "Load this save?\nCurrent progress will be lost.",
+            self, "ロード確認",
+            "このデータをロードしますか？\n現在の進行状況は失われます。",
             QMessageBox.Yes | QMessageBox.No
         )
         
@@ -444,32 +592,52 @@ class SaveLoadPage(ContentPanel):
             self.game_state = GameStateManager()
         
         if self.game_state.load_from_file(filepath):
-            QMessageBox.information(self, "LOADED", "Game loaded successfully.")
+            QMessageBox.information(self, "ロード完了", "ゲームをロードしました。")
             self._update_current_info()
             self.load_completed.emit()
         else:
-            QMessageBox.critical(self, "ERROR", "Load failed.")
+            QMessageBox.critical(self, "エラー", "ロードに失敗しました。")
     
-    def _on_delete(self, filepath: str):
+    def _on_delete(self, slot_number: int):
         """Handle delete request"""
-        if not filepath:
+        if not slot_number: # Assuming 0 is not a valid slot for this context, or handle it
             return
         
         result = QMessageBox.question(
-            self, "DELETE SAVE",
-            "Delete this save file?\nThis cannot be undone.",
+            self, "削除確認",
+            f"スロット {slot_number} のデータを削除しますか？\nこの操作は取り消せません。",
             QMessageBox.Yes | QMessageBox.No
         )
         
-        if result != QMessageBox.Yes:
-            return
-        
-        try:
-            os.remove(filepath)
-            QMessageBox.information(self, "DELETED", "Save file deleted.")
-            self._refresh_slots()
-        except Exception as e:
-            QMessageBox.critical(self, "ERROR", f"Delete failed: {e}")
+        if result == QMessageBox.Yes:
+
+            
+            # Simple delete
+            try:
+                slot_int = int(slot_number)
+                filepath = os.path.join(self.save_dir, f"slot_{slot_int:02d}.psav")
+                
+                deleted = False
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    deleted = True
+                
+                # Also remove DB file from Hybrid Save
+                db_path = filepath + ".db"
+                if os.path.exists(db_path):
+                    try: 
+                        os.remove(db_path)
+                        deleted = True
+                    except: pass
+
+                if deleted:
+                    QMessageBox.information(self, "削除完了", f"スロット {slot_number} を削除しました。")
+                    self._refresh_slots()
+                else:
+                    QMessageBox.warning(self, "エラー", "削除するデータが見つかりませんでした。")
+
+            except Exception as e:
+                QMessageBox.critical(self, "エラー", f"削除に失敗しました: {e}")
     
     def showEvent(self, event):
         """Refresh slots when page is shown"""

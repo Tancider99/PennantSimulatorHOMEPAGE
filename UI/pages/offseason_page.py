@@ -134,15 +134,35 @@ class OffseasonPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
-        # タイトル
-        title = QLabel("📅 オフシーズンスケジュール")
+        # タイトル (Stylish, no emoji)
+        title_row = QHBoxLayout()
+        
+        # Icon replacement: styled frame
+        icon_frame = QFrame()
+        icon_frame.setFixedSize(28, 28)
+        icon_frame.setStyleSheet(f"""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {self.theme.primary}, stop:1 {self.theme.accent_blue});
+            border-radius: 6px;
+        """)
+        icon_label = QLabel("S")
+        icon_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px; background: transparent;")
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_layout = QVBoxLayout(icon_frame)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.addWidget(icon_label)
+        title_row.addWidget(icon_frame)
+        
+        title = QLabel("OFFSEASON SCHEDULE")
         title.setStyleSheet(f"""
             font-size: 18px;
             font-weight: bold;
             color: {self.theme.text_primary};
             background: transparent;
+            letter-spacing: 1px;
         """)
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
         
         # イベントリスト
         self.events_container = QVBoxLayout()
@@ -163,15 +183,35 @@ class OffseasonPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
-        # タイトル
-        title = QLabel("📰 最新ニュース")
+        # タイトル (Stylish, no emoji)
+        title_row = QHBoxLayout()
+        
+        # Icon replacement: styled frame
+        icon_frame = QFrame()
+        icon_frame.setFixedSize(28, 28)
+        icon_frame.setStyleSheet(f"""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {self.theme.success}, stop:1 {self.theme.primary});
+            border-radius: 6px;
+        """)
+        icon_label = QLabel("N")
+        icon_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px; background: transparent;")
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_layout = QVBoxLayout(icon_frame)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.addWidget(icon_label)
+        title_row.addWidget(icon_frame)
+        
+        title = QLabel("LATEST NEWS")
         title.setStyleSheet(f"""
             font-size: 18px;
             font-weight: bold;
             color: {self.theme.text_primary};
             background: transparent;
+            letter-spacing: 1px;
         """)
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
         
         # ニュースコンテナ
         self.news_container = QVBoxLayout()
@@ -321,11 +361,22 @@ class OffseasonPage(QWidget):
             
             row_layout.addWidget(phase_label, 1)
             
-            # ステータスアイコン
-            status = "🔵" if is_current else "⚪"
-            status_label = QLabel(status)
-            status_label.setStyleSheet("background: transparent;")
-            row_layout.addWidget(status_label)
+            # ステータスインジケータ (Stylish, no emoji)
+            status_frame = QFrame()
+            status_frame.setFixedSize(12, 12)
+            if is_current:
+                status_frame.setStyleSheet(f"""
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {self.theme.primary}, stop:1 {self.theme.accent_blue});
+                    border-radius: 6px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                """)
+            else:
+                status_frame.setStyleSheet(f"""
+                    background: {self.theme.bg_input};
+                    border-radius: 6px;
+                    border: 1px solid {self.theme.border};
+                """)
+            row_layout.addWidget(status_frame)
             
             self.events_container.addWidget(row)
     

@@ -246,7 +246,21 @@ class TeamOverviewPanel(QFrame):
 
     def set_team(self, team, name, league):
         self.header_label.setText(name.upper())
+        
+        # Determine default display and lookup key
         league_display = "North League" if league.lower() == "north" else ("South League" if league.lower() == "south" else league)
+        target_key = "North League" if league.lower() == "north" else ("South League" if league.lower() == "south" else None)
+        
+        # Try to load custom name from user_config
+        if target_key:
+            import json, os
+            if os.path.exists("user_config.json"):
+                try:
+                    with open("user_config.json", 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        league_display = config.get("league_names", {}).get(target_key, league_display)
+                except: pass
+
         self.sub_header.setText(f"LEAGUE: {league_display} | STATUS: ACTIVE")
         self.confirm_btn.setEnabled(True)
         
@@ -320,6 +334,21 @@ class TeamSelectScreen(QWidget):
         self.teams_container = None
         self._setup_ui()
     
+    def _get_league_name(self, key, default):
+        import json
+        import os
+        config_path = "user_config.json"
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    names = config.get('league_names', {})
+                    # If value exists, use it (and maybe capitalize/upper if needed, but keeping as is for flexibility)
+                    return names.get(key, default)
+            except:
+                pass
+        return default
+    
     def showEvent(self, event):
         """Refresh team list every time screen is shown"""
         super().showEvent(event)
@@ -347,12 +376,15 @@ class TeamSelectScreen(QWidget):
         north_teams = [name for name, data in teams_info["north"]]
         south_teams = [name for name, data in teams_info["south"]]
         
-        layout.addWidget(self._create_header("NORTH ORBIT"))
+        north_name = self._get_league_name("North League", "NORTH ORBIT")
+        south_name = self._get_league_name("South League", "SOUTH ORBIT")
+        
+        layout.addWidget(self._create_header(north_name))
         self._add_teams(layout, "north", north_teams)
         
         layout.addSpacing(20)
         
-        layout.addWidget(self._create_header("SOUTH ORBIT"))
+        layout.addWidget(self._create_header(south_name))
         self._add_teams(layout, "south", south_teams)
         
         layout.addStretch()
@@ -398,12 +430,15 @@ class TeamSelectScreen(QWidget):
         north_teams = [name for name, data in teams_info["north"]]
         south_teams = [name for name, data in teams_info["south"]]
         
-        teams_layout.addWidget(self._create_header("NORTH ORBIT"))
+        north_name = self._get_league_name("North League", "NORTH ORBIT")
+        south_name = self._get_league_name("South League", "SOUTH ORBIT")
+        
+        teams_layout.addWidget(self._create_header(north_name))
         self._add_teams(teams_layout, "north", north_teams)
         
         teams_layout.addSpacing(20)
         
-        teams_layout.addWidget(self._create_header("SOUTH ORBIT"))
+        teams_layout.addWidget(self._create_header(south_name))
         self._add_teams(teams_layout, "south", south_teams)
         
         teams_layout.addStretch()

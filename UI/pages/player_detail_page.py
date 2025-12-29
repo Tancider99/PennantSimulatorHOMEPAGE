@@ -372,12 +372,11 @@ class PlayerDetailPage(QWidget):
             ]
             pitch_spec = [
                 ("対左打者", stats.vs_left_pitcher, 99), ("対ピンチ", stats.vs_pinch, 99),
-                ("クイック", stats.hold_runners, 99)
+                ("クイック", stats.hold_runners, 99), ("ゴロ傾向", stats.gb_tendency, 99)
             ]
             pitch_fld = [
                 ("守備力", stats.fielding, 99), ("肩力", stats.arm, 99),
-                ("捕球", stats.error, 99), ("打球反応", stats.gb_tendency, 99), 
-                ("バント", stats.bunt_sac, 99)
+                ("捕球", stats.error, 99), ("バント", stats.bunt_sac, 99)
             ]
             pitch_mental = [
                 ("メンタル", stats.mental, 99), ("野球脳", stats.intelligence, 99),

@@ -158,6 +158,41 @@ class AIDecisionMaker:
         self.steal_tendency = getattr(game_state, 'ai_steal_tendency', 50) / 100.0
         self.pitching_change_tendency = getattr(game_state, 'ai_pitching_change_tendency', 50) / 100.0
         self.use_defensive_shift = getattr(game_state, 'ai_defensive_shift', True)
+        
+        # Pinch hitter settings
+        self.pinch_hitter_inning = getattr(game_state, 'pinch_hitter_inning', 7)
+        self.substitute_stamina_threshold = getattr(game_state, 'substitute_stamina_threshold', 30)
+    
+    def should_use_pinch_hitter(self, inning: int, batter_stamina: float, 
+                                 batter_ability: int, score_diff: int) -> bool:
+        """
+        Decide if AI should use a pinch hitter.
+        
+        Args:
+            inning: Current inning
+            batter_stamina: Current batter's stamina (0-100)
+            batter_ability: Batter's overall ability
+            score_diff: Score difference (positive = winning)
+        
+        Returns True if pinch hitter should be used.
+        """
+        # Don't use pinch hitters before configured inning
+        if inning < self.pinch_hitter_inning:
+            return False
+        
+        # Low stamina triggers consideration
+        if batter_stamina <= self.substitute_stamina_threshold:
+            return True
+        
+        # Late game, weak hitter, close game - consider pinch hit
+        if inning >= 8 and batter_ability < 40 and abs(score_diff) <= 2:
+            return random.random() < 0.5
+        
+        # 9th inning, need runs, weak hitter
+        if inning >= 9 and score_diff <= 0 and batter_ability < 50:
+            return random.random() < 0.6
+        
+        return False
     
     def should_bunt(self, inning: int, outs: int, score_diff: int, 
                     runner_on_first: bool, runner_on_second: bool,
