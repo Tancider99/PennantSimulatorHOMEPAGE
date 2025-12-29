@@ -1571,7 +1571,7 @@ class Player:
         new_rec = PlayerRecord()
         new_rec.merge_from(record) 
         self.recent_records.append((date_str, new_rec))
-        if len(self.recent_records) > 60:
+        if len(self.recent_records) > 30:  # 60→30に削減してセーブ高速化
             self.recent_records.pop(0)
 
     def get_recent_stats(self, current_date_str: str, days: int = 30) -> PlayerRecord:

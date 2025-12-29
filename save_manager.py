@@ -723,6 +723,14 @@ class HybridSaver:
                     json.dump(config, f, indent=4, ensure_ascii=False)
             except: pass
             
+            # メタデータファイルを作成（セーブページ高速表示用）
+            try:
+                meta_path = filepath + ".meta"
+                save_info = game_state.get_save_info()
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(save_info, f, ensure_ascii=False)
+            except: pass
+            
             success = True
         except Exception as e:
             print(f"Hybrid Save File Error: {e}")

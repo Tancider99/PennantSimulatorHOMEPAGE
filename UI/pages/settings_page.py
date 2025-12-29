@@ -705,10 +705,8 @@ class SettingsPage(QWidget):
         
         self.settings_changed.emit(self.settings)
         
-        # Show confirmation dialog
-        if success:
-            QMessageBox.information(self, "設定", "設定を適用しました")
-        # ゲーム未開始時は警告を表示しない（設定は保存される）
+        # Show confirmation dialog (always show)
+        QMessageBox.information(self, "設定", "設定を適用しました")
     
     def _reset_settings(self):
         """Reset to default settings"""

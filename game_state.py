@@ -2720,9 +2720,9 @@ class GameStateManager:
     
     @staticmethod
     def get_save_slots(save_dir: str = "saves") -> list:
-        """セーブスロット一覧を取得"""
+        """セーブスロット一覧を取得（高速化版：メタデータのみ読み込み）"""
         import os
-        import dill
+        import json
         
         slots = []
         if not os.path.exists(save_dir):
@@ -2731,10 +2731,25 @@ class GameStateManager:
         for filename in sorted(os.listdir(save_dir)):
             if filename.endswith(".psav"):
                 filepath = os.path.join(save_dir, filename)
+                meta_path = filepath + ".meta"
+                
                 try:
-                    with open(filepath, 'rb') as f:
-                        data = dill.load(f)
-                    save_info = data.get("save_info", {})
+                    # メタデータファイルがあれば高速読み込み
+                    if os.path.exists(meta_path):
+                        with open(meta_path, 'r', encoding='utf-8') as f:
+                            save_info = json.load(f)
+                    else:
+                        # メタデータがなければファイル情報だけ返す（フルロードしない）
+                        file_size = os.path.getsize(filepath)
+                        modified = os.path.getmtime(filepath)
+                        save_info = {
+                            "team_name": "データ読み込み中...",
+                            "year": 2027,
+                            "month": 1,
+                            "day": 1,
+                            "file_size": file_size,
+                        }
+                    
                     save_info["filepath"] = filepath
                     save_info["filename"] = filename
                     save_info["modified"] = os.path.getmtime(filepath)

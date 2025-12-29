@@ -6,8 +6,8 @@ Unified window flow: Loading -> Title -> Team Select -> Game
 import sys
 import os
 
-# Suppress Qt internal warning messages (QBackingStore etc.)
-os.environ["QT_LOGGING_RULES"] = "*.warning=false"
+# Note: QBackingStore warnings are harmless Qt internal messages
+# They appear in the console but don't affect app functionality
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
