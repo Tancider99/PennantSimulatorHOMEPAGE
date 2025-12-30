@@ -431,6 +431,7 @@ class TeamEditorPanel(QWidget):
         self.theme = get_theme()
         self.current_team = None
         self.team_data = {}
+        self._modified_teams = set()  # Track which teams have been modified
         self._setup_ui()
     
     def _setup_ui(self):
@@ -682,6 +683,18 @@ class TeamEditorPanel(QWidget):
     def load_teams(self):
         """Load team data from files"""
         from team_data_manager import TeamDataManager
+        
+        # Reset state before loading
+        self.current_team = None
+        self._modified_teams = set()
+        if hasattr(self, '_pending_renames'):
+            self._pending_renames = {}
+        
+        # Clear editor fields
+        self._clear_editor_fields()
+        
+        # Block signals to prevent _on_team_selected from being called during load
+        self.team_list.blockSignals(True)
         self.team_list.clear()
         self.team_data = {}
         
@@ -698,8 +711,33 @@ class TeamEditorPanel(QWidget):
                         self.team_list.addItem(team_name)
                     except Exception:
                         pass
+        
+        self.team_list.blockSignals(False)
+        
+        # Manually trigger load of first team if available
+        if self.team_list.count() > 0:
+            self.team_list.setCurrentRow(0)
+            self._on_team_selected(0)
+    
+    def _clear_editor_fields(self):
+        """Clear all editor UI fields"""
+        self.name_edit.clear()
+        self.abbr_edit.clear()
+        self.color_edit.clear()
+        self.stadium_name.clear()
+        self.capacity_spin.setValue(35000)
+        self.dome_check.setChecked(False)
+        for spin in self.pf_spins.values():
+            spin.setValue(1.0)
+        self.light_fans_spin.setValue(300000)
+        self.middle_fans_spin.setValue(150000)
+        self.core_fans_spin.setValue(50000)
+        self._update_total_fans()
     
     def _on_team_selected(self, row: int):
+        # Save current team to memory before switching
+        self._save_current_team_to_memory()
+        
         if row < 0:
             return
         
@@ -742,8 +780,8 @@ class TeamEditorPanel(QWidget):
             self.core_fans_spin.setValue(fans.get("core", 50000))
         self._update_total_fans()
     
-    def save_current_team(self):
-        """Save current team data - preserves original fields"""
+    def _save_current_team_to_memory(self):
+        """Save current team data to memory (not to file)"""
         if not self.current_team:
             return
         
@@ -786,26 +824,57 @@ class TeamEditorPanel(QWidget):
             "コア層": self.core_fans_spin.value()
         }
         
-        # Save to file
+        # Update in-memory team data
+        # Update in-memory team data
+        import json
+        current_team_data = self.team_data.get(old_name, {})
+        new_dump = json.dumps(data, sort_keys=True)
+        old_dump = json.dumps(current_team_data, sort_keys=True)
+        
+        if new_dump != old_dump:
+            self.team_data[old_name] = data
+            self._modified_teams.add(old_name)
+        
+        # Handle name change
+        if old_name != new_name:
+            # Store new name association for later file rename
+            self.team_data[new_name] = data
+            if old_name in self.team_data:
+                del self.team_data[old_name]
+            self._modified_teams.discard(old_name)
+            self._modified_teams.add(new_name)
+            # Store rename info for later
+            if not hasattr(self, '_pending_renames'):
+                self._pending_renames = {}
+            self._pending_renames[new_name] = old_name
+            self.current_team = new_name
+    
+    def save_current_team(self):
+        """Save all team changes - called from main save"""
         from team_data_manager import TeamDataManager
         data_dir = TeamDataManager.DATA_DIR
         
-        # If name changed, rename related files first
-        if old_name != new_name:
-            self._rename_team_files(old_name, new_name)
+        # First update current team data from UI
+        self._save_current_team_to_memory()
         
-        # Save updated team data
-        safe_name = new_name.replace(" ", "_").replace("/", "_")
-        filepath = os.path.join(data_dir, f"{safe_name}_team.json")
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Process any pending renames first
+        if hasattr(self, '_pending_renames'):
+            for new_name, old_name in self._pending_renames.items():
+                self._rename_team_files(old_name, new_name)
+            self._pending_renames = {}
         
-        self.team_data[new_name] = data
-        if old_name != new_name and old_name in self.team_data:
-            del self.team_data[old_name]
+        # Save all modified teams to files
+        for team_name in self._modified_teams:
+            if team_name not in self.team_data:
+                continue
+            data = self.team_data[team_name]
+            safe_name = team_name.replace(" ", "_").replace("/", "_")
+            filepath = os.path.join(data_dir, f"{safe_name}_team.json")
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
         
-        self.current_team = new_name
-        self.load_teams()
+        # Clear modified tracking
+        self._modified_teams = set()
     
     def _rename_team_files(self, old_name: str, new_name: str):
         """Rename all team-related files and update team name inside them"""
@@ -857,9 +926,11 @@ class TeamEditorPanel(QWidget):
 class PlayerEditorPanel(QWidget):
     """Player data editor panel"""
     
-    # Player count limits (支配下選手)
+    # Player count limits
     MIN_PITCHERS = 15  # 最低支配下投手数
     MIN_BATTERS = 16   # 最低支配下野手数
+    MIN_TOTAL_PITCHERS = 35 # 最低全投手数
+    MIN_TOTAL_BATTERS = 46  # 最低全野手数
     MAX_PLAYERS = 70   # 最大支配下選手数
     MAX_IKUSEI = 50    # 最大育成選手数
     
@@ -869,6 +940,7 @@ class PlayerEditorPanel(QWidget):
         self.current_team = None
         self.current_player_idx = -1
         self.players_data = []
+        self._modified_teams = {}  # Track modified player data by team
         self._setup_ui()
     
     def _setup_ui(self):
@@ -1025,7 +1097,7 @@ class PlayerEditorPanel(QWidget):
         
         self.stat_spins = {}
         batter_stats = [("ミート", "ミート"), ("パワー", "パワー"), ("走力", "走力"), 
-                        ("肩力", "肩力"), ("守備", "守備"), ("捕球", "捕球"),
+                        ("肩力", "肩力"), ("捕球", "捕球"),
                         ("選球眼", "選球眼"), ("チャンス", "チャンス"), ("ギャップ", "ギャップ"),
                         ("三振回避", "三振回避"), ("盗塁", "盗塁"), ("走塁", "走塁"),
                         ("バント", "バント"), ("セーフティ", "セーフティ"), ("弾道", "弾道"),
@@ -1045,7 +1117,59 @@ class PlayerEditorPanel(QWidget):
             self.stat_spins[key] = spin
         
         batter_group.layout().addLayout(batter_grid)
+        batter_group.layout().addLayout(batter_grid)
         self.editor_layout.addWidget(batter_group)
+        
+        # Position Aptitude Group
+        pos_group = self._create_group("守備適性")
+        pos_layout = QVBoxLayout()
+        
+        # List of positions
+        pos_list_layout = QHBoxLayout()
+        self.pos_list = QListWidget()
+        self.pos_list.setMaximumHeight(120)
+        self.pos_list.setStyleSheet(f"background: {self.theme.bg_dark}; color: {self.theme.text_primary}; border: 1px solid {self.theme.border};")
+        self.pos_list.currentItemChanged.connect(self._on_position_selected)
+        pos_list_layout.addWidget(self.pos_list)
+        
+        # Edit controls (Right side of list)
+        pos_ctrl_layout = QVBoxLayout()
+        
+        self.pos_combo = QComboBox()
+        self.pos_combo.setStyleSheet(self._input_style())
+        self.pos_combo.addItems(["投手", "捕手", "一塁手", "二塁手", "三塁手", "遊撃手", "左翼手", "中堅手", "右翼手"])
+        pos_ctrl_layout.addWidget(self.pos_combo)
+        
+        btn_layout = QHBoxLayout()
+        add_pos_btn = QPushButton("追加")
+        add_pos_btn.setStyleSheet(f"background: {self.theme.success}; color: white; border: none; padding: 4px;")
+        add_pos_btn.clicked.connect(self._add_position)
+        btn_layout.addWidget(add_pos_btn)
+        
+        del_pos_btn = QPushButton("削除")
+        del_pos_btn.setStyleSheet(f"background: {self.theme.error}; color: white; border: none; padding: 4px;")
+        del_pos_btn.clicked.connect(self._delete_position)
+        btn_layout.addWidget(del_pos_btn)
+        
+        pos_ctrl_layout.addLayout(btn_layout)
+        
+        # Value spin
+        val_layout = QHBoxLayout()
+        val_layout.addWidget(QLabel("守備力:"))
+        self.pos_val_spin = TriangleSpinBox()
+        self.pos_val_spin.setRange(1, 99)
+        self.pos_val_spin.setValue(50)
+        self.pos_val_spin.valueChanged.connect(self._on_position_value_changed)
+        val_layout.addWidget(self.pos_val_spin)
+        
+        pos_ctrl_layout.addLayout(val_layout)
+        pos_ctrl_layout.addStretch()
+        
+        pos_list_layout.addLayout(pos_ctrl_layout)
+        pos_layout.addLayout(pos_list_layout)
+        
+        pos_group.layout().addLayout(pos_layout)
+        self.editor_layout.addWidget(pos_group)
         
         # Pitcher stats
         pitcher_group = self._create_group("投手能力")
@@ -1179,6 +1303,19 @@ class PlayerEditorPanel(QWidget):
     def load_teams(self):
         """Load team list"""
         from team_data_manager import TeamDataManager
+        
+        # Reset state before loading
+        self.current_team = None
+        self.current_player_idx = -1
+        self.players_data = []
+        self._modified_teams = {}
+        self.player_list.clear()
+        
+        # Clear editor fields
+        self._clear_editor_fields()
+        
+        # Block signals to prevent _on_team_changed from being called during load
+        self.team_combo.blockSignals(True)
         self.team_combo.clear()
         
         data_dir = TeamDataManager.DATA_DIR
@@ -1187,10 +1324,39 @@ class PlayerEditorPanel(QWidget):
                 if filename.endswith("_team.json"):
                     team_name = filename.replace("_team.json", "").replace("_", " ")
                     self.team_combo.addItem(team_name)
+        
+        self.team_combo.blockSignals(False)
+        
+        # Manually trigger load of first team if available
+        if self.team_combo.count() > 0:
+            self._on_team_changed(self.team_combo.currentText())
+    
+    def _clear_editor_fields(self):
+        """Clear all editor UI fields"""
+        self.name_edit.clear()
+        self.number_spin.setValue(0)
+        self.age_spin.setValue(25)
+        self.salary_spin.setValue(10000000)
+        self.ikusei_check.setChecked(False)
+        self.foreign_check.setChecked(False)
+        for spin in self.stat_spins.values():
+            spin.setValue(50)
+        self.pitch_combo.clear()
+        for spin in self.pitch_spins.values():
+            spin.setValue(50)
+        self._update_player_count()
     
     def _on_team_changed(self, team_name: str):
         """Load players for selected team"""
         from player_data_manager import PlayerDataManager
+        
+        # Save current player to memory before switching teams
+        self._save_current_player_to_memory()
+        
+        # Save current team's modified data before switching
+        if self.current_team and self.players_data:
+            self._modified_teams[self.current_team] = self.players_data[:]
+        
         self.current_team = team_name
         self.player_list.clear()
         self.players_data = []
@@ -1200,31 +1366,63 @@ class PlayerEditorPanel(QWidget):
             self._update_player_count()
             return
         
-        safe_name = team_name.replace(" ", "_").replace("/", "_")
-        filepath = os.path.join(PlayerDataManager.DATA_DIR, f"{safe_name}_player.json")
-        
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                self.players_data = data.get("選手一覧", [])
-                for p in self.players_data:
-                    name = p.get("名前", "不明")
-                    pos = p.get("ポジション", "不明")
-                    num = p.get("背番号", 0)
-                    self.player_list.addItem(f"#{num} {name} ({pos})")
-            except Exception:
-                pass
+        # Check if we have modified data for this team in memory
+        if team_name in self._modified_teams:
+            self.players_data = self._modified_teams[team_name][:]
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QListWidgetItem
+            for i, p in enumerate(self.players_data):
+                name = p.get("名前", "不明")
+                pos = p.get("ポジション", "不明")
+                num = p.get("背番号", 0)
+                item = QListWidgetItem(f"#{num} {name} ({pos})")
+                item.setData(Qt.UserRole, i)
+                self.player_list.addItem(item)
+        else:
+            # Load from file
+            safe_name = team_name.replace(" ", "_").replace("/", "_")
+            filepath = os.path.join(PlayerDataManager.DATA_DIR, f"{safe_name}_player.json")
+            
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    self.players_data = data.get("選手一覧", [])
+                    from PySide6.QtCore import Qt
+                    from PySide6.QtWidgets import QListWidgetItem
+                    for i, p in enumerate(self.players_data):
+                        name = p.get("名前", "不明")
+                        pos = p.get("ポジション", "不明")
+                        num = p.get("背番号", 0)
+                        item = QListWidgetItem(f"#{num} {name} ({pos})")
+                        item.setData(Qt.UserRole, i)
+                        self.player_list.addItem(item)
+                except Exception:
+                    pass
         
         self._update_player_count()
     
     def _on_player_selected(self, row: int):
         """Load player data into editor"""
-        if row < 0 or row >= len(self.players_data):
+        # Save current player to memory before switching
+        self._save_current_player_to_memory()
+        
+        if row < 0:
+            return
+            
+        item = self.player_list.item(row)
+        if not item:
+            return
+            
+        # Get actual data index from item
+        from PySide6.QtCore import Qt
+        data_idx = item.data(Qt.UserRole)
+        
+        if data_idx is None or data_idx < 0 or data_idx >= len(self.players_data):
             return
         
-        self.current_player_idx = row
-        p = self.players_data[row]
+        self.current_player_idx = data_idx
+        p = self.players_data[data_idx]
         
         self.name_edit.setText(p.get("名前", ""))
         self.number_spin.setValue(p.get("背番号", 0))
@@ -1252,7 +1450,21 @@ class PlayerEditorPanel(QWidget):
             
             spin.setValue(val if isinstance(val, int) else 50)
         
-        # Load pitch types into combo - pitches are in 能力値.持ち球
+        # Load position aptitudes
+        self.pos_list.clear()
+        aptitudes = stats.get("守備適正", {})
+        if not aptitudes and "ポジション" in p:
+             # Fallback if no aptitude data
+             aptitudes = {p["ポジション"]: 50}
+             if "能力値" in p: p["能力値"]["守備適正"] = aptitudes
+        
+        for pos, val in aptitudes.items():
+            self.pos_list.addItem(f"{pos}: {val}")
+            
+        if self.pos_list.count() > 0:
+            self.pos_list.setCurrentRow(0)
+        else:
+            self.pos_val_spin.setEnabled(False)
         self.pitch_combo.blockSignals(True)
         self.pitch_combo.clear()
         stats = p.get("能力値", {})
@@ -1267,6 +1479,9 @@ class PlayerEditorPanel(QWidget):
         # Trigger load of first pitch
         if self.pitch_combo.count() > 0:
             self._on_pitch_type_selected(self.pitch_combo.currentText())
+        
+        # Update button states (delete button enabled when player selected)
+        self._update_player_count()
     
     def _on_pitch_type_selected(self, pitch_name: str):
         """Load per-pitch stats for selected pitch type"""
@@ -1382,39 +1597,39 @@ class PlayerEditorPanel(QWidget):
             if self.pitch_combo.count() > 0:
                 self._on_pitch_type_selected(self.pitch_combo.currentText())
     
-    def _save_current_player(self):
-        """Save current player changes"""
+    def _save_current_player_to_memory(self):
+        """Save current player changes to memory (not to file)"""
         if self.current_player_idx < 0 or not self.current_team:
             return
         
+        if self.current_player_idx >= len(self.players_data):
+            return
+        
         p = self.players_data[self.current_player_idx]
-        new_number = self.number_spin.value()
-        new_ikusei = self.ikusei_check.isChecked()
+        
+        # Take a snapshot of current data for change detection
+        import json
+        original_data_dump = json.dumps(p, sort_keys=True)
+        
+        # Check if changing from ikusei to shihaika
         old_ikusei = p.get("育成選手", False)
+        new_ikusei = self.ikusei_check.isChecked()
         
-        # Validate jersey number - check for duplicates
-        for i, other_p in enumerate(self.players_data):
-            if i != self.current_player_idx and other_p.get("背番号", -1) == new_number:
-                QMessageBox.warning(
-                    self, "エラー",
-                    f"背番号 {new_number} は既に「{other_p.get('名前', '不明')}」が使用しています。\n別の背番号を選択してください。"
-                )
-                return
-        
-        # Validate 支配下 player limit (max 70)
-        if old_ikusei and not new_ikusei:  # Changing from 育成 to 支配下
-            shihaika_count = sum(1 for pl in self.players_data if not pl.get("育成選手", False))
-            if shihaika_count >= 70:
-                QMessageBox.warning(
-                    self, "エラー",
-                    "支配下選手は70人を超えることができません。\n先に他の選手を育成選手にするか、解雇してください。"
-                )
-                self.ikusei_check.setChecked(True)  # Revert checkbox
+        if old_ikusei and not new_ikusei:
+            # Changing from ikusei to shihaika - check limit
+            ikusei_count = sum(1 for pl in self.players_data if pl.get("育成選手", False))
+            shihaika_count = len(self.players_data) - ikusei_count
+            
+            if shihaika_count >= self.MAX_PLAYERS:
+                # Revert checkbox and don't save this change
+                self.ikusei_check.setChecked(True)
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n先に他の支配下選手を育成選手にするか、削除してください。")
                 return
         
         # Save basic info
         p["名前"] = self.name_edit.text()
-        p["背番号"] = new_number
+        p["背番号"] = self.number_spin.value()
         p["年齢"] = self.age_spin.value()
         p["年俸"] = self.salary_spin.value()
         p["育成選手"] = new_ikusei
@@ -1432,8 +1647,17 @@ class PlayerEditorPanel(QWidget):
                 p["共通能力"][key] = spin.value()
             else:
                 p["能力値"][key] = spin.value()
+
         
-        # Save current pitch stats to 能力値.持ち球
+        # Save position aptitudes
+        aptitudes = {}
+        for i in range(self.pos_list.count()):
+            item_text = self.pos_list.item(i).text()
+            if ":" in item_text:
+                pos, val = item_text.split(":")
+                aptitudes[pos.strip()] = int(val.strip())
+        
+        p["能力値"]["守備適正"] = aptitudes
         pitch_name = self.pitch_combo.currentText()
         if pitch_name:
             if "持ち球" not in p["能力値"]:
@@ -1441,44 +1665,68 @@ class PlayerEditorPanel(QWidget):
             if pitch_name not in p["能力値"]["持ち球"]:
                 p["能力値"]["持ち球"][pitch_name] = {}
             
-            if isinstance(p["能力値"]["持ち球"][pitch_name], dict):
-                p["能力値"]["持ち球"][pitch_name]["control"] = self.pitch_spins["control"].value()
-                p["能力値"]["持ち球"][pitch_name]["stuff"] = self.pitch_spins["stuff"].value()
-                p["能力値"]["持ち球"][pitch_name]["movement"] = self.pitch_spins["movement"].value()
-            else:
-                # Convert old format to dict
-                p["能力値"]["持ち球"][pitch_name] = {
-                    "control": self.pitch_spins["control"].value(),
-                    "stuff": self.pitch_spins["stuff"].value(),
-                    "movement": self.pitch_spins["movement"].value()
-                }
+        if isinstance(p["能力値"]["持ち球"][pitch_name], dict):
+            p["能力値"]["持ち球"][pitch_name]["control"] = self.pitch_spins["control"].value()
+            p["能力値"]["持ち球"][pitch_name]["stuff"] = self.pitch_spins["stuff"].value()
+            p["能力値"]["持ち球"][pitch_name]["movement"] = self.pitch_spins["movement"].value()
+        else:
+            # Convert old format to dict
+            p["能力値"]["持ち球"][pitch_name] = {
+                "control": self.pitch_spins["control"].value(),
+                "stuff": self.pitch_spins["stuff"].value(),
+                "movement": self.pitch_spins["movement"].value()
+            }
         
-        # Save to file - preserve original structure
-        from player_data_manager import PlayerDataManager
-        safe_name = self.current_team.replace(" ", "_").replace("/", "_")
-        filepath = os.path.join(PlayerDataManager.DATA_DIR, f"{safe_name}_player.json")
-        
-        # Read original file to preserve metadata
-        original_data = {}
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    original_data = json.load(f)
-            except:
-                pass
-        
-        original_data["選手一覧"] = self.players_data
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(original_data, f, ensure_ascii=False, indent=2)
-        
-        # Refresh list
-        self._on_team_changed(self.current_team)
+        # Check if data actually changed
+        current_data_dump = json.dumps(p, sort_keys=True)
+        if original_data_dump != current_data_dump:
+            # Mark team as modified only if content changed
+            self._modified_teams[self.current_team] = self.players_data
+            
+            # Update list item text to reflect changes
+            item = self.player_list.item(self.current_player_idx)
+            if item:
+                name = p.get("名前", "不明")
+                pos = p.get("ポジション", "不明")
+                num = p.get("背番号", 0)
+                item.setText(f"#{num} {name} ({pos})")
+    
+    def _save_current_player(self):
+        """Legacy method - now just saves to memory"""
+        self._save_current_player_to_memory()
     
     def save_all_players(self):
         """Save all player changes - called from main save"""
+        from player_data_manager import PlayerDataManager
+        
         # First update current player data from UI
-        self._save_current_player()
+        self._save_current_player_to_memory()
+        
+        # Save current team's data to modified list
+        if self.current_team and self.players_data:
+            self._modified_teams[self.current_team] = self.players_data
+        
+        # Save all modified teams to files
+        for team_name, players in self._modified_teams.items():
+            safe_name = team_name.replace(" ", "_").replace("/", "_")
+            filepath = os.path.join(PlayerDataManager.DATA_DIR, f"{safe_name}_player.json")
+            
+            # Read original file to preserve metadata
+            original_data = {}
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        original_data = json.load(f)
+                except:
+                    pass
+            
+            original_data["選手一覧"] = players
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(original_data, f, ensure_ascii=False, indent=2)
+        
+        # Clear modified tracking
+        self._modified_teams = {}
     
     def _update_player_count(self):
         """Update the player count label and button states"""
@@ -1494,16 +1742,11 @@ class PlayerEditorPanel(QWidget):
         
         self.player_count_label.setText(f"選手: {count} (支配下{shihaika_count}/育成{ikusei_count})")
         
-        # Update button states
-        self.add_player_btn.setEnabled(count < self.MAX_PLAYERS)
-        # Delete enabled only if above minimum for that position
-        can_delete = False
-        if self.current_player_idx >= 0 and self.current_player_idx < len(self.players_data):
-            current_pos = self.players_data[self.current_player_idx].get("ポジション", "")
-            if current_pos == "投手":
-                can_delete = pitcher_count > self.MIN_PITCHERS
-            else:
-                can_delete = batter_count > self.MIN_BATTERS
+        # Update button states - check shihaika count for add button
+        self.add_player_btn.setEnabled(shihaika_count < self.MAX_PLAYERS and self.current_team is not None)
+        
+        # Delete enabled when a player is selected (actual limit checks are in _delete_player)
+        can_delete = self.current_player_idx >= 0 and self.current_player_idx < len(self.players_data) and count > 0
         self.delete_player_btn.setEnabled(can_delete)
     
     def _add_player(self):
@@ -1511,68 +1754,130 @@ class PlayerEditorPanel(QWidget):
         if not self.current_team:
             return
         
-        if len(self.players_data) >= self.MAX_PLAYERS:
+        # Check shihaika (first-team) player limit - new players are added as shihaika by default
+        ikusei_count = sum(1 for p in self.players_data if p.get("育成選手", False))
+        shihaika_count = len(self.players_data) - ikusei_count
+        
+        if shihaika_count >= self.MAX_PLAYERS:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "制限", f"選手数が最大({self.MAX_PLAYERS}人)に達しています。")
+            QMessageBox.warning(self, "制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n育成選手として追加するか、既存の支配下選手を削除してください。")
+            return
+        
+        # Ask user to choose position
+        from PySide6.QtWidgets import QInputDialog
+        positions = ["投手", "捕手", "一塁手", "二塁手", "三塁手", "遊撃手", "左翼手", "中堅手", "右翼手"]
+        position, ok = QInputDialog.getItem(
+            self, "選手追加", "ポジションを選択してください:",
+            positions, 0, False
+        )
+        
+        if not ok:
             return
         
         # Create default player data
         new_number = self._get_next_available_number()
-        new_player = {
-            "名前": "新規選手",
-            "背番号": new_number,
-            "年齢": 20,
-            "年俸": 5000000,
-            "ポジション": "野手",
-            "育成選手": False,
-            "外国人": False,
-            "能力値": {
-                "ミート": 40, "パワー": 40, "走力": 40,
-                "肩力": 40, "守備": 40, "捕球": 40,
-                "選球眼": 40, "チャンス": 40, "ギャップ": 40,
-                "三振回避": 40, "盗塁": 40, "走塁": 40,
-                "バント": 40, "セーフティ": 40, "弾道": 2,
-                "対左投手": 40, "捕手リード": 40,
-                "球速": 140, "スタミナ": 40,
-                "対左打者": 40, "対ピンチ": 40,
-                "安定感": 40, "ゴロ傾向": 50, "クイック": 40
-            },
-            "共通能力": {
-                "ケガしにくさ": 50, "回復": 50,
-                "練習態度": 50, "野球脳": 50, "メンタル": 50
+        
+        if position == "投手":
+            new_player = {
+                "名前": "新規選手",
+                "背番号": new_number,
+                "年齢": 20,
+                "年俸": 5000000,
+                "ポジション": "投手",
+                "育成選手": False,
+                "外国人": False,
+                "能力値": {
+                    "球速": 140, "スタミナ": 40,
+                    "対左打者": 40, "対ピンチ": 40,
+                    "安定感": 40, "ゴロ傾向": 50, "クイック": 40,
+                    "持ち球": {
+                        "ストレート": {"control": 50, "stuff": 50, "movement": 50}
+                    }
+                },
+                "共通能力": {
+                    "ケガしにくさ": 50, "回復": 50,
+                    "練習態度": 50, "野球脳": 50, "メンタル": 50
+                },
+                "投手適性": {
+                    "先発": 3, "中継": 2, "抑え": 2
+                }
             }
-        }
+        else:
+            new_player = {
+                "名前": "新規選手",
+                "背番号": new_number,
+                "年齢": 20,
+                "年俸": 5000000,
+                "ポジション": "野手",
+                "育成選手": False,
+                "外国人": False,
+                "能力値": {
+                    "ミート": 40, "パワー": 40, "走力": 40,
+                    "肩力": 40, "捕球": 40,
+                    "選球眼": 40, "チャンス": 40, "ギャップ": 40,
+                    "三振回避": 40, "盗塁": 40, "走塁": 40,
+                    "バント": 40, "セーフティ": 40, "弾道": 2,
+                    "対左投手": 40, "捕手リード": 40,
+                    "守備適正": {position: 50}
+                },
+                "共通能力": {
+                    "ケガしにくさ": 50, "回復": 50,
+                    "練習態度": 50, "野球脳": 50, "メンタル": 50
+                }
+            }
         
         self.players_data.append(new_player)
-        self._save_players_to_file()
-        self._on_team_changed(self.current_team)
         
-        # Select the new player
+        # Mark team as modified (batch save)
+        self._modified_teams[self.current_team] = self.players_data
+        
+        # Refresh list and select the new player
+        self._refresh_player_list()
         self.player_list.setCurrentRow(len(self.players_data) - 1)
     
     def _delete_player(self):
         """Delete the currently selected player"""
-        if not self.current_team or self.current_player_idx < 0:
+        if not self.current_team:
             return
-        
+            
+        # Use current_player_idx directly to ensure we delete exactly what is shown in the editor
+        idx = self.current_player_idx
+
+        if idx is None or idx < 0 or idx >= len(self.players_data):
+            return
+            
         # Check position-based limits
         from PySide6.QtWidgets import QMessageBox
-        current_player = self.players_data[self.current_player_idx]
+        current_player = self.players_data[idx]
         current_pos = current_player.get("ポジション", "")
+        current_ikusei = current_player.get("育成選手", False)
         
-        pitcher_count = sum(1 for p in self.players_data if p.get("ポジション") == "投手")
-        batter_count = len(self.players_data) - pitcher_count
+        # Calculations
+        shihaika_pitchers = sum(1 for p in self.players_data if p.get("ポジション") == "投手" and not p.get("育成選手", False))
+        shihaika_batters = sum(1 for p in self.players_data if p.get("ポジション") != "投手" and not p.get("育成選手", False))
+        total_pitchers = sum(1 for p in self.players_data if p.get("ポジション") == "投手")
+        total_batters = sum(1 for p in self.players_data if p.get("ポジション") != "投手")
         
-        if current_pos == "投手" and pitcher_count <= self.MIN_PITCHERS:
-            QMessageBox.warning(self, "制限", f"投手が最低({self.MIN_PITCHERS}人)に達しています。")
+        # If deleting a shihaika player, check lower limits
+        if not current_ikusei:
+            if current_pos == "投手" and shihaika_pitchers <= self.MIN_PITCHERS:
+                QMessageBox.warning(self, "制限", f"支配下投手が最低({self.MIN_PITCHERS}人)に達しています。")
+                return
+            elif current_pos != "投手" and shihaika_batters <= self.MIN_BATTERS:
+                QMessageBox.warning(self, "制限", f"支配下野手が最低({self.MIN_BATTERS}人)に達しています。")
+                return
+                
+        # Check total limits regardless of status
+        if current_pos == "投手" and total_pitchers <= self.MIN_TOTAL_PITCHERS:
+            QMessageBox.warning(self, "制限", f"総投手数(育成含む)が最低({self.MIN_TOTAL_PITCHERS}人)に達しています。")
             return
-        elif current_pos != "投手" and batter_count <= self.MIN_BATTERS:
-            QMessageBox.warning(self, "制限", f"野手が最低({self.MIN_BATTERS}人)に達しています。")
+        elif current_pos != "投手" and total_batters <= self.MIN_TOTAL_BATTERS:
+            QMessageBox.warning(self, "制限", f"総野手数(育成含む)が最低({self.MIN_TOTAL_BATTERS}人)に達しています。")
             return
         
         # Confirmation dialog
         from PySide6.QtWidgets import QMessageBox
-        player_name = self.players_data[self.current_player_idx].get("名前", "不明")
+        player_name = self.players_data[idx].get("名前", "不明")
         result = QMessageBox.question(
             self, "選手削除",
             f"「{player_name}」を削除しますか？\nこの操作は取り消せません。",
@@ -1582,14 +1887,29 @@ class PlayerEditorPanel(QWidget):
         if result != QMessageBox.Yes:
             return
         
-        del self.players_data[self.current_player_idx]
-        self._save_players_to_file()
-        self._on_team_changed(self.current_team)
+        # Use list comprehension to strictly remove the target index
+        # This ensures no side effects from 'del' operations
+        self.players_data = [p for i, p in enumerate(self.players_data) if i != idx]
         
-        # Select previous player or first one
-        new_idx = min(self.current_player_idx, len(self.players_data) - 1)
-        if new_idx >= 0:
-            self.player_list.setCurrentRow(new_idx)
+        # CRITICAL FIX: Prevent overwriting the next player with old UI data
+        # When _refresh_player_list or setCurrentRow triggers _on_player_selected,
+        # it calls _save_current_player_to_memory. If current_player_idx is not reset,
+        # it overwrites the new player at this index with the old data remaining in the UI.
+        self.current_player_idx = -1
+        
+        # Mark team as modified
+        self._modified_teams[self.current_team] = self.players_data
+        self._refresh_player_list()
+        
+        # Restore selection behavior (previous logic)
+        # Select the player at the same index (which is now the next player) or the last one
+        updated_idx = idx
+        if updated_idx >= len(self.players_data):
+            updated_idx = len(self.players_data) - 1
+        
+        self.player_list.setCurrentRow(updated_idx)
+        
+
     
     def _get_next_available_number(self) -> int:
         """Get the next available uniform number"""
@@ -1599,6 +1919,82 @@ class PlayerEditorPanel(QWidget):
                 return num
         return 99
     
+    def _refresh_player_list(self):
+        """Refresh the player list display without reloading from file"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QListWidgetItem
+        
+        self.player_list.clear()
+        for i, p in enumerate(self.players_data):
+            name = p.get("名前", "不明")
+            pos = p.get("ポジション", "不明")
+            num = p.get("背番号", 0)
+            item = QListWidgetItem(f"#{num} {name} ({pos})")
+            item.setData(Qt.UserRole, i)
+            self.player_list.addItem(item)
+        self._update_player_count()
+    
+
+        
+    def _add_position(self):
+        """Add a defensive position"""
+        if self.current_player_idx < 0: return
+        pos = self.pos_combo.currentText()
+        
+        # Check if already exists
+        items = [self.pos_list.item(i).text().split(":")[0].strip() for i in range(self.pos_list.count())]
+        if pos in items:
+            return
+            
+        # Check max limit (3)
+        if self.pos_list.count() >= 3:
+             from PySide6.QtWidgets import QMessageBox
+             QMessageBox.warning(self, "エラー", "守備位置は最大3つまでです。")
+             return
+             
+        self.pos_list.addItem(f"{pos}: 50")
+        self.pos_list.setCurrentRow(self.pos_list.count() - 1)
+
+    def _delete_position(self):
+        """Delete selected position"""
+        if self.current_player_idx < 0: return
+        row = self.pos_list.currentRow()
+        if row < 0:
+            return
+            
+        # Check min limit (1)
+        if self.pos_list.count() <= 1:
+             from PySide6.QtWidgets import QMessageBox
+             QMessageBox.warning(self, "エラー", "守備位置は最低1つ必要です。")
+             return
+             
+        self.pos_list.takeItem(row)
+
+    def _on_position_selected(self, current, previous):
+        if not current:
+            self.pos_val_spin.setEnabled(False)
+            return
+            
+        self.pos_val_spin.setEnabled(True)
+        text = current.text()
+        try:
+            if ":" in text:
+                val = int(text.split(":")[1].strip())
+                self.pos_val_spin.blockSignals(True)
+                self.pos_val_spin.setValue(val)
+                self.pos_val_spin.blockSignals(False)
+        except:
+            pass
+            
+    def _on_position_value_changed(self, val):
+        item = self.pos_list.currentItem()
+        if not item:
+            return
+            
+        if ":" in item.text():
+            pos_name = item.text().split(":")[0].strip()
+            item.setText(f"{pos_name}: {val}")
+
     def _save_players_to_file(self):
         """Save current players data to file"""
         if not self.current_team:
@@ -1631,6 +2027,7 @@ class StaffEditorPanel(QWidget):
         self.current_team = None
         self.staff_data = []
         self.current_staff_idx = -1
+        self._modified_teams = {}  # Track modified staff data by team
         self._setup_ui()
     
     def _setup_ui(self):
@@ -1735,50 +2132,93 @@ class StaffEditorPanel(QWidget):
     
     def load_teams(self):
         from team_data_manager import TeamDataManager
+        
+        # Reset state before loading
+        self.current_team = None
+        self.current_staff_idx = -1
+        self.staff_data = []
+        self._modified_teams = {}
+        self.staff_list.clear()
+        
+        # Clear editor fields
+        self._clear_editor_fields()
+        
+        # Block signals to prevent _on_team_changed from being called during load
+        self.team_combo.blockSignals(True)
         self.team_combo.clear()
+        
         data_dir = TeamDataManager.DATA_DIR
         if os.path.exists(data_dir):
             for filename in os.listdir(data_dir):
                 if filename.endswith("_team.json"):
                     team_name = filename.replace("_team.json", "").replace("_", " ")
                     self.team_combo.addItem(team_name)
+        
+        self.team_combo.blockSignals(False)
+        
+        # Manually trigger load of first team if available
+        if self.team_combo.count() > 0:
+            self._on_team_changed(self.team_combo.currentText())
+    
+    def _clear_editor_fields(self):
+        """Clear all editor UI fields"""
+        self.name_edit.clear()
+        self.role_combo.setCurrentIndex(0)
+        self.ability_spin.setValue(50)
     
     def _on_team_changed(self, team_name: str):
+        # Save current staff to memory before switching teams
+        self._save_current_staff_to_memory()
+        
+        # Save current team's modified data before switching
+        if self.current_team and self.staff_data:
+            self._modified_teams[self.current_team] = self.staff_data[:]
+        
         self.current_team = team_name
         self.staff_list.clear()
         self.staff_data = []
+        self.current_staff_idx = -1
         
         if not team_name:
             return
         
-        # Load staff data from staff_data folder - use same naming as staff_page.py
-        from UI.pages.staff_page import get_staff_data_path
-        filepath = get_staff_data_path(team_name)
-        
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Staff data uses staff_slots array
-                staff_slots = data.get("staff_slots", [])
-                self.staff_data = []
-                
-                for i, slot in enumerate(staff_slots):
-                    if slot is not None:
-                        staff_entry = {
-                            "index": i,
-                            "名前": slot.get("name", "不明"),
-                            "役職": slot.get("role", "不明"),
-                            "能力": slot.get("ability", 50),
-                            "slot_data": slot  # Keep original data
-                        }
-                        self.staff_data.append(staff_entry)
-                        self.staff_list.addItem(f"{staff_entry['名前']} ({staff_entry['役職']})")
-            except Exception:
-                pass
+        # Check if we have modified data for this team in memory
+        if team_name in self._modified_teams:
+            self.staff_data = self._modified_teams[team_name][:]
+            for s in self.staff_data:
+                self.staff_list.addItem(f"{s['名前']} ({s['役職']})")
+        else:
+            # Load staff data from staff_data folder - use same naming as staff_page.py
+            from UI.pages.staff_page import get_staff_data_path
+            filepath = get_staff_data_path(team_name)
+            
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Staff data uses staff_slots array
+                    staff_slots = data.get("staff_slots", [])
+                    self.staff_data = []
+                    
+                    for i, slot in enumerate(staff_slots):
+                        if slot is not None:
+                            staff_entry = {
+                                "index": i,
+                                "名前": slot.get("name", "不明"),
+                                "役職": slot.get("role", "不明"),
+                                "能力": slot.get("ability", 50),
+                                "slot_data": slot  # Keep original data
+                            }
+                            self.staff_data.append(staff_entry)
+                            self.staff_list.addItem(f"{staff_entry['名前']} ({staff_entry['役職']})")
+                except Exception:
+                    pass
     
     def _on_staff_selected(self, row: int):
+        # Save current staff to memory before switching
+        self._save_current_staff_to_memory()
+        
         if row < 0 or row >= len(self.staff_data):
             return
         
@@ -1792,52 +2232,80 @@ class StaffEditorPanel(QWidget):
             self.role_combo.setCurrentIndex(idx)
         self.ability_spin.setValue(s.get("能力", 50))
     
-    def _save_current_staff(self):
+    def _save_current_staff_to_memory(self):
+        """Save current staff changes to memory (not to file)"""
         if self.current_staff_idx < 0 or not self.current_team:
             return
         
+        if self.current_staff_idx >= len(self.staff_data):
+            return
+        
         s = self.staff_data[self.current_staff_idx]
+        
+        # Snapshot for change detection
+        import json
+        original_dump = json.dumps(s, sort_keys=True)
+        
         s["名前"] = self.name_edit.text()
         s["役職"] = self.role_combo.currentText()
         s["能力"] = self.ability_spin.value()
         
-        # Update slot_data
+        # Update slot_data inside
         if "slot_data" in s:
             s["slot_data"]["name"] = s["名前"]
+            s["slot_data"]["role"] = s["役職"]
             s["slot_data"]["ability"] = s["能力"]
         
-        # Reload and update file
-        from UI.pages.staff_page import get_staff_data_path
-        filepath = get_staff_data_path(self.current_team)
+        # Check if changed
+        new_dump = json.dumps(s, sort_keys=True)
         
-        # Read original file
-        original_data = {}
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    original_data = json.load(f)
-            except:
-                pass
-        
-        # Update staff_slots with modified data
-        staff_slots = original_data.get("staff_slots", [])
-        for entry in self.staff_data:
-            idx = entry.get("index", -1)
-            if 0 <= idx < len(staff_slots) and staff_slots[idx] is not None:
-                staff_slots[idx]["name"] = entry["名前"]
-                staff_slots[idx]["ability"] = entry["能力"]
-        
-        original_data["staff_slots"] = staff_slots
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(original_data, f, ensure_ascii=False, indent=2)
-        
-        self._on_team_changed(self.current_team)
+        if original_dump != new_dump:
+            # Mark team as modified
+            self._modified_teams[self.current_team] = self.staff_data
+    
+    def _save_current_staff(self):
+        """Legacy method - now just saves to memory"""
+        self._save_current_staff_to_memory()
     
     def save_all_staff(self):
         """Save all staff changes - called from main save"""
+        from UI.pages.staff_page import get_staff_data_path
+        
         # First update current staff data from UI
-        self._save_current_staff()
+        self._save_current_staff_to_memory()
+        
+        # Save current team's data to modified list
+        if self.current_team and self.staff_data:
+            self._modified_teams[self.current_team] = self.staff_data
+        
+        # Save all modified teams to files
+        for team_name, staff_list in self._modified_teams.items():
+            filepath = get_staff_data_path(team_name)
+            
+            # Read original file
+            original_data = {}
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        original_data = json.load(f)
+                except:
+                    pass
+            
+            # Update staff_slots with modified data
+            staff_slots = original_data.get("staff_slots", [])
+            for entry in staff_list:
+                idx = entry.get("index", -1)
+                if 0 <= idx < len(staff_slots) and staff_slots[idx] is not None:
+                    staff_slots[idx]["name"] = entry["名前"]
+                    staff_slots[idx]["ability"] = entry["能力"]
+            
+            original_data["staff_slots"] = staff_slots
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(original_data, f, ensure_ascii=False, indent=2)
+        
+        # Clear modified tracking
+        self._modified_teams = {}
 
 class NameEditorPanel(QWidget):
     """Editor for league and postseason names"""
@@ -2123,7 +2591,7 @@ class EditScreen(QWidget):
                 color: {self.theme.text_primary};
             }}
         """)
-        self.back_btn.clicked.connect(self.back_clicked.emit)
+        self.back_btn.clicked.connect(self._on_back)
         sidebar_layout.addWidget(self.back_btn)
         
         layout.addWidget(sidebar)
@@ -2155,10 +2623,51 @@ class EditScreen(QWidget):
     
     def load_data(self):
         """Load all data when entering edit mode"""
+        # Clear any previous modified data tracking
+        self._clear_modified_data()
+        
         self.team_panel.load_teams()
         self.player_panel.load_teams()
         self.staff_panel.load_teams()
         self.name_panel.load_data(self.game_state)
+    
+    def _on_back(self):
+        """Handle back button click with confirmation dialog"""
+        # Trigger change detection for current panels before checking
+        self.team_panel._save_current_team_to_memory()
+        self.player_panel._save_current_player_to_memory()
+        self.staff_panel._save_current_staff_to_memory()
+        
+        if self._has_unsaved_changes():
+            reply = QMessageBox.question(
+                self, "確認",
+                "未保存の変更があります。\n保存せずに戻りますか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        
+        # Clear modified data and return
+        self._clear_modified_data()
+        self.back_clicked.emit()
+    
+    def _has_unsaved_changes(self) -> bool:
+        """Check if there are any unsaved changes"""
+        # Only check if any panel has modified data without triggering saves
+        has_team_changes = bool(self.team_panel._modified_teams)
+        has_player_changes = bool(self.player_panel._modified_teams)
+        has_staff_changes = bool(self.staff_panel._modified_teams)
+        
+        return has_team_changes or has_player_changes or has_staff_changes
+    
+    def _clear_modified_data(self):
+        """Clear all unsaved changes from memory"""
+        self.team_panel._modified_teams = set()
+        if hasattr(self.team_panel, '_pending_renames'):
+            self.team_panel._pending_renames = {}
+        self.player_panel._modified_teams = {}
+        self.staff_panel._modified_teams = {}
     
     def _on_save(self):
         """Save all changes to data files"""
@@ -2174,7 +2683,10 @@ class EditScreen(QWidget):
         # Save name data
         self.name_panel.save_data()
         
-        # Reload all data
+        # Clear all modified data tracking after save
+        self._clear_modified_data()
+        
+        # Reload all data from files (with cleared tracking)
         self.load_data()
         
         # Reload game_state teams if available
