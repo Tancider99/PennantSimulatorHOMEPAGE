@@ -102,14 +102,21 @@ class GameController(QMainWindow):
         from UI.screens.loading_screen import LoadingScreen
         from UI.screens.title_screen import TitleScreen
         from UI.screens.team_select_screen import TeamSelectScreen
+        from UI.widgets.notifications import NotificationManager
 
         self.LoadingScreen = LoadingScreen
         self.TitleScreen = TitleScreen
         self.TeamSelectScreen = TeamSelectScreen
+        
+        self.notification_manager = NotificationManager(self)
 
         self._setup_window()
         self._setup_screens()
         self._start_loading()
+
+    def show_notification(self, title: str, message: str, type: str = "info"):
+        """Show a non-blocking toast notification"""
+        self.notification_manager.show_toast(title, message, type)
 
     def _setup_window(self):
         """Configure the main window"""

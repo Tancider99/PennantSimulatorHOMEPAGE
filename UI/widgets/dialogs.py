@@ -5,7 +5,7 @@ Custom Modal Dialogs and Popups
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QWidget, QFrame, QGraphicsDropShadowEffect, QMessageBox,
+    QWidget, QFrame, QGraphicsDropShadowEffect,
     QLineEdit, QComboBox, QSpinBox, QTextEdit, QListWidget, 
     QListWidgetItem, QAbstractItemView
 )

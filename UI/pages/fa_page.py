@@ -825,12 +825,14 @@ class FAPage(QWidget):
             self._update_player_detail()
             self.sign_button.setEnabled(False)
 
-            QMessageBox.information(
-                self, "契約成立",
-                f"{p['name']}と{years}年¥{salary:,}万で契約しました！"
+            self.window().show_notification(
+                "契約成立",
+                f"{p['name']}と{years}年¥{salary:,}万で契約しました！",
+                type="success"
             )
         else:
-            QMessageBox.warning(
-                self, "契約失敗",
-                f"{p['name']}はオファーを断りました。\nより良い条件を提示してください。"
+            self.window().show_notification(
+                "契約失敗",
+                f"{p['name']}はオファーを断りました。\nより良い条件を提示してください。",
+                type="warning"
             )

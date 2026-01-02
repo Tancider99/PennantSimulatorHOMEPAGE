@@ -1034,7 +1034,7 @@ class HomePage(ContentPanel):
             # UIを更新
             self.set_game_state(self.game_state)
             
-            QMessageBox.information(self, "オフシーズン開始", "オフシーズンを開始しました。\n「NEXT: 契約更改」ボタンを押してください。")
+            self.window().show_notification("オフシーズン開始", "オフシーズンを開始しました。\n「NEXT: 契約更改」ボタンを押してください。", type="success")
 
     def set_game_state(self, game_state):
         """Update page with game state"""

@@ -465,11 +465,11 @@ class AcquisitionsPage(QWidget):
                     self.game_state.free_agents.append(player)
                     player.team_level = None
                 
-                QMessageBox.information(self, "自由契約", f"{player.name}を自由契約にしました。")
+                self.window().show_notification("自由契約", f"{player.name}を自由契約にしました。", type="info")
                 self.refresh()
                 
             except ValueError:
-                QMessageBox.warning(self, "エラー", "選手の削除に失敗しました。")
+                self.window().show_notification("エラー", "選手の削除に失敗しました。", type="error")
 
     def _decrement_indices(self, idx_list: list, removed_idx: int):
         """Helper to shift indices after removal"""
@@ -482,7 +482,7 @@ class AcquisitionsPage(QWidget):
         
         shihaika_count = len([p for p in self.current_team.players if not p.is_developmental])
         if shihaika_count >= self.MAX_SHIHAIKA:
-             QMessageBox.warning(self, "登録枠超過", f"支配下登録枠({self.MAX_SHIHAIKA}人)が一杯です。")
+             self.window().show_notification("登録枠超過", f"支配下登録枠({self.MAX_SHIHAIKA}人)が一杯です。", type="warning")
              return
 
         reply = QMessageBox.question(self, "登録確認", 
@@ -503,6 +503,6 @@ class AcquisitionsPage(QWidget):
             if self.game_state:
                 self.game_state.log_news("TRANSACTION", f"{player.name}選手を支配下登録しました（背番号:{player.uniform_number}）", self.current_team.name)
 
-            QMessageBox.information(self, "登録完了", f"{player.name}を支配下登録しました。\n新背番号: {player.uniform_number}")
+            self.window().show_notification("登録完了", f"{player.name}を支配下登録しました。\n新背番号: {player.uniform_number}", type="success")
             self.refresh()
 

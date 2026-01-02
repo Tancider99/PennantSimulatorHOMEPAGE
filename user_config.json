@@ -1,8 +1,15 @@
 {
-  "user_id": "fe0243ff-184d-4021-9bc7-c962a9c822be",
-  "daily_stats": {
-    "date": "2026-01-02",
-    "publish_count": 0,
-    "load_count": 0
-  }
+    "user_id": "fe0243ff-184d-4021-9bc7-c962a9c822be",
+    "daily_stats": {
+        "date": "2026-01-03",
+        "publish_count": 0,
+        "load_count": 0
+    },
+    "league_names": {
+        "North League": "North League",
+        "South League": "South League",
+        "Japan Series": "グランドチャンピオンシップ",
+        "CS First": "ファーストステージ",
+        "CS Final": "ファイナルステージ"
+    }
 }

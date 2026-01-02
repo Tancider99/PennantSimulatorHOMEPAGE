@@ -1199,7 +1199,7 @@ class DraftScoutingPage(QWidget):
                 pass  # Progress bar deleted
                 
         except RuntimeError as e:
-            print(f"[ERROR] _update_detail_panel RuntimeError: {e}")
+            pass
 
     def _update_scout_combo(self):
         self.scout_combo.clear()
@@ -1218,7 +1218,7 @@ class DraftScoutingPage(QWidget):
 
         scout_data = self.scout_combo.currentData()
         if not scout_data or not scout_data.is_available:
-            QMessageBox.warning(self, "エラー", "利用可能なスカウトを選択してください。")
+            self.window().show_notification("エラー", "利用可能なスカウトを選択してください。", type="warning")
             return
 
         scout_data.is_available = False
@@ -1228,8 +1228,8 @@ class DraftScoutingPage(QWidget):
         self.selected_prospect.scouting_status = ScoutingStatus.IN_PROGRESS
         self.selected_prospect.assigned_scout = scout_data
 
-        QMessageBox.information(self, "派遣完了",
-            f"{scout_data.name}を{self.selected_prospect.name}の調査に派遣しました。")
+        self.window().show_notification("派遣完了",
+            f"{scout_data.name}を{self.selected_prospect.name}の調査に派遣しました。", type="success")
 
         self._update_scout_combo()
         self._update_scout_status()
@@ -1248,7 +1248,7 @@ class DraftScoutingPage(QWidget):
         self.selected_prospect.scouting_status = ScoutingStatus.NOT_STARTED if self.selected_prospect.scout_level < 100 else ScoutingStatus.COMPLETED
         self.selected_prospect.assigned_scout = None
 
-        QMessageBox.information(self, "帰還完了", f"{scout.name}が帰還しました。")
+        self.window().show_notification("帰還完了", f"{scout.name}が帰還しました。", type="success")
 
         self._update_scout_combo()
         self._update_scout_status()
@@ -1933,7 +1933,7 @@ class ForeignPlayerScoutingPage(QWidget):
 
         scout_data = self.scout_combo.currentData()
         if not scout_data or not scout_data.is_available:
-            QMessageBox.warning(self, "エラー", "利用可能なスカウトを選択してください。")
+            self.window().show_notification("エラー", "利用可能なスカウトを選択してください。", type="warning")
             return
 
         scout_data.is_available = False
@@ -1943,8 +1943,8 @@ class ForeignPlayerScoutingPage(QWidget):
         self.selected_candidate.scouting_status = ScoutingStatus.IN_PROGRESS
         self.selected_candidate.assigned_scout = scout_data
 
-        QMessageBox.information(self, "派遣完了",
-            f"{scout_data.name}を{self.selected_candidate.name}の調査に派遣しました。")
+        self.window().show_notification("派遣完了",
+            f"{scout_data.name}を{self.selected_candidate.name}の調査に派遣しました。", type="success")
 
         self._update_scout_combo()
         self._update_scout_status()
@@ -1963,7 +1963,7 @@ class ForeignPlayerScoutingPage(QWidget):
         self.selected_candidate.scouting_status = ScoutingStatus.NOT_STARTED
         self.selected_candidate.assigned_scout = None
 
-        QMessageBox.information(self, "帰還完了", f"{scout.name}が帰還しました。")
+        self.window().show_notification("帰還完了", f"{scout.name}が帰還しました。", type="success")
 
         self._update_scout_combo()
         self._update_scout_status()
@@ -1980,13 +1980,13 @@ class ForeignPlayerScoutingPage(QWidget):
             team = self.game_state.player_team
             shihaika_count = len([p for p in team.players if not p.is_developmental])
             if shihaika_count >= 70:
-                QMessageBox.warning(self, "支配下枚いっぱい", 
-                    "支配下登録選手が70人に達しているため、\n新たな外国人選手との交渉を開始できません。\n先に選手を解雇してください。")
+                self.window().show_notification("支配下枚数上限", 
+                    "支配下登録選手が70人に達しているため、\n新たな外国人選手との交渉を開始できません。\n先に選手を解雇してください。", type="error")
                 return
 
         # Check negotiation limit
         if c.id in self.negotiated_ids:
-            QMessageBox.warning(self, "交渉不可", "この選手とは本日すでに交渉済みです。")
+            self.window().show_notification("交渉不可", "この選手とは本日すでに交渉済みです。", type="warning")
             return
 
         # ★追加: 交渉画面(ダイアログ)を開く（育成タブかどうかを渡す）
@@ -3050,7 +3050,7 @@ class TradePage(QWidget):
             return
         
         if len(offer_list) >= self.MAX_TRADE_PLAYERS:
-            QMessageBox.warning(self, "上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。")
+            self.window().show_notification("上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。", type="warning")
             return
         
         offer_list.append(player_idx)
@@ -3080,7 +3080,7 @@ class TradePage(QWidget):
             return
 
         if len(offer_list) >= self.MAX_TRADE_PLAYERS:
-            QMessageBox.warning(self, "上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。")
+            self.window().show_notification("上限", f"一度にトレードできる選手は{self.MAX_TRADE_PLAYERS}人までです。", type="warning")
             return
 
         offer_list.append(player_idx)
@@ -3249,10 +3249,10 @@ class TradePage(QWidget):
         net_change = len(self.requested_players) - len(self.offered_players)
         
         if current_shihaika + net_change > self.MAX_SHIHAIKA:
-            QMessageBox.warning(self, "登録枠超過", 
+            self.window().show_notification("登録枠超過", 
                 f"このトレードが成立すると支配下登録が{self.MAX_SHIHAIKA}人を超えます。\n"
                 f"現在: {current_shihaika}人 + 獲得{len(self.requested_players)}人 - 放出{len(self.offered_players)}人 = {current_shihaika + net_change}人\n"
-                "先に選手を自由契約にするか、放出選手を追加してください。")
+                "先に選手を自由契約にするか、放出選手を追加してください。", type="error")
             return
 
         # 成功率計算
@@ -3291,8 +3291,8 @@ class TradePage(QWidget):
         
         self.game_state.pending_trades.append(pending_trade)
         
-        QMessageBox.information(self, "提案完了", 
-            f"トレードを申し込みました。\n相手球団の回答まで約5日かかります。")
+        self.window().show_notification("提案完了", 
+            f"トレードを申し込みました。\n相手球団の回答まで約5日かかります。", type="success")
             
         self._check_pending_trade()
         self._clear_trade() # UI上の選択状態はクリア（あるいは残してもいいが、混乱避けるためクリア推奨だがロックされているのでクリアしないほうがいいかも？今回は_check_pending_tradeでロックするのでクリアはしない、またはロック状態で表示維持）
@@ -3419,9 +3419,9 @@ class ContractsPage(QWidget):
                 # 新外国人調査(1)とトレード(2)の制限期間チェック
                 if index in [1, 2] and self._is_foreign_tab_closed():
                     label = "新外国人調査" if index == 1 else "トレード"
-                    QMessageBox.warning(self, "期間外", 
+                    self.window().show_notification("期間外", 
                         f"{label}はシーズン終盤・ポストシーズン期間中は行えません。\n"
-                        "オフシーズン（11月以降の全日程終了後）から再開可能です。")
+                        "オフシーズン（11月以降の全日程終了後）から再開可能です。", type="warning")
                     btn.setChecked(False)
                     return
                 

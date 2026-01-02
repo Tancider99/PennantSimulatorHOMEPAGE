@@ -761,7 +761,7 @@ class TrainingPage(ContentPanel):
         available = get_available_pitches(player)
         
         if not available:
-            QMessageBox.information(self, "新球種習得", "習得可能な球種がありません。")
+            self.window().show_notification("新球種習得", "習得可能な球種がありません。", type="info")
             return
         
         pitch, ok = QInputDialog.getItem(
@@ -776,12 +776,12 @@ class TrainingPage(ContentPanel):
         if ok and pitch:
             success = learn_specific_pitch(player, pitch)
             if success:
-                QMessageBox.information(self, "新球種習得", f"{pitch}を習得しました！")
+                self.window().show_notification("新球種習得", f"{pitch}を習得しました！", type="success")
                 self.training_saved.emit()
                 self._refresh_tables()
                 self._update_detail_view()
             else:
-                QMessageBox.warning(self, "エラー", "球種の習得に失敗しました。")
+                self.window().show_notification("エラー", "球種の習得に失敗しました。", type="error")
 
     def _on_auto_training_clicked(self):
         """お任せボタンクリック時 - 練習メニューをNone(自動)に設定"""

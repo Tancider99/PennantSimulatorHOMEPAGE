@@ -613,7 +613,7 @@ class FarmSwapPage(QWidget):
                     if item:
                         item.setData(ROLE_PLAYER_IDX, p_idx)
             except Exception as e:
-                print(f"Error filling table row {row}: {e}")
+                pass
                 continue
 
     def _create_item(self, value, align=Qt.AlignCenter, rank_color=False, pos_badge=None, is_star=False, sort_val=None, text_color=None):

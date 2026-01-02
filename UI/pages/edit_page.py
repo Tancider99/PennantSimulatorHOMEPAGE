@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QPushButton, QFrame, QListWidget,
     QLineEdit, QComboBox, QGridLayout,
-    QMessageBox, QScrollArea
+    QGridLayout, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QColor, QPolygon
@@ -677,7 +677,7 @@ class EditPage(QWidget):
         if self.current_staff:
             self.current_staff.ability = self.staff_ability_spin.value()
         
-        QMessageBox.information(self, "保存", "データを更新しました")
+        self.window().show_notification("保存", "データを更新しました", type="success")
     
     def refresh(self):
         self._load_teams()

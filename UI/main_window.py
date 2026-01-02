@@ -28,6 +28,8 @@ from models import GameStatus
 from UI.pages.game_result_page import GameResultPage
 
 
+from UI.widgets.notifications import NotificationManager
+
 class MainWindow(QMainWindow):
     """Main application window with custom layout and resizable features"""
 
@@ -54,6 +56,9 @@ class MainWindow(QMainWindow):
         
         # オートセーブカウンター
         self.games_since_save = 0 
+        
+        # Initialize Notification NotificationManager
+        self.notification_manager = NotificationManager(self)
 
         self._setup_window()
         self._setup_ui()
@@ -66,6 +71,10 @@ class MainWindow(QMainWindow):
         
         # Disable default status bar (Inner Window)
         self.statusBar().hide()
+
+    def show_notification(self, title: str, message: str, type: str = "info"):
+        """Show a non-blocking toast notification"""
+        self.notification_manager.show_toast(title, message, type)
 
     def _setup_window(self):
         """Configure main window properties"""
@@ -387,10 +396,10 @@ class MainWindow(QMainWindow):
         valid_rotation = len([x for x in player_team.rotation if x != -1])
         
         if valid_starters < 9:
-            QMessageBox.critical(self, "エラー", f"チーム {player_team.name} のスタメンが9人未満です。\nオーダー画面で設定してください。")
+            self.show_notification("エラー", f"チーム {player_team.name} のスタメンが9人未満です。\nオーダー画面で設定してください。", type="error")
             return
         if valid_rotation == 0:
-            QMessageBox.critical(self, "エラー", f"チーム {player_team.name} の先発投手が設定されていません。\nオーダー画面で設定してください。")
+            self.show_notification("エラー", f"チーム {player_team.name} の先発投手が設定されていません。\nオーダー画面で設定してください。", type="error")
             return
 
         # 【修正】ランダムではなく、その日のスケジュールから対戦相手を取得する
@@ -424,7 +433,7 @@ class MainWindow(QMainWindow):
                 
                 self.show_pre_game(home_team, away_team) # 修正: 直接試合開始ではなくPreGameへ
             else:
-                QMessageBox.warning(self, "エラー", "対戦チームデータが見つかりませんでした。")
+                self.show_notification("エラー", "対戦チームデータが見つかりませんでした。", type="error")
         else:
             # 試合がない場合
             # ★ ポストシーズン終了チェック → オフシーズン開始
@@ -459,7 +468,7 @@ class MainWindow(QMainWindow):
             # ステータスバー更新
             self._on_page_changed(0)
             
-            QMessageBox.information(self, "日程進行", "本日は試合がありませんでした。次の日へ進みます。")
+            self.show_notification("日程進行", "本日は試合がありませんでした。次の日へ進みます。", type="info")
     
     def _handle_offseason_advance(self):
         """オフシーズンイベントページに移動"""
@@ -528,7 +537,7 @@ class MainWindow(QMainWindow):
     
     def _on_contract_renewal_complete(self):
         """契約更改完了"""
-        QMessageBox.information(self, "契約更改完了", "契約更改が完了しました。")
+        self.show_notification("契約更改完了", "契約更改が完了しました。", type="success")
         self._advance_to_next_offseason_event()
     
     def _advance_to_next_offseason_event(self):
@@ -550,10 +559,10 @@ class MainWindow(QMainWindow):
     
     def _complete_offseason(self):
         """オフシーズン完了処理"""
-        QMessageBox.information(
-            self,
+        self.show_notification(
             "新シーズン開幕",
-            f"{self.game_state.current_year}年シーズンが開幕しました！"
+            f"{self.game_state.current_year}年シーズンが開幕しました！",
+            type="success"
         )
         self.sidebar.show()
         self._navigate_to("home")
@@ -581,10 +590,10 @@ class MainWindow(QMainWindow):
         if ps and hasattr(ps, 'is_postseason_complete') and ps.is_postseason_complete():
             # ポストシーズン終了 → オフシーズン開始
             champion = ps.get_japan_champion() if hasattr(ps, 'get_japan_champion') else "不明"
-            QMessageBox.information(
-                self, 
+            self.show_notification(
                 "シーズン終了",
-                f"{champion}が日本一に輝きました！\n\nオフシーズンを開始します。"
+                f"{champion}が日本一に輝きました！\n\nオフシーズンを開始します。",
+                type="success"
             )
             self.game_state.mark_postseason_complete()
             
@@ -1416,7 +1425,7 @@ class MainWindow(QMainWindow):
         engine = self.game_state.simulate_allstar_for_date(current_date_str)
         
         if not engine:
-            QMessageBox.information(self, "Info", "オールスター試合がありません。")
+            self.show_notification("Info", "オールスター試合がありません。", type="info")
             return
         
         # Determine game number for result display
@@ -1509,10 +1518,10 @@ class MainWindow(QMainWindow):
                          away_team = t_north if away_name == "ALL-NORTH" else t_south
                          if home_team == away_team: away_team = t_south if home_team == t_north else t_north
                      else:
-                         QMessageBox.warning(self, "エラー", "オールスターデータの生成に失敗しました。")
+                         self.show_notification("エラー", "オールスターデータの生成に失敗しました。", type="error")
                          return
                  except Exception as e:
-                     QMessageBox.warning(self, "エラー", f"オールスター生成エラー: {e}")
+                     self.show_notification("エラー", f"オールスター生成エラー: {e}", type="error")
                      return
         else:
              home_team = self.game_state.get_team(home_name)

@@ -1107,10 +1107,11 @@ class ContractRenewalPage(QWidget):
             success_rate = self._calculate_negotiation_success(salary, adjusted_desired)
             
             if success_rate <= 0:
-                QMessageBox.warning(self, "交渉決裂", 
+                self.window().show_notification("交渉決裂", 
                     f"{player.name}は提示年俸が低すぎると拒否しました。\n"
                     f"希望年俸の75%以上を提示してください。\n"
-                    f"希望: {format_salary(adjusted_desired)} ({years}年契約時)")
+                    f"希望: {format_salary(adjusted_desired)} ({years}年契約時)",
+                    type="error")
                 return
             
             # 成功判定
@@ -1123,8 +1124,9 @@ class ContractRenewalPage(QWidget):
                 self._update_info_panel(player)
                 self.status_label.setText(f"契約合意: {player.name} → {years}年×{format_salary(salary)}")
             else:
-                QMessageBox.information(self, "交渉継続", 
-                    f"{player.name}との交渉は継続します。\n成功率: {success_rate:.0f}%")
+                self.window().show_notification("交渉継続", 
+                    f"{player.name}との交渉は継続します。\n成功率: {success_rate:.0f}%",
+                    type="warning")
     
     def _calculate_negotiation_success(self, offered: int, desired: int) -> float:
         """交渉成功率を計算（75%未満は0%）"""

@@ -1481,14 +1481,16 @@ class SchedulePage(QWidget):
         if player_team:
             valid_starters = len([x for x in player_team.current_lineup if x != -1])
             valid_rotation = len([x for x in player_team.rotation if x != -1])
-            if valid_starters < 9: QMessageBox.warning(self, "スキップ不可", "一軍スタメンが9人未満です。オーダー画面で設定してください。"); return
-            if valid_rotation == 0: QMessageBox.warning(self, "スキップ不可", "一軍先発投手が設定されていません。オーダー画面で設定してください。"); return
+            if valid_starters < 9:
+                self.window().show_notification("スキップ不可", "一軍スタメンが9人未満です。オーダー画面で設定してください。", type="error")
+                return
+            if valid_rotation == 0:
+                self.window().show_notification("スキップ不可", "一軍先発投手が設定されていません。オーダー画面で設定してください。", type="error")
+                return
 
         # 直接シミュレーション開始（詳細設定ダイアログをスキップ）
         self.stop_conditions = {}  # 停止条件なし
         self._start_simulation()
-
-
 
     def _start_simulation(self):
         # 新しい拡張ダイアログを使用
@@ -1515,9 +1517,8 @@ class SchedulePage(QWidget):
         self._refresh_info_panel()
         
         if result == QDialog.Accepted:
-            QMessageBox.information(self, "完了", "指定日までの日程消化が完了しました。")
+            self.window().show_notification("完了", "指定日までの日程消化が完了しました。", type="success")
         # ▲▲▲ 修正終了 ▲▲▲
-
 
     def _update_progress(self, current, total, message, data=None): # data引数追加
         if hasattr(self, 'progress_dialog') and isinstance(self.progress_dialog, SimulationProgressDialog):
@@ -1548,7 +1549,7 @@ class SchedulePage(QWidget):
     def _on_simulation_error(self, message): 
         # エラー時はrejectで閉じる
         self.progress_dialog.reject()
-        QMessageBox.critical(self, "エラー", f"シミュレーション中にエラーが発生しました:\n{message}")
+        self.window().show_notification("エラー", f"シミュレーション中にエラーが発生しました:\n{message}", type="error")
     
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning(): self.worker.is_cancelled = True; self.worker.wait()

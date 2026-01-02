@@ -1516,8 +1516,7 @@ class PlayerEditorPanel(QWidget):
         
         # Check max limit (10 pitches)
         if len(pitches) >= 10:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "エラー", "球種は最大10個までです。")
+            self.window().show_notification("エラー", "球種は最大10個までです。", type="error")
             return
         
         # Available pitch types
@@ -1529,8 +1528,7 @@ class PlayerEditorPanel(QWidget):
         available = [pt for pt in all_pitches if pt not in pitches]
         
         if not available:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "エラー", "追加可能な球種がありません。")
+            self.window().show_notification("エラー", "追加可能な球種がありません。", type="error")
             return
         
         from PySide6.QtWidgets import QInputDialog
@@ -1571,8 +1569,7 @@ class PlayerEditorPanel(QWidget):
         
         # Check min limit (1 pitch required)
         if len(pitches) <= 1:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "エラー", "球種は最低1つ必要です。")
+            self.window().show_notification("エラー", "球種は最低1つ必要です。", type="error")
             return
         
         from PySide6.QtWidgets import QMessageBox
@@ -1623,8 +1620,7 @@ class PlayerEditorPanel(QWidget):
             if shihaika_count >= self.MAX_PLAYERS:
                 # Revert checkbox and don't save this change
                 self.ikusei_check.setChecked(True)
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n先に他の支配下選手を育成選手にするか、削除してください。")
+                self.window().show_notification("制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n先に他の支配下選手を育成選手にするか、削除してください。", type="warning")
                 return
         
         # Save basic info
@@ -1759,8 +1755,7 @@ class PlayerEditorPanel(QWidget):
         shihaika_count = len(self.players_data) - ikusei_count
         
         if shihaika_count >= self.MAX_PLAYERS:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n育成選手として追加するか、既存の支配下選手を削除してください。")
+            self.window().show_notification("制限", f"支配下選手が最大({self.MAX_PLAYERS}人)に達しています。\n育成選手として追加するか、既存の支配下選手を削除してください。", type="warning")
             return
         
         # Ask user to choose position
@@ -1861,18 +1856,18 @@ class PlayerEditorPanel(QWidget):
         # If deleting a shihaika player, check lower limits
         if not current_ikusei:
             if current_pos == "投手" and shihaika_pitchers <= self.MIN_PITCHERS:
-                QMessageBox.warning(self, "制限", f"支配下投手が最低({self.MIN_PITCHERS}人)に達しています。")
+                self.window().show_notification("制限", f"支配下投手が最低({self.MIN_PITCHERS}人)に達しています。", type="warning")
                 return
             elif current_pos != "投手" and shihaika_batters <= self.MIN_BATTERS:
-                QMessageBox.warning(self, "制限", f"支配下野手が最低({self.MIN_BATTERS}人)に達しています。")
+                self.window().show_notification("制限", f"支配下野手が最低({self.MIN_BATTERS}人)に達しています。", type="warning")
                 return
                 
         # Check total limits regardless of status
         if current_pos == "投手" and total_pitchers <= self.MIN_TOTAL_PITCHERS:
-            QMessageBox.warning(self, "制限", f"総投手数(育成含む)が最低({self.MIN_TOTAL_PITCHERS}人)に達しています。")
+            self.window().show_notification("制限", f"総投手数(育成含む)が最低({self.MIN_TOTAL_PITCHERS}人)に達しています。", type="warning")
             return
         elif current_pos != "投手" and total_batters <= self.MIN_TOTAL_BATTERS:
-            QMessageBox.warning(self, "制限", f"総野手数(育成含む)が最低({self.MIN_TOTAL_BATTERS}人)に達しています。")
+            self.window().show_notification("制限", f"総野手数(育成含む)が最低({self.MIN_TOTAL_BATTERS}人)に達しています。", type="warning")
             return
         
         # Confirmation dialog
@@ -1948,8 +1943,7 @@ class PlayerEditorPanel(QWidget):
             
         # Check max limit (3)
         if self.pos_list.count() >= 3:
-             from PySide6.QtWidgets import QMessageBox
-             QMessageBox.warning(self, "エラー", "守備位置は最大3つまでです。")
+             self.window().show_notification("エラー", "守備位置は最大3つまでです。", type="error")
              return
              
         self.pos_list.addItem(f"{pos}: 50")
@@ -1964,8 +1958,7 @@ class PlayerEditorPanel(QWidget):
             
         # Check min limit (1)
         if self.pos_list.count() <= 1:
-             from PySide6.QtWidgets import QMessageBox
-             QMessageBox.warning(self, "エラー", "守備位置は最低1つ必要です。")
+             self.window().show_notification("エラー", "守備位置は最低1つ必要です。", type="error")
              return
              
         self.pos_list.takeItem(row)
@@ -2418,7 +2411,7 @@ class NameEditorPanel(QWidget):
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"Config save failed: {e}")
+            pass
 class EditScreen(QWidget):
     """Full-screen edit mode interface"""
     
@@ -2692,7 +2685,7 @@ class EditScreen(QWidget):
         # Reload game_state teams if available
         self.reload_game_state_teams()
         
-        QMessageBox.information(self, "保存完了", "データを保存しました。")
+        self.window().show_notification("保存完了", "データを保存しました。", type="success")
     
     def _on_reset(self):
         """Reset all data to saved defaults"""
@@ -2717,7 +2710,7 @@ class EditScreen(QWidget):
                 player_data_manager.save_default_data()
                 from UI.pages.staff_page import save_staff_default_data
                 save_staff_default_data()
-                QMessageBox.information(self, "保存完了", "現在のデータをデフォルトとして保存しました。")
+                self.window().show_notification("保存完了", "現在のデータをデフォルトとして保存しました。", type="success")
             return
         
         reply = QMessageBox.question(
@@ -2746,7 +2739,7 @@ class EditScreen(QWidget):
             # Reload game_state teams if available
             self.reload_game_state_teams()
             
-            QMessageBox.information(self, "完了", "データをデフォルトに戻しました。")
+            self.window().show_notification("完了", "データをデフォルトに戻しました。", type="success")
     
     def _save_current_as_default(self):
         """Save current data as default"""
@@ -2765,7 +2758,7 @@ class EditScreen(QWidget):
             team_data_manager.save_default_data()
             player_data_manager.save_default_data()
             save_staff_default_data()
-            QMessageBox.information(self, "保存完了", "現在のデータをデフォルトとして保存しました。")
+            self.window().show_notification("保存完了", "現在のデータをデフォルトとして保存しました。", type="success")
             
     def _open_preset_manager(self):
         """Open the unified Preset Manager Dialog"""

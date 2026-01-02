@@ -706,7 +706,7 @@ class SettingsPage(QWidget):
         self.settings_changed.emit(self.settings)
         
         # Show confirmation dialog (always show)
-        QMessageBox.information(self, "設定", "設定を適用しました")
+        self.window().show_notification("設定", "設定を適用しました", type="success")
     
     def _reset_settings(self):
         """Reset to default settings"""
@@ -727,7 +727,7 @@ class SettingsPage(QWidget):
         self.autosave_check.setChecked(True)
         self.autosave_spin.setValue(5)
         
-        QMessageBox.information(self, "設定", "設定をデフォルトに戻しました")
+        self.window().show_notification("設定", "設定をデフォルトに戻しました", type="success")
     
     def refresh(self):
         """Refresh settings from game state"""

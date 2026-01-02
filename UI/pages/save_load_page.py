@@ -541,7 +541,7 @@ class SaveLoadPage(ContentPanel):
     def _on_save_to_slot(self, slot_number: int):
         """Handle save to specific slot"""
         if not self.game_state:
-            QMessageBox.warning(self, "エラー", "セーブするゲームデータがありません。")
+            self.window().show_notification("エラー", "セーブするゲームデータがありません。", type="error")
             return
         
         if not self.allow_save:
@@ -567,10 +567,10 @@ class SaveLoadPage(ContentPanel):
         # Save
         filepath = os.path.join(self.save_dir, f"slot_{slot_number:02d}.psav")
         if self.game_state.save_to_file(filepath):
-            QMessageBox.information(self, "保存完了", f"スロット {slot_number} に保存しました。")
+            self.window().show_notification("保存完了", f"スロット {slot_number} に保存しました。", type="success")
             self._refresh_slots()
         else:
-            QMessageBox.critical(self, "エラー", "保存に失敗しました。")
+            self.window().show_notification("エラー", "保存に失敗しました。", type="error")
     
     def _on_load(self, filepath: str):
         """Handle load request"""
@@ -592,11 +592,11 @@ class SaveLoadPage(ContentPanel):
             self.game_state = GameStateManager()
         
         if self.game_state.load_from_file(filepath):
-            QMessageBox.information(self, "ロード完了", "ゲームをロードしました。")
+            self.window().show_notification("ロード完了", "ゲームをロードしました。", type="success")
             self._update_current_info()
             self.load_completed.emit()
         else:
-            QMessageBox.critical(self, "エラー", "ロードに失敗しました。")
+            self.window().show_notification("エラー", "ロードに失敗しました。", type="error")
     
     def _on_delete(self, slot_number: int):
         """Handle delete request"""
@@ -631,13 +631,13 @@ class SaveLoadPage(ContentPanel):
                     except: pass
 
                 if deleted:
-                    QMessageBox.information(self, "削除完了", f"スロット {slot_number} を削除しました。")
+                    self.window().show_notification("削除完了", f"スロット {slot_number} を削除しました。", type="success")
                     self._refresh_slots()
                 else:
-                    QMessageBox.warning(self, "エラー", "削除するデータが見つかりませんでした。")
+                    self.window().show_notification("エラー", "削除するデータが見つかりませんでした。", type="warning")
 
             except Exception as e:
-                QMessageBox.critical(self, "エラー", f"削除に失敗しました: {e}")
+                self.window().show_notification("エラー", f"削除に失敗しました: {e}", type="error")
     
     def showEvent(self, event):
         """Refresh slots when page is shown"""

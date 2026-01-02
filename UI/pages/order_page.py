@@ -589,7 +589,7 @@ class OrderPage(QWidget):
             self.order_saved.emit()
             self._load_team_data() # 状態リセット
             self._refresh_all()
-            QMessageBox.information(self, "完了", "ベストオーダーを保存しました。")
+            self.window().show_notification("完了", "ベストオーダーを保存しました。", type="success")
             
             # ダイアログなら閉じる？ いったんそのまま
             return
@@ -604,10 +604,10 @@ class OrderPage(QWidget):
         valid_rotation = len([x for x in self.edit_state['rotation'] if x != -1])
         
         if valid_starters < 9:
-            QMessageBox.warning(self, "エラー", "スタメンが9人未満です。保存できません。")
+            self.window().show_notification("エラー", "スタメンが9人未満です。保存できません。", type="error")
             return
         if valid_rotation == 0:
-            QMessageBox.warning(self, "エラー", "先発投手が設定されていません。保存できません。")
+            self.window().show_notification("エラー", "先発投手が設定されていません。保存できません。", type="error")
             return
 
         # 2. スタメンの怪我人チェック & 再登録待機選手のチェック
@@ -634,7 +634,7 @@ class OrderPage(QWidget):
 
         if invalid_players:
             msg = "以下の選手に問題があるため保存できません：\n\n" + "\n".join(invalid_players)
-            QMessageBox.warning(self, "保存不可", msg)
+            self.window().show_notification("保存不可", msg, type="error")
             return
 
         # --- ロースター変更処理（登録抹消・昇格） ---
@@ -698,7 +698,7 @@ class OrderPage(QWidget):
         self._load_team_data() # 状態リセット
         self._refresh_all() # 画面更新
         self._update_status_label()
-        QMessageBox.information(self, "保存完了", "オーダーを保存しました。\n一軍から外れた選手は10日間再登録できません。")
+        self.window().show_notification("保存完了", "オーダーを保存しました。\n一軍から外れた選手は10日間再登録できません。", type="success")
 
     def _discard_changes(self):
         if not self.current_team: return
@@ -739,7 +739,7 @@ class OrderPage(QWidget):
             self.current_team.best_order = None
             self._load_team_data()
             self._refresh_all()
-            QMessageBox.information(self, "完了", "ベストオーダー設定を削除しました。")
+            self.window().show_notification("完了", "ベストオーダー設定を削除しました。", type="success")
 
     def _refresh_all(self):
         if not self.current_team or not self.edit_state: return

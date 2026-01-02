@@ -293,7 +293,7 @@ class PresetManagerDialog(QDialog):
             # Simple approach: Store list of preset objects self.local_presets
             self.local_presets = presets
         except Exception as e:
-            print(e)
+            pass
             
     def _on_local_selected(self, item):
         idx = self.local_list.row(item)

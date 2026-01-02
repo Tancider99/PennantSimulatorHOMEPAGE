@@ -98,7 +98,6 @@ def save_staff_default_data():
         if os.path.exists(STAFF_DEFAULT_DIR):
             shutil.rmtree(STAFF_DEFAULT_DIR)
         shutil.copytree(STAFF_DATA_DIR, STAFF_DEFAULT_DIR)
-        print(f"デフォルトスタッフデータを保存しました: {STAFF_DEFAULT_DIR}")
         return True
     return False
 
@@ -110,9 +109,7 @@ def reset_staff_to_default():
         if os.path.exists(STAFF_DATA_DIR):
             shutil.rmtree(STAFF_DATA_DIR)
         shutil.copytree(STAFF_DEFAULT_DIR, STAFF_DATA_DIR)
-        print(f"スタッフデータをデフォルトに戻しました")
         return True
-    print(f"デフォルトスタッフデータがありません")
     return False
 
 
@@ -254,7 +251,6 @@ def load_staff_data(team) -> list:
         
         return staff_slots
     except Exception as e:
-        print(f"[ERROR] Failed to load staff data: {e}")
         return None
 
 
@@ -301,7 +297,7 @@ def initialize_staff_from_files(game_state):
             # Save generated staff to file
             save_staff_data(team, team.staff_slots)
     
-    print(f"[INFO] Initialized staff data for {len(all_teams)} teams")
+            pass
 
 
 def generate_candidate(source: str = "generated", player=None) -> dict:
@@ -1108,7 +1104,7 @@ class StaffPage(QWidget):
         role, level, display_name = ROLE_SLOTS[slot_index]
         
         if not self.candidate_pool:
-            QMessageBox.warning(self, "候補者なし", "候補者プールが空です。")
+            self.window().show_notification("候補者なし", "候補者プールが空です。", type="warning")
             return
         
         dialog = HireDialog(self, self.candidate_pool, role, theme=self.theme)
@@ -1130,7 +1126,7 @@ class StaffPage(QWidget):
                 self.game_state.staff_candidate_pool = self.candidate_pool
             self._refresh_table()
             
-            QMessageBox.information(self, "任命完了", f"{staff.name}を{display_name}に任命しました。")
+            self.window().show_notification("任命完了", f"{staff.name}を{display_name}に任命しました。", type="success")
 
     def _on_fire(self, slot_index: int):
         """Handle fire button click for a specific slot"""
@@ -1168,7 +1164,7 @@ class StaffPage(QWidget):
                 self.game_state.staff_candidate_pool = self.candidate_pool
             self._refresh_table()
             
-            QMessageBox.information(self, "解任完了", f"{staff.name}を解任しました。")
+            self.window().show_notification("解任完了", f"{staff.name}を解任しました。", type="success")
 
     def add_retired_player_to_pool(self, player):
         """Add a retired player to the candidate pool"""
