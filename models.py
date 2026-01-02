@@ -1817,6 +1817,9 @@ class Team:
     # 投資設定
     investment_settings: 'InvestmentSettings' = field(default_factory=InvestmentSettings)
 
+    # オフシーズン収支更新フラグ
+    offseason_balance_updated: bool = False
+
     ACTIVE_ROSTER_LIMIT = 31
     FARM_ROSTER_LIMIT = 40
     THIRD_ROSTER_LIMIT = 30
@@ -2230,6 +2233,54 @@ class Team:
         """ゲーム差計算 = ((首位勝利 - 自軍勝利) + (自軍敗戦 - 首位敗戦)) / 2"""
         if self == leader_team: return 0.0
         return ((leader_team.wins - self.wins) + (self.losses - leader_team.losses)) / 2.0
+
+    def get_daily_revenue(self) -> int:
+        """日次収益を計算 (放送権 + グッズ)"""
+        if not self.finance or not self.management_settings:
+            return 0
+            
+        settings = self.management_settings
+        fb = self.finance.fan_base
+        
+        # 放送権収入
+        broadcast_base = 3000000 + settings.broadcast_price * 1500000
+        broadcast_mult = fb.total_fans / 500000
+        daily_broadcast = int(broadcast_base * broadcast_mult)
+        
+        # グッズ収入
+        price_mult = 0.6 + settings.merchandise_price * 0.15
+        daily_merch = int(
+            fb.core_fans * 3 * price_mult +
+            fb.middle_fans * 1 * price_mult +
+            fb.light_fans * 0.3 * price_mult
+        )
+        
+        return daily_broadcast + daily_merch
+
+    def get_daily_expense(self) -> int:
+        """日次支出を計算 (設備維持費)"""
+        if not self.investment_settings:
+            return 0
+        
+        annual_cost = self.investment_settings.get_training_cost() + self.investment_settings.get_medical_cost()
+        return annual_cost // 365
+
+    def calculate_offseason_balance_update(self):
+        """オフシーズンに入ったタイミングで、その年の収支を残高に反映"""
+        if self.offseason_balance_updated:
+            return
+            
+        # ファイナンスタブの収入・支出（累計）を使用して反映
+        if not self.finance:
+            return
+
+        annual_revenue = self.finance.total_income
+        annual_expense = self.finance.total_expense
+        
+        profit = annual_revenue - annual_expense
+        
+        self.budget += profit
+        self.offseason_balance_updated = True
 
 @dataclass
 class DraftProspect:

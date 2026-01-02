@@ -767,18 +767,7 @@ class FinancePage(QWidget):
         fb = finance.fan_base
         
         # 日次収入計算
-        broadcast_base = 3000000 + settings.broadcast_price * 1500000
-        broadcast_mult = fb.total_fans / 500000
-        daily_broadcast = int(broadcast_base * broadcast_mult)
-        
-        price_mult = 0.6 + settings.merchandise_price * 0.15
-        daily_merch = int(
-            fb.core_fans * 3 * price_mult +
-            fb.middle_fans * 1 * price_mult +
-            fb.light_fans * 0.3 * price_mult
-        )
-        
-        daily_revenue = daily_broadcast + daily_merch
+        daily_revenue = self.current_team.get_daily_revenue()
         
         # 日次ファン増減推定（勝率0.5想定）
         light_mod = (3 - settings.broadcast_price) * 0.0008
@@ -792,10 +781,7 @@ class FinancePage(QWidget):
         )
         
         # 日次支出（設備維持費のみ）
-        daily_expense = 0
-        if inv_settings:
-            annual_cost = inv_settings.get_training_cost() + inv_settings.get_medical_cost()
-            daily_expense = annual_cost // 365
+        daily_expense = self.current_team.get_daily_expense()
         
         return daily_revenue, daily_fan_change, daily_expense
     
